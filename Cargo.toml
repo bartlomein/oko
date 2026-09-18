@@ -1,0 +1,31 @@
+[package]
+name = "oko"
+version = "0.2.0"
+edition = "2024"
+description = "A small search and ranking CLI and Rust library with TypeSafe AI Jev reranking"
+default-run = "oko"
+include = ["src/**/*.rs", "Cargo.toml", "Cargo.lock", "README.md", "THIRD_PARTY_NOTICES.md", "benchmarks/*.json", "examples/*.json"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "oko"
+path = "src/main.rs"
+
+[[bin]]
+name = "oko-parity"
+path = "src/bin/parity.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,144 +1,183 @@
 # Oko
 
-Oko is a small TypeScript CLI for finding relevant code in the current working directory.
+Oko is a Rust CLI and library for finding relevant code and ranking supplied text.
+The application runs without Node.js. The original TypeScript implementation is
+kept under `reference/typescript/` for behavior and performance comparisons.
 
-## Usage
+See [the measured Rust comparison](benchmarks/rust-comparison.md): local code
+search was effectively unchanged; supplied-item CLI overhead fell from about
+40 ms to 5 ms, with matching behavior on the tested fixtures.
+
+## Install and run
+
+Build with a current stable Rust toolchain (edition 2024) and install
+[ripgrep](https://github.com/BurntSushi/ripgrep) for code discovery:
 
 ```sh
-npm install
-npm run build
-node dist/cli.js ask "where is gapless playback selected?"
-node dist/cli.js ask "where is gapless playback selected?" --json
-node dist/cli.js ask "where is gapless playback selected?" --no-jev
+cargo install --path . --bin oko --locked
+oko --help
+cd /path/to/your/project
+oko ask "where is authentication handled?"
+oko ask "where is authentication handled?" --json
+oko ask "where is authentication handled?" --no-jev
 ```
 
-Put your TypeSafe AI API key in a `.env` file in the directory where you run Oko:
+For a local release build instead, run `cargo build --release --locked --bin oko`.
+The executable is `target/release/oko` (`oko.exe` on Windows). Build for each
+operating system and CPU architecture you distribute to. No JavaScript wrapper
+is required. Code search requires `rg` on PATH; supplied-item ranking does not.
+
+Put your TypeSafe AI API key in `.env` **in the directory where you run Oko**:
 
 ```dotenv
 TYPESAFE_API_KEY=your-api-key
 ```
 
-You can copy `.env.example` to `.env` to get started. Oko loads this file automatically;
-existing shell environment variables take precedence. `.env` is ignored by Git.
+Use `.env.example` as a template. Existing shell variables take precedence,
+including an explicitly empty value. Values are literal, without `$VARIABLE`
+expansion. `.env` and `.env.*` are ignored by Git except `.env.example`.
+When invoking Oko from another repository, put the key in that repository's
+ignored `.env` or export `TYPESAFE_API_KEY` in your shell.
 
-The published command is `oko` after installing the package globally or using it through a package runner:
+`TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL` may be set in the process
+environment. Their defaults are `https://api.typesafe.ai` and `jev-latest`.
+As in the TypeScript implementation, these two settings are not read from `.env`.
 
-```sh
-oko ask "where is gapless playback selected?"
-oko ask "where is gapless playback selected?" --no-jev
-```
+## Code search
 
-Oko discovers files with `rg --files`, reads only bounded UTF-8 text files, and
-ranks a deterministic shortlist. Search splits snake_case and camelCase names,
-ignores common question words, and matches English word forms with the
-[Porter stemmer](https://github.com/words/stemmer) (for example, `renaming` and `rename`).
+Oko discovers files with `rg --files`, reads UTF-8 text files up to 256 KiB,
+rejects binary/invalid UTF-8 content, and builds a deterministic shortlist.
+Search splits snake_case and camelCase names, ignores common question words,
+and matches English word forms using the Porter stemmer.
+
 Recognized Rust, JavaScript/TypeScript `function`, and Python `def` declarations
-start sections of up to 120 lines, keeping nearby comments and function bodies
-together. This is a declaration heuristic, not an AST parser: long sections are
-split, and other syntax uses 40-line windows. Results retain exact source text,
-relative paths, inclusive 1-based line ranges, scores, and the ranking method.
+start sections of up to 120 lines, keeping nearby comments with their functions.
+This is a declaration heuristic, not an AST parser. Longer sections are split;
+other syntax uses 40-line windows. Results preserve source text, relative paths,
+and inclusive 1-based line ranges.
 
-Normal `oko ask` searches require `TYPESAFE_API_KEY`. Oko sends the question and
-up to 30 shortlisted code chunks to TypeSafe AI for one Jev reranking request;
-it never sends the full repository. Each snippet appears once. A conservative
-32,000-byte request budget drops the lowest-ranked candidates when necessary,
-keeping the retained chunks complete. This is a byte budget, not an exact token
-count. Missing credentials and Jev request failures exit non-zero instead of
-silently changing the ranking method.
+Normal `ask` sends the question and up to 30 shortlisted code chunks to TypeSafe
+AI for one Jev request. It never sends the full repository. A 32,000-byte request
+budget drops trailing candidates while retaining complete chunks. This is a
+byte budget, not a token count. Requests have a 10-second timeout and no retries.
+Missing credentials or provider failures exit nonzero.
 
-For local A/B benchmarking, pass `--no-jev`. This explicitly skips the Jev request, uses the lexical ranking only, and reports `lexical-only (--no-jev)` in human output. The opt-out is the only normal way to run without `TYPESAFE_API_KEY`.
-
-JSON output is written only to stdout, so diagnostics can safely be read from stderr.
+`--no-jev` skips the API and returns lexical ranking. JSON goes to stdout;
+diagnostics go to stderr. Neither changing language nor packaging changes the
+ranking model: the Rust port preserves the TypeScript search and request logic.
 
 ## Rank documents or database results
 
-Supply a JSON array of `{ "id": "unique-id", "text": "searchable content", "source": "optional URL or label" }`.
-Oko accepts up to 30 items and a JSON file up to 1 MiB. IDs and text must be
-non-empty strings; IDs must be unique and at most 200 characters. Other fields
-are discarded, so select the text you want to send explicitly.
+Provide a JSON array of items:
+
+```json
+[{"id":"ticket-42","text":"Charged twice for the same order.","source":"tickets/42"}]
+```
 
 ```sh
-node dist/cli.js rank --input examples/items.json "Who needs a refund?" --json
+oko rank --input examples/items.json "Who needs a refund?" --json
 ```
 
-`rank` loads `.env` from the current directory and uses the same Jev request
-budget as code search. It preserves item IDs and optional source strings. It
-returns up to five items, or an empty list if none beats the `none` choice.
-`omittedCount` reports trailing items excluded by the request budget (not the
-number outside the top five). Supply candidates in your existing search order.
-`--no-jev` keeps that input order with zero scores; it is a baseline, not keyword
-search. Scores are relative to the supplied candidates, not universal relevance
-probabilities. Only supplied text/source/IDs are sent; Oko does not fetch URLs or
-connect to a database.
+Files are limited to 1 MiB and 30 items. IDs must be unique, nonempty strings of
+at most 200 UTF-16 code units (the existing JavaScript contract); text must be
+nonempty. `source` is optional. Unknown fields are discarded.
 
-The reusable ESM API is exported from the package, after building:
+Results preserve IDs and sources, and return up to five items whose scores beat
+the `none` choice. `omittedCount` counts items dropped by the request byte budget,
+not items outside the top five. Supply candidates in your existing search order.
+`--no-jev` preserves that order with zero scores; it is an input-order baseline,
+not keyword search. Scores are relative to the candidates, not universal
+relevance probabilities. Oko does not fetch URLs or connect to databases.
 
-```js
-import { rankItems } from 'oko';
+Any programming language can invoke the CLI and consume its JSON output.
+Rust applications can use the library directly:
 
-const result = await rankItems('Who needs a refund?', [
-  { id: 'row-42', text: 'Charged twice for the same order.', source: 'tickets/42' },
-], { apiKey: process.env.TYPESAFE_API_KEY, limit: 5 });
-console.log(result.results);
+```rust,no_run
+use oko::{rank_items, RankItem, RankOptions};
+
+fn main() -> anyhow::Result<()> {
+    let items = vec![RankItem {
+        id: "ticket-42".into(),
+        text: "Charged twice for the same order.".into(),
+        source: Some("tickets/42".into()),
+    }];
+    let result = rank_items("Who needs a refund?", &items, &RankOptions {
+        api_key: std::env::var("TYPESAFE_API_KEY").ok(),
+        ..Default::default()
+    })?;
+    println!("{:?}", result.results);
+    Ok(())
+}
 ```
 
-The library does not load `.env` itself; the caller provides `apiKey`.
-Use `noJev: true` for input order without an API call. Validation failures and
-provider errors reject the promise. `parseItems` is also exported for validating
-unknown JSON before ranking.
+The library is synchronous and returns `Result`; async callers should run it on
+a blocking worker. It does not load `.env` itself. Use `no_jev: true` to preserve
+input order without a request. `parse_items` validates unknown JSON first.
+The former JavaScript import API lives only in the TypeScript reference.
 
-Run the synthetic support-ticket benchmark (five Jev requests, no customer data):
+## Accuracy benchmarks
+
+The application includes native Rust benchmark commands:
 
 ```sh
-npm run benchmark:items
+oko benchmark --repo /path/to/telemetry-studio --repeats 1
+oko benchmark-items --repeats 1
 ```
 
-Its report compares input order with Jev, includes a no-match question, and is
-saved under `benchmarks/results/`. It measures ranking API time, unlike the code
-benchmark's end-to-end CLI time. Neither small benchmark establishes general
-search accuracy.
+Run these from Oko's directory to load its `.env` and save reports under
+`benchmarks/results/` (ignored). Each command makes five Jev requests per repeat.
+Code benchmarking validates source hashes against the embedded
+`benchmarks/telemetry-studio.json` fixture before requesting Jev. It reads the
+target repository without editing it. Item benchmarking uses only synthetic
+support tickets, including a no-match question.
 
-## Search benchmark
+Reports contain errors, median end-to-end CLI time, and accuracy. Code metrics
+separate function-range overlap and exact implementation-range overlap, for both
+the first result and top five. Merely returning the correct file does not count.
+Both Rust benchmarks time fresh CLI processes; the historical TypeScript item
+benchmark measured API ranking time only, so those times are not comparable.
+Five questions are a development smoke test, not proof of general accuracy.
 
-From the Oko directory, run:
+Add `--no-jev` to either benchmark for an offline baseline. Code benchmarks also
+accept `--baseline /path/to/report.json` to rescore an earlier report; repository
+commit, working-tree status, and expected-source hashes must match. Repeats are
+limited to 1–10. Errors count as misses and produce a nonzero exit status.
+
+## Compare Rust against TypeScript
+
+Node.js 20+ is needed only for these developer comparison tools and the preserved
+reference, not for the Rust application:
 
 ```sh
-npm run benchmark -- /Users/bart/dev/telemetry-studio
+npm --prefix reference/typescript ci
+npm --prefix reference/typescript test
+cargo test --locked
+cargo build --release --locked
+node scripts/parity-runtimes.mjs
+node scripts/compare-runtimes.mjs /path/to/telemetry-studio
 ```
 
-This loads Oko's `.env`, runs five source-verified questions through lexical-only
-search and Jev, and writes timestamped Markdown/JSON reports under
-`benchmarks/results/` (ignored by Git). It makes at most five paid Jev requests.
-For three repetitions per question, append `3` (at most 15 requests).
+The reference comes from commit `933eabdb6dfdaef148790bc9a3147e0721f76841`.
+Parity tests compare chunks, ordering, scores, prepared Jev requests, byte budgets,
+stemming, filesystem filtering, and CLI validation. The runtime comparison
+performs one warmup and five measured runs per question per runtime, alternating
+execution order. It verifies identical JSON output and unchanged source/binary
+snapshots. Both reports are saved under `benchmarks/results/`.
 
-Reports measure function-location hits and exact implementation hits separately,
-each for the first result and top five, plus errors and median end-to-end CLI time.
-Function hits overlap the verified function range; exact hits overlap the original
-implementation lines in `benchmarks/telemetry-studio.json`. Merely matching the
-file does not count. Source hashes prevent stale
-expected answers from silently being used; review the source before updating them.
-Only paths and line ranges are saved in results, not returned source snippets.
+Runtime comparisons disable Jev and incur no API charges. Code runs measure
+local lexical search; item runs measure startup/JSON/input-order overhead, not
+AI ranking. Builds are excluded. Filesystem caches are warm and these are local
+machine measurements, not Linux-server measurements or cold-disk benchmarks.
+Live provider latency must be measured separately.
 
-To compare with an earlier JSON report, pass its path after the repeat count:
+## Development
 
 ```sh
-npm run benchmark -- /path/to/telemetry-studio 1 /path/to/baseline/report.json
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
 ```
 
-The earlier results are rescored with the same metrics, preserving their recorded
-timings. The repository commit, working-tree status and verified source hashes
-must match. Original reports are never overwritten. Larger chunks can carry more
-context to Jev, so latency and request size may increase.
-
-These five questions are a small development smoke test, not a general accuracy
-claim. Use additional held-out questions before claiming broader improvements.
-The benchmark reads the target repository without editing it.
-
-## Development checks
-
-```sh
-npm run typecheck
-npm test
-```
-
-Node.js 20 or newer is required.
+`oko-parity` is a development diagnostic binary and never calls Jev. Install only
+`--bin oko` for ordinary use. Third-party parser/stemmer notices are in
+`THIRD_PARTY_NOTICES.md`.
