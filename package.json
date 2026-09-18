@@ -1,0 +1,24 @@
+{
+  "name": "oko",
+  "version": "0.1.0",
+  "description": "A small code search CLI with optional TypeSafe AI reranking.",
+  "type": "module",
+  "bin": {
+    "oko": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/*.test.js"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "0.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}
