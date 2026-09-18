@@ -1,4 +1,6 @@
 import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { config } from "dotenv";
 
 import { rankLexically, rankWithJev, type RankingResult } from "./rerank.js";
 import { searchWorkspace } from "./search.js";
@@ -103,13 +105,18 @@ export async function run(args: string[], cwd: string): Promise<number> {
   }
 
   try {
+    const env = { ...process.env };
+    const loaded = config({ path: resolve(cwd, ".env"), quiet: true, processEnv: env });
+    if (loaded.error && (loaded.error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw loaded.error;
+    }
     const shortlist = await searchWorkspace(cwd, parsed.question);
     const ranking = parsed.noJev
       ? rankLexically(shortlist)
       : await rankWithJev(
           parsed.question,
           shortlist,
-          process.env.TYPESAFE_API_KEY?.trim() || undefined,
+          env.TYPESAFE_API_KEY?.trim() || undefined,
         );
     if (ranking.notice) {
       process.stderr.write(`Notice: ${ranking.notice}\n`);

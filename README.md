@@ -12,6 +12,15 @@ node dist/cli.js ask "where is gapless playback selected?" --json
 node dist/cli.js ask "where is gapless playback selected?" --no-jev
 ```
 
+Put your TypeSafe AI API key in a `.env` file in the directory where you run Oko:
+
+```dotenv
+TYPESAFE_API_KEY=your-api-key
+```
+
+You can copy `.env.example` to `.env` to get started. Oko loads this file automatically;
+existing shell environment variables take precedence. `.env` is ignored by Git.
+
 The published command is `oko` after installing the package globally or using it through a package runner:
 
 ```sh
