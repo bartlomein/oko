@@ -97,8 +97,25 @@ fn input(cwd: &Path) {
     .unwrap();
 }
 
-fn probabilities() -> Value {
-    json!({"answers":{"selection":{"probabilities":{"none":0.1,"candidate_1":0.9}}}})
+fn relevance_response(request: &Value, score: impl Fn(&Value) -> f64) -> Value {
+    let answers = request["state"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|candidate| {
+            let label = candidate["candidate"].as_str().unwrap();
+            assert_eq!(request["questions"][label]["type"], "noul");
+            (
+                label.to_owned(),
+                json!({"type":"noul", "noul":score(candidate)}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    assert_eq!(
+        request["questions"].as_object().unwrap().len(),
+        answers.len()
+    );
+    json!({"answers":answers})
 }
 
 #[test]
@@ -112,7 +129,8 @@ fn rank_reads_current_directory_env_and_shell_has_precedence() {
         if let Some(key) = key {
             cmd.env("TYPESAFE_API_KEY", key);
         }
-        let (output, headers, body) = mock_run(&mut cmd, |_| probabilities());
+        let (output, headers, body) =
+            mock_run(&mut cmd, |request| relevance_response(request, |_| 0.9));
         assert!(headers.contains(&format!(
             "authorization: bearer {}\r\n",
             if key.is_some() {
@@ -176,27 +194,29 @@ fn command_errors_and_explicit_offline_mode() {
 }
 
 #[test]
-fn invalid_provider_probabilities_fail_instead_of_succeeding() {
+fn invalid_provider_scores_fail_instead_of_succeeding() {
     let temp = tempfile::tempdir().unwrap();
     input(temp.path());
-    let mut cmd = command(temp.path());
-    cmd.env("TYPESAFE_API_KEY", "fake-key").args([
-        "rank",
-        "--input",
-        "items.json",
-        "--json",
-        "refund",
-    ]);
-    let (output, _, _) = mock_run(
-        &mut cmd,
-        |_| json!({"answers":{"selection":{"probabilities":{"none":0.1}}}}),
-    );
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("invalid or missing candidate probabilities")
-    );
+    for answer in [
+        json!({}),
+        json!({"type":"noul"}),
+        json!({"type":"noul", "noul":"0.9"}),
+        json!({"type":"noul", "noul":-0.1}),
+        json!({"type":"noul", "noul":1.1}),
+    ] {
+        let mut cmd = command(temp.path());
+        cmd.env("TYPESAFE_API_KEY", "fake-key").args([
+            "rank",
+            "--input",
+            "items.json",
+            "--json",
+            "refund",
+        ]);
+        let (output, _, _) = mock_run(&mut cmd, move |_| json!({"answers":{"candidate_1":answer}}));
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("candidate_1"));
+    }
 }
 
 #[test]
@@ -215,21 +235,13 @@ fn ask_maps_provider_ids_to_code_and_breaks_ties_deterministically() {
     let (output, _, body) = mock_run(&mut cmd, |request| {
         let candidates = request["state"]["candidates"].as_array().unwrap();
         assert_eq!(candidates.len(), 7);
-        let mut probabilities = serde_json::Map::new();
-        probabilities.insert("none".into(), json!(0.1));
-        for candidate in candidates {
-            probabilities.insert(
-                candidate["candidate"].as_str().unwrap().into(),
-                json!(
-                    if candidate["source"].as_str().unwrap().starts_with("g.rs:") {
-                        0.9
-                    } else {
-                        0.5
-                    }
-                ),
-            );
-        }
-        json!({"answers":{"selection":{"probabilities":probabilities}}})
+        relevance_response(request, |candidate| {
+            if candidate["source"].as_str().unwrap().starts_with("g.rs:") {
+                0.9
+            } else {
+                0.8
+            }
+        })
     });
     assert_eq!(body["state"]["candidates"][0]["id"], "0");
     let result = success(output);
@@ -257,12 +269,16 @@ fn intent_defaults_and_overrides_use_one_ranking_request() {
     input(temp.path());
     fs::write(temp.path().join("auth.rs"), "fn refund() {}\n").unwrap();
     for (mode, intent, expected) in [
-        ("ask", None, "actual implementation"),
-        ("rank", None, "Which item best answers"),
-        ("ask", Some("general"), "Which item best answers"),
-        ("ask", Some("explanation"), "best explains"),
-        ("rank", Some("implementation"), "actual implementation"),
-        ("rank", Some("explanation"), "best explains"),
+        ("ask", None, "implement all or part of the behavior"),
+        ("rank", None, "answer"),
+        ("ask", Some("general"), "answer"),
+        ("ask", Some("explanation"), "explain"),
+        (
+            "rank",
+            Some("implementation"),
+            "implement all or part of the behavior",
+        ),
+        ("rank", Some("explanation"), "explain"),
     ] {
         let mut cmd = command(temp.path());
         cmd.env("TYPESAFE_API_KEY", "fake-key")
@@ -273,21 +289,10 @@ fn intent_defaults_and_overrides_use_one_ranking_request() {
         if let Some(intent) = intent {
             cmd.args(["--intent", intent]);
         }
-        let (output, _, body) = mock_run(&mut cmd, |request| {
-            let mut probabilities = serde_json::Map::new();
-            probabilities.insert("none".into(), json!(0.1));
-            for candidate in request["state"]["candidates"].as_array().unwrap() {
-                probabilities.insert(candidate["candidate"].as_str().unwrap().into(), json!(0.9));
-            }
-            json!({"answers":{"selection":{"probabilities":probabilities}}})
-        });
+        let (output, _, body) = mock_run(&mut cmd, |request| relevance_response(request, |_| 0.9));
         assert!(!success(output)["results"].as_array().unwrap().is_empty());
-        assert!(
-            body["questions"]["selection"]["instructions"]
-                .as_str()
-                .unwrap()
-                .contains(expected)
-        );
+        let instructions = body["questions"].to_string();
+        assert!(instructions.contains(expected), "{instructions}");
         assert_eq!(body["state"]["question"], "refund");
     }
 }
@@ -348,9 +353,10 @@ fn deep_mode_uses_existing_jev_key_and_reports_budget_stop() {
         "1",
         "--json",
     ]);
-    let (output, headers, request) = mock_run(&mut cmd, |_| probabilities());
+    let (output, headers, request) =
+        mock_run(&mut cmd, |request| relevance_response(request, |_| 0.9));
     assert!(headers.contains("authorization: bearer fake-deep-key"));
-    assert!(request["questions"]["selection"].is_object());
+    assert_eq!(request["questions"]["candidate_1"]["type"], "noul");
     let value = success(output);
     assert_eq!(value["ranking"], "jev");
     assert_eq!(value["results"][0]["path"], "auth.rs");

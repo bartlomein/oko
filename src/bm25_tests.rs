@@ -112,3 +112,110 @@ fn bm25_query_order_duplicates_and_filtering_preserve_scores() {
         .collect();
     assert_eq!(filtered, expected_filtered);
 }
+
+#[test]
+fn declaration_lane_recovers_long_implementations_across_languages() {
+    for (extension, declaration) in [
+        ("rs", "pub fn parse_ledger() {"),
+        ("py", "async def parse_ledger():"),
+        ("ts", "export function parseLedger() {"),
+        ("js", "const parseLedger = (input) => {"),
+        ("go", "func (s *Store) ParseLedger() {"),
+        ("java", "public void parseLedger() {"),
+        ("cs", "public void ParseLedger() {"),
+        ("cpp", "void parseLedger() {"),
+        ("kt", "fun parseLedger() {"),
+        ("swift", "func parseLedger() {"),
+    ] {
+        let path = format!("arbitrary/place/handler.{extension}");
+        let mut chunks: Vec<_> = (0..35)
+            .map(|i| document(&format!("notes/{i}.md"), "parse ledger"))
+            .collect();
+        chunks.push(document(
+            &path,
+            &format!(
+                "{declaration}
+{}",
+                "unrelated ".repeat(300)
+            ),
+        ));
+        let ranked = rank_lexically(&chunks, "parse ledger");
+        assert!(ranked.iter().any(|chunk| chunk.path == "notes/0.md"));
+        assert!(
+            ranked.iter().any(|chunk| chunk.path == path),
+            "{extension}: long implementation must reach the reranker"
+        );
+    }
+}
+
+#[test]
+fn single_file_corpora_keep_distinct_nonoverlapping_matches() {
+    let mut chunks: Vec<_> = (1..=40)
+        .map(|line| {
+            let mut chunk = document("large.txt", "quartz");
+            chunk.start_line = line;
+            chunk.end_line = line;
+            chunk
+        })
+        .collect();
+    let single = rank_lexically(&chunks, "quartz");
+    assert_eq!(single.len(), SHORTLIST_LIMIT);
+    chunks.reverse();
+    assert_eq!(rank_lexically(&chunks, "quartz"), single);
+}
+
+#[test]
+fn references_are_bounded_and_count_files_not_overlapping_chunks() {
+    let chunks = [
+        document("engine.rs", "fn parse_ledger() {}"),
+        document("caller.rs", "parse_ledger(); parse_ledger();"),
+        document("caller.rs", "parse_ledger();"),
+        document("notes.md", "parse_ledger()"),
+    ];
+    let corpus = PreparedCorpus::new(&chunks);
+    assert!((corpus.chunks[0].symbols[0].reference_weight - (1.0 + 2.0_f64.ln())).abs() < 1e-12);
+    let mut many = chunks.to_vec();
+    for i in 0..100 {
+        many.push(document(&format!("caller{i}.rs"), "parse_ledger();"));
+    }
+    assert_eq!(
+        PreparedCorpus::new(&many).chunks[0].symbols[0].reference_weight,
+        3.0
+    );
+}
+
+#[test]
+fn unrelated_popular_names_do_not_boost_matching_declarations() {
+    let one = document(
+        "engine.rs",
+        "fn parse_ledger() {}
+fn common_helper() {}",
+    );
+    let mut many = vec![one.clone()];
+    for i in 0..10 {
+        many.push(document(&format!("caller{i}.rs"), "common_helper();"));
+    }
+    let prepared = PreparedCorpus::new(&many);
+    let terms = vec![stemmer("ledger")];
+    let scores: Vec<_> = prepared.chunks[0]
+        .symbols
+        .iter()
+        .map(|s| s.reference_weight * prepared.symbol_stats.score(&s.field, &terms))
+        .collect();
+    assert!(scores[0] > 0.0);
+    assert_eq!(scores[1], 0.0);
+}
+
+#[test]
+fn prose_and_unknown_languages_keep_content_and_path_fallback() {
+    let chunks = [
+        document("guide.md", "fn parse_ledger() {}"),
+        document("handler.unknown", "fn parse_ledger() {}"),
+        document("ledger/data.json", r#"{"operation":"parse"}"#),
+    ];
+    let prepared = PreparedCorpus::new(&chunks);
+    assert!(prepared.chunks.iter().all(|c| c.symbols.is_empty()));
+    let ranked = rank_lexically(&chunks, "parse ledger");
+    assert_eq!(ranked.len(), 3);
+    assert!(ranked.iter().all(|c| c.lexical_score.is_finite()));
+}

@@ -1,4 +1,6 @@
+pub mod context;
 pub mod investigate;
+pub mod preview;
 pub mod ranking;
 pub mod search;
 pub mod stemmer;

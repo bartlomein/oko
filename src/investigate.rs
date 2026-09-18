@@ -408,6 +408,26 @@ mod tests {
         }
         json!({"answers":{question:{"probabilities":probabilities}}})
     }
+    fn relevance_response(request: &Value, score: impl Fn(&Value) -> f64) -> Value {
+        let answers = request["state"]["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|candidate| {
+                let label = candidate["candidate"].as_str().unwrap();
+                assert_eq!(request["questions"][label]["type"], "noul");
+                (
+                    label.to_owned(),
+                    json!({"type":"noul", "noul":score(candidate)}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        assert_eq!(
+            request["questions"].as_object().unwrap().len(),
+            answers.len()
+        );
+        json!({"answers":answers})
+    }
     fn corpus() -> Vec<Chunk> {
         let mut chunks = Vec::new();
         for i in 0..35 {
@@ -416,9 +436,11 @@ mod tests {
                 "two optional telemetry values interpolated preserving available missing\n",
             ));
         }
+        // Keep the declaration name unrelated to the question: this fixture
+        // must still exercise recovery after the initial shortlist misses.
         chunks.extend(search::chunk_text(
             "src/utils.rs",
-            "/// Interpolate between two optional values.\nfn lerp_option() { keep(); }\n",
+            "/// Interpolate between two optional values.\nfn blend_present() { keep(); }\n",
         ));
         chunks.extend(search::chunk_text(
             "src/helper.rs",
@@ -443,18 +465,20 @@ mod tests {
             None,
             |request| {
                 calls += 1;
-                if request["questions"]["selection"].is_object() {
-                    let winner = request["state"]["candidates"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|c| c["text"].as_str().unwrap().contains("fn lerp_option"));
-                    Ok(probability_response(
-                        request,
-                        "selection",
-                        winner.map_or("none", |c| c["candidate"].as_str().unwrap()),
-                    ))
+                if request["questions"]["candidate_1"].is_object() {
+                    Ok(relevance_response(request, |candidate| {
+                        if candidate["text"]
+                            .as_str()
+                            .unwrap()
+                            .contains("fn blend_present")
+                        {
+                            0.9
+                        } else {
+                            0.01
+                        }
+                    }))
                 } else {
+                    assert_eq!(request["questions"]["next_action"]["type"], "choice");
                     let has_answer = !request["state"]["current_results"]
                         .as_array()
                         .unwrap()
@@ -495,7 +519,7 @@ mod tests {
             &corpus(),
             RankingIntent::Implementation,
             Some(1),
-            |r| Ok(probability_response(r, "selection", "none")),
+            |r| Ok(relevance_response(r, |_| 0.1)),
         )
         .unwrap();
         assert_eq!(result.steps, 1);

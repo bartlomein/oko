@@ -97,6 +97,152 @@ For a local release build instead of installation, run
 system and architecture. Code search requires `rg` on PATH; supplied-item
 ranking does not. Node.js is only needed for optional developer benchmark runners.
 
+## Set up Codex for a project
+
+From the project you want to search, run your Oko executable with `setup`:
+
+```sh
+oko setup
+# Or select a project explicitly:
+oko setup --root /absolute/path/to/project
+```
+
+Setup installs stable per-user copies of Oko and your available ripgrep binary,
+so deleting the original download does not break the connection. On macOS they
+live under `~/Library/Application Support/Oko/bin`; other Unix systems use
+`~/.local/share/oko/bin`. Setup requires ripgrep either beside the downloaded
+Oko binary or on PATH. It does not download dependencies yet.
+
+For Jev, setup reuses the project's `.env` key or your saved OS credential. If a
+key is provided through the invoking shell, it saves that key in the OS credential
+store so GUI clients can access it. Otherwise it prompts for a key with hidden
+input. An explicitly empty key override must be removed first. Setup does not
+validate the key with TypeSafe or make paid API requests.
+
+Setup writes a project-local `.codex/config.toml` MCP entry and a managed search
+guidance section in `AGENTS.md` (or `AGENTS.override.md` when present). Existing
+unrelated settings, comments, and instructions are preserved. Re-running setup
+updates its own entry without duplicating instructions. An existing Oko entry
+not created by setup is left untouched and reported as a conflict.
+
+Configuration is written atomically, with private backups of changed existing
+files under the installation's `setup-backups` directory. Setup prints backup
+paths. It adds the machine-local configuration and `.env` to `.gitignore`; this
+does not untrack files already committed to Git. Credentials are never embedded
+in the generated MCP configuration. The pinned ripgrep path works even when the
+GUI has a different PATH than your terminal.
+
+Setup launches the installed server and verifies MCP initialization and discovery
+of the search tool. **This verifies the connection, not Codex's actual selection
+of Oko or Jev accuracy.** Open the project in Codex, trust it if prompted, and
+start a new session. Check `/mcp`, then ask a code-location question.
+
+This first setup flow is **per project and for Codex**. Run setup again for another
+project. Codex desktop and CLI share project MCP configuration for trusted
+projects; setup does not require a separate Codex CLI installation. OpenCode and
+Claude Code setup, downloadable releases, and packaging are subsequent work.
+
+For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
+agent instruction files untouched, and `--install-dir DIRECTORY` to choose the
+stable binary location. These options also support isolated setup tests.
+
+## Local MCP server (experimental)
+
+The same Rust binary can expose one `search` tool to MCP clients over stdio:
+
+```sh
+oko auth login
+oko mcp --root /absolute/path/to/project
+```
+
+Your coding tool normally starts this process; it is not an interactive terminal
+command. Configure a local/stdio MCP connection with the absolute path to the
+Oko executable as its command and `mcp`, `--root`, and the absolute project path
+as its arguments. No HTTP listener or extra runtime is needed. The current
+working directory is used when `--root` is omitted. Set the root explicitly in
+GUI clients; their working directory may not be your project.
+
+The server exposes `search` with these inputs:
+
+- `question`: required, nonblank, at most 4096 bytes.
+- `directory`: optional subdirectory inside the configured root.
+- `intent`: `implementation` (default), `explanation`, or `general`.
+- `deep`: optional, defaults to `false`.
+- `max_steps`: deep mode only, 1–5, defaults to 5.
+
+Results include an automatic context packet: up to three ranked matches with
+source excerpts and up to two related definition candidates. Paths are relative
+to the returned search directory, with inclusive line ranges. Context is drawn
+from the same file snapshot as the search, deduplicated, and bounded. Detected
+function headers are lexical hints, not parser-verified ownership; shortened
+excerpts are marked. Related lookup preserves call qualification, excludes
+unresolved receiver calls, and omits ambiguous definitions instead of filling
+the packet with namesakes. It supports simple local Rust module paths and
+imports; unsupported syntax falls back to the primary source excerpts. This
+is not compiler-level name or type resolution. Related code is found locally;
+context expansion adds no model call.
+
+Multiline signatures are scanned within a fixed limit. When a declaration's
+extent cannot be established, Oko returns bounded source context marked
+`truncated` rather than treating a header as a complete implementation.
+
+Normal searches rank compact, line-labelled previews instead of full chunks.
+Preview size adapts to the existing 32,000-byte Jev request budget. Winner IDs
+map back to original source, so preview markers are never mistaken for source.
+Previews prioritize declaration names, attached source annotations or comments,
+and implementation statements. Adjacent decorator context can be recovered from
+the already loaded corpus; this adds no file reads or provider requests. These
+are lexical hints, not parser-verified classifications of tests or functions.
+The CLI's `ask` also uses these ranking previews, while retaining its existing
+up-to-five-result output. Generic `rank` input is unchanged.
+See [source evidence validation](benchmarks/source-evidence.md) for the snippet
+repair checks and the limits of the ranking evidence changes.
+
+MCP results include both structured JSON and equivalent text JSON for client
+compatibility. The **16,000-byte response cap includes both copies and JSON
+escaping**, excluding the small JSON-RPC envelope. Context is trimmed to fit
+and `truncated` is set; repeated question text and deep action labels are
+separately shortened and marked. Deep results retain investigation counters
+and stop reasons. Tool failures return an error without stopping the server.
+
+The response includes `timings` for preparation (including credential lookup),
+scan, shortlist, context building, and total server work. Normal `retrieval`
+metadata reports candidate counts, budgeted request bytes (before the transport
+adds its model field), preview building, and client-side reranking time
+(HTTP preparation, provider wait, and parsing).
+Deep mode reports investigation time instead. These times exclude Codex's
+reasoning, answer generation, and client transport overhead. No request bodies
+or credentials are logged. Timing and context metadata are automatic.
+
+See [context packet validation](benchmarks/context-packet.md) for offline
+coverage checks, local overhead measurements, and validation limits.
+
+Normal mode uses one Jev ranking request for a nonempty shortlist, with an
+independent relevance judgment for each candidate. Deep mode is
+bounded to five local actions in MCP, unlike the CLI's optional unbounded mode.
+Each provider call retains its ten-second timeout. Configure a client tool timeout
+of 120 seconds when using deep mode; large repository scans can take longer.
+One search runs at a time; concurrent calls receive a busy error. Cancellation
+stops before the next search phase or provider call; it does not interrupt a
+filesystem scan or an already-running synchronous HTTP request.
+
+Credentials are resolved on each call from the server environment, the configured
+root's `.env`, or the OS credential store. Model-selected subdirectories do not
+change the credential source. Discovery and startup do not require a key. For
+local-only testing, launch `oko mcp --root /path/to/project --no-jev`; this skips
+credential loading and rejects deep searches.
+
+Searches rescan current files on each call and cannot select a directory outside
+the configured root. File discovery ignores user ripgrep configuration and skips
+files resolving outside the searched directory. This is an application boundary,
+not an operating-system sandbox. Existing ignored-file and file-size rules apply.
+Normal/deep searches send selected snippets to TypeSafe, as described above.
+
+The server advertises when to use Oko, but connecting it does not force the agent
+to choose it over native search. Codex project setup is available above. Published binaries and real-client
+adoption tests are separate next steps. Automated Rust tests cover actual stdio messages and mock Jev
+requests without real credentials.
+
 ## Code search
 
 Oko discovers files with `rg --files`, reads UTF-8 text files up to 256 KiB,
@@ -106,11 +252,31 @@ and matches English word forms using the Porter stemmer.
 
 Candidates use BM25 with `k1=1.2` and `b=0.75`: uncommon query words carry
 more weight, repeated words have diminishing returns, and document length is
-normalized. Content and path are scored independently, then combined as
-`content + 0.3 * path`. These are relevance scores, not probabilities.
-Deep search caches term counts once and uses full-snapshot statistics even when
-filtering to source files. This scorer needs no additional model or service.
-The [BM25 validation](benchmarks/bm25.md) scored 42/45 first-result hits and
+normalized. Two rankings select up to 100 local candidates each: content/path
+matches (`content + 0.3 * path`) and the same evidence boosted by function names.
+Reciprocal rank fusion (`k=60`) merges their positions into a shortlist of up to
+30 candidates. A bounded cross-file identifier hint favors referenced
+declarations; this is a lexical heuristic, not a resolved call graph.
+Identical source candidates are counted once. Final selection suppresses
+same-file excerpts overlapping at least half the shorter range, while distinct
+functions and the lightly overlapping windows of long functions remain eligible.
+There is no blanket penalty for additional matches from the same file.
+Declaration hints cover common Rust, Python, JavaScript/TypeScript, Go, Java,
+C#, C/C++, Kotlin and Swift syntax. Other syntax and non-code files retain
+content/path search. No repository-specific paths or framework rules are used.
+
+Term counts and path tokens are cached within each search snapshot. Only the
+selected chunks are cloned. Deep search retains full-snapshot statistics even
+when filtering to source files. Scores are relevance values, not probabilities;
+shortlist order reflects rank fusion while reported lexical scores retain the
+underlying BM25 relevance. Compact previews prioritize declaration headers over
+ordinary variable assignments and preserve a bounded multiline header prefix.
+This adds no model requests: normal search still uses one Jev call with the
+existing 30-item, 32,000-byte request budget. See the
+[rank-fusion audit](benchmarks/rank-fusion.md) for offline results and limits;
+the [earlier shortlist audit](benchmarks/shortlist.md) documents the prior design.
+
+The earlier [BM25 validation](benchmarks/bm25.md) scored 42/45 first-result hits and
 45/45 top-five hits in both ordinary and deep modes on the existing fixture,
 with medians of 1.35 s and 1.95 s respectively. These development results match
 the earlier agent comparison on this fixture, not general accuracy parity.
@@ -202,12 +368,12 @@ Both `ask` and `rank` accept `--intent implementation|explanation|general`:
 |---|---|---|
 | `implementation` | Code that performs the behavior, ahead of docs, examples, tests, or callers | `ask` |
 | `explanation` | Content explaining how or why something works, including docs and comments | Explicit selection |
-| `general` | Items that best answer the question, with the original generic instructions | `rank` and the Rust library |
+| `general` | Items that directly help answer all or part of the question | `rank` and the Rust library |
 
 The command chooses the default; Oko does not ask AI to guess the intent.
 Intent only changes the instructions within the existing Jev request. A normal
 nonempty ranking still makes one call, with the same 32,000-byte budget and no
-retries. Longer instructions can leave slightly less room for candidates. No
+retries. Instructions and candidate text share that budget. No
 file types are excluded and candidate discovery is unchanged. `--no-jev` makes
 zero calls and bypasses intent-based ranking, preserving its existing results.
 
@@ -244,12 +410,23 @@ Files are limited to 1 MiB and 30 items. IDs must be unique, nonempty strings of
 at most 200 UTF-16 code units (the existing JavaScript contract); text must be
 nonempty. `source` is optional. Unknown fields are discarded.
 
-Results preserve IDs and sources, and return up to five items whose scores beat
-the `none` choice. `omittedCount` counts items dropped by the request byte budget,
-not items outside the top five. Supply candidates in your existing search order.
-`--no-jev` preserves that order with zero scores; it is an input-order baseline,
-not keyword search. Scores are relative to the candidates, not universal
-relevance probabilities. Oko does not fetch URLs or connect to databases.
+Results preserve IDs and sources, and return up to five items with relevance
+scores above `0.5`. Each candidate gets an independent yes/no relevance judgment
+using TypeSafe's Noul primitive; all judgments share one request. Several items
+can score highly at once, and the scores do not need to sum to one. The `0.5`
+cutoff is an initial decision threshold, not a calibrated accuracy guarantee.
+These scores are not comparable with older versions' Choice scores.
+
+`omittedCount` counts items dropped by the 32,000-byte request budget, not items
+outside the top five or below the relevance cutoff. Supply candidates in your
+existing search order. Independent questions share that budget with the item
+text, so large inputs may lose more trailing items than before. Normal code
+search fits its previews to the available space. `--no-jev` preserves the input
+order with zero scores; it is an input-order baseline, not keyword search.
+Oko does not fetch URLs or connect to databases.
+
+See [independent relevance validation](benchmarks/independent-relevance.md) for
+the before/after comparison, request-budget tradeoffs, and remaining limitations.
 
 Any programming language can invoke the CLI and consume its JSON output.
 Rust applications can use the library directly:

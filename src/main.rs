@@ -1,13 +1,15 @@
 mod auth;
 mod benchmark;
 mod config;
+mod mcp;
+mod setup;
 
 use anyhow::{Context, Result, bail};
 use oko::{RankOptions, RankingIntent, parse_items, rank_items, search};
 use serde::Serialize;
-use std::{env, fs::File, io::Read, path::Path};
+use std::{env, fs::File, io::Read, path::Path, time::Instant};
 
-const USAGE: &str = "Usage: oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko setup [--root DIRECTORY] [--no-jev]\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -140,13 +142,38 @@ pub(crate) struct CodeResult {
     pub text: String,
 }
 
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodeRankingStats {
+    pub shortlisted_candidates: usize,
+    pub ranked_candidates: usize,
+    pub omitted_candidates: usize,
+    /// Budgeted request JSON before transport adds its model field.
+    pub request_bytes: usize,
+    pub preview_ms: u64,
+    /// Client-side reranking, including HTTP, provider wait, and response parsing.
+    pub rerank_ms: u64,
+}
+
 pub(crate) fn rank_code(
     question: &str,
     chunks: &[search::Chunk],
+    corpus: &[search::Chunk],
     key: Option<String>,
     no_jev: bool,
     intent: RankingIntent,
 ) -> Result<Vec<CodeResult>> {
+    Ok(rank_code_with_stats(question, chunks, corpus, key, no_jev, intent)?.0)
+}
+
+pub(crate) fn rank_code_with_stats(
+    question: &str,
+    chunks: &[search::Chunk],
+    corpus: &[search::Chunk],
+    key: Option<String>,
+    no_jev: bool,
+    intent: RankingIntent,
+) -> Result<(Vec<CodeResult>, CodeRankingStats)> {
     if !no_jev
         && key
             .as_deref()
@@ -156,6 +183,10 @@ pub(crate) fn rank_code(
             "TYPESAFE_API_KEY is required for normal `oko ask`; run `oko auth login`, set it in the environment or .env; use `--no-jev` for explicit lexical-only benchmarking."
         );
     }
+    let mut stats = CodeRankingStats {
+        shortlisted_candidates: chunks.len(),
+        ..Default::default()
+    };
     let scored: Vec<(search::Chunk, f64)> = if no_jev {
         chunks
             .iter()
@@ -163,18 +194,14 @@ pub(crate) fn rank_code(
             .map(|chunk| (chunk.clone(), chunk.lexical_score))
             .collect()
     } else {
-        let items: Vec<_> = chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| oko::RankItem {
-                id: index.to_string(),
-                text: chunk.text.clone(),
-                source: Some(format!(
-                    "{}:{}-{}",
-                    chunk.path, chunk.start_line, chunk.end_line
-                )),
-            })
-            .collect();
+        let preview_started = Instant::now();
+        let items = oko::preview::ranking_previews_with_context(question, chunks, corpus, intent)?;
+        if !items.is_empty() {
+            let (request, _) = oko::ranking::prepare_request_with_intent(question, &items, intent)?;
+            stats.request_bytes = serde_json::to_vec(&request)?.len();
+        }
+        stats.preview_ms = preview_started.elapsed().as_millis() as u64;
+        let rerank_started = Instant::now();
         let ranking = rank_items(
             question,
             &items,
@@ -185,6 +212,9 @@ pub(crate) fn rank_code(
                 intent,
             },
         )?;
+        stats.rerank_ms = rerank_started.elapsed().as_millis() as u64;
+        stats.ranked_candidates = items.len().saturating_sub(ranking.omitted_count);
+        stats.omitted_candidates = chunks.len().saturating_sub(stats.ranked_candidates);
         let mut scored: Vec<_> = ranking
             .results
             .into_iter()
@@ -201,7 +231,7 @@ pub(crate) fn rank_code(
         scored.truncate(search::RESULT_LIMIT);
         scored
     };
-    Ok(scored
+    let results = scored
         .into_iter()
         .map(|(chunk, score)| CodeResult {
             path: chunk.path,
@@ -210,7 +240,8 @@ pub(crate) fn rank_code(
             score,
             text: chunk.text,
         })
-        .collect())
+        .collect();
+    Ok((results, stats))
 }
 
 fn snippet(text: &str) -> String {
@@ -244,6 +275,12 @@ fn run() -> Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "auth") {
         return auth::run(&args[1..], &cwd);
+    }
+    if args.first().is_some_and(|arg| arg == "mcp") {
+        return mcp::run(&args[1..], &cwd);
+    }
+    if args.first().is_some_and(|arg| arg == "setup") {
+        return setup::run(&args[1..], &cwd);
     }
     let parsed = parse_arguments(&args).map_err(|error| anyhow::anyhow!("{error}\n\n{USAGE}"))?;
     let key = if parsed.no_jev { None } else { api_key(&cwd)? };
@@ -336,10 +373,12 @@ fn run() -> Result<()> {
             investigation = Some(metadata);
             results
         } else {
-            let shortlist = search::search_workspace(&cwd, &parsed.question)?;
+            let corpus = search::workspace_chunks(&cwd)?;
+            let shortlist = search::rank_lexically(&corpus, &parsed.question);
             rank_code(
                 &parsed.question,
                 &shortlist,
+                &corpus,
                 key,
                 parsed.no_jev,
                 parsed.intent,

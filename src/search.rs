@@ -17,6 +17,9 @@ pub const CHUNK_OVERLAP: usize = 5;
 pub const FUNCTION_CHUNK_LINES: usize = 120;
 pub const SHORTLIST_LIMIT: usize = 30;
 pub const RESULT_LIMIT: usize = 5;
+// Retrieve broadly in memory, then keep the existing small Jev request.
+const RETRIEVAL_WINDOW: usize = 100;
+const RRF_CONSTANT: f64 = 60.0;
 const STOP_WORDS: &[&str] = &[
     "a", "an", "and", "are", "by", "do", "does", "for", "how", "in", "is", "it", "its", "of", "on",
     "or", "the", "this", "that", "to", "what", "when", "where", "which", "who", "why",
@@ -38,6 +41,10 @@ struct Patterns {
     extension: Regex,
     declaration: Regex,
     comment: Regex,
+    symbol: Regex,
+    symbol_extension: Regex,
+    typed_symbol: Regex,
+    typed_extension: Regex,
 }
 fn patterns() -> &'static Patterns {
     static P: OnceLock<Patterns> = OnceLock::new();
@@ -45,6 +52,12 @@ fn patterns() -> &'static Patterns {
         // ECMAScript whitespace, excluding Rust regex's additional U+0085.
         let ws = "[\\t\\n\\v\\f\\r \\u{00a0}\\u{1680}\\u{2000}-\\u{200a}\\u{2028}\\u{2029}\\u{202f}\\u{205f}\\u{3000}\\u{feff}]";
         Patterns {
+            // Deliberately conservative declaration hints, not a language parser.
+            // Unsupported syntax still receives ordinary content/path ranking.
+            typed_extension: Regex::new(r"\.(?:java|cs|c|h|cc|cpp|hpp)$").unwrap(),
+            typed_symbol: Regex::new(r"(?m)^[ \t]*(?:[A-Za-z_][A-Za-z0-9_.<>,?\[\]:*&]*[ \t]+)+([A-Za-z_][A-Za-z0-9_]*)[ \t]*\([^;\n]*\)[ \t]*(?:\{|throws\b)").unwrap(),
+            symbol_extension: Regex::new(r"\.(?:rs|[cm]?js|jsx|ts|tsx|py|go|java|cs|c|h|cc|cpp|hpp|rb|php|swift|kt)$").unwrap(),
+            symbol: Regex::new(r"(?m)^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|const|export|default|public|private|protected|static|final|override|abstract|internal|open|suspend)\s+)*(?:(?:fn|function\*?|def|fun)\s+([A-Za-z_][A-Za-z0-9_]*)|func\s+(?:\([^\n)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)|(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s+)?(?:\([^\n)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>)").unwrap(),
             acronym: Regex::new("([A-Z]+)([A-Z][a-z])").unwrap(),
             camel: Regex::new("([a-z0-9])([A-Z])").unwrap(),
             words: Regex::new("[a-z0-9]+").unwrap(),
@@ -131,18 +144,111 @@ fn normalize(term: String, stems: &mut HashMap<String, String>) -> String {
 }
 
 /// BM25 over a snapshot: cache tokens once and retain corpus-wide statistics
-/// when filtering candidates. Body and path are independent fields.
+/// when filtering candidates. Body, path and declaration names are independent fields.
 pub(crate) struct PreparedCorpus<'a> {
     chunks: Vec<PreparedChunk<'a>>,
     content_stats: FieldStats,
     path_stats: FieldStats,
+    symbol_stats: FieldStats,
 }
 struct PreparedChunk<'a> {
     chunk: &'a Chunk,
     content: Field,
     path: Field,
+    symbols: Vec<Symbol<'a>>,
 }
-#[derive(Default)]
+struct Symbol<'a> {
+    name: &'a str,
+    field: Field,
+    reference_weight: f64,
+}
+struct Candidate<'a> {
+    chunk: &'a Chunk,
+    baseline: f64,
+    symbol_aware: f64,
+    fusion: f64,
+}
+
+fn compare_sources(a: &Chunk, b: &Chunk) -> Ordering {
+    compare_text(&a.path, &b.path)
+        .then(a.start_line.cmp(&b.start_line))
+        .then(a.end_line.cmp(&b.end_line))
+        .then_with(|| compare_text(&a.text, &b.text))
+}
+
+fn redundant_source(a: &Chunk, b: &Chunk) -> bool {
+    if a.path != b.path || a.start_line > a.end_line || b.start_line > b.end_line {
+        return false;
+    }
+    let start = a.start_line.max(b.start_line);
+    let end = a.end_line.min(b.end_line);
+    if start > end {
+        return false;
+    }
+    let overlap = end.saturating_sub(start).saturating_add(1);
+    let shorter = (a.end_line - a.start_line)
+        .min(b.end_line - b.start_line)
+        .saturating_add(1);
+    // Suppress substantially overlapping source, not distinct functions or
+    // separate portions of a long function that happen to share a file.
+    overlap >= shorter.div_ceil(2)
+}
+
+fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
+    // Each route gets one vote per source, regardless of score scale. Keep body
+    // evidence in the symbol-aware route: names alone lose contextual matches.
+    for use_symbols in [false, true] {
+        let score = |candidate: &Candidate<'_>| {
+            if use_symbols {
+                candidate.symbol_aware
+            } else {
+                candidate.baseline
+            }
+        };
+        let mut order: Vec<_> = (0..candidates.len())
+            .filter(|&index| score(&candidates[index]) > 0.0)
+            .collect();
+        let compare = |&a: &usize, &b: &usize| {
+            score(&candidates[b])
+                .total_cmp(&score(&candidates[a]))
+                .then_with(|| compare_sources(candidates[a].chunk, candidates[b].chunk))
+        };
+        if order.len() > RETRIEVAL_WINDOW {
+            order.select_nth_unstable_by(RETRIEVAL_WINDOW, compare);
+            order.truncate(RETRIEVAL_WINDOW);
+        }
+        order.sort_unstable_by(compare);
+        for (rank, index) in order.into_iter().enumerate() {
+            candidates[index].fusion += 1.0 / (RRF_CONSTANT + (rank + 1) as f64);
+        }
+    }
+    candidates.retain(|candidate| candidate.fusion > 0.0);
+    candidates.sort_unstable_by(|a, b| {
+        b.fusion
+            .total_cmp(&a.fusion)
+            .then_with(|| compare_sources(a.chunk, b.chunk))
+    });
+    let mut ranked = Vec::with_capacity(SHORTLIST_LIMIT);
+    for candidate in candidates {
+        if ranked
+            .iter()
+            .any(|previous| redundant_source(candidate.chunk, previous))
+        {
+            continue;
+        }
+        let mut selected = candidate.chunk.clone();
+        // Preserve the raw BM25 score used by CLI output and deep search.
+        // Fusion chooses shortlist order; its rank-dependent score is not a
+        // replacement for relevance values compared across filtered searches.
+        selected.lexical_score = candidate.symbol_aware;
+        ranked.push(selected);
+        if ranked.len() == SHORTLIST_LIMIT {
+            break;
+        }
+    }
+    ranked
+}
+#[derive(Clone, Default)]
 struct Field {
     counts: HashMap<String, usize>,
     length: usize,
@@ -201,24 +307,104 @@ impl<'a> PreparedCorpus<'a> {
         };
         let mut content_stats = FieldStats::default();
         let mut path_stats = FieldStats::default();
-        let chunks = chunks
+        let mut symbol_stats = FieldStats::default();
+        let mut path_fields = HashMap::new();
+        let mut seen = HashSet::new();
+        let mut prepared_chunks: Vec<PreparedChunk<'_>> = chunks
             .iter()
+            // An identical source submitted twice must neither change corpus
+            // statistics nor consume a retrieval slot or earn a second vote.
+            .filter(|chunk| {
+                seen.insert((
+                    chunk.path.as_str(),
+                    chunk.start_line,
+                    chunk.end_line,
+                    chunk.text.as_str(),
+                ))
+            })
             .map(|chunk| {
                 let content = words(&chunk.text);
-                let path = words(&chunk.path);
+                let path = path_fields
+                    .entry(chunk.path.as_str())
+                    .or_insert_with(|| words(&chunk.path))
+                    .clone();
+                let symbol_names: Vec<&str> = if patterns().symbol_extension.is_match(&chunk.path) {
+                    let pattern = if patterns().typed_extension.is_match(&chunk.path) {
+                        &patterns().typed_symbol
+                    } else {
+                        &patterns().symbol
+                    };
+                    pattern
+                        .captures_iter(&chunk.text)
+                        .flat_map(|captures| {
+                            captures
+                                .iter()
+                                .skip(1)
+                                .flatten()
+                                .map(|name| name.as_str())
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let symbols = symbol_names
+                    .into_iter()
+                    .map(|name| {
+                        let field = words(name);
+                        symbol_stats.add(&field);
+                        Symbol {
+                            name,
+                            field,
+                            reference_weight: 1.0,
+                        }
+                    })
+                    .collect();
                 content_stats.add(&content);
                 path_stats.add(&path);
                 PreparedChunk {
                     chunk,
                     content,
                     path,
+                    symbols,
                 }
             })
             .collect();
+        // Cross-file references distinguish reusable entry points from isolated
+        // declarations. Count each file once, irrespective of overlapping chunks.
+        let mut references: HashMap<&str, HashSet<&str>> = prepared_chunks
+            .iter()
+            .flat_map(|chunk| chunk.symbols.iter().map(|symbol| symbol.name))
+            .map(|name| (name, HashSet::new()))
+            .collect();
+        for chunk in chunks {
+            if !patterns().symbol_extension.is_match(&chunk.path) {
+                continue;
+            }
+            for identifier in chunk
+                .text
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            {
+                if let Some(files) = references.get_mut(identifier) {
+                    files.insert(&chunk.path);
+                }
+            }
+        }
+        for prepared in &mut prepared_chunks {
+            for symbol in &mut prepared.symbols {
+                let other_files = references[symbol.name]
+                    .iter()
+                    .filter(|path| **path != prepared.chunk.path)
+                    .count();
+                // Bounded lexical hint, not a resolved call graph.
+                symbol.reference_weight = 1.0 + (other_files as f64).ln_1p().min(2.0);
+            }
+        }
         Self {
-            chunks,
+            chunks: prepared_chunks,
             content_stats,
             path_stats,
+            symbol_stats,
         }
     }
 
@@ -234,27 +420,38 @@ impl<'a> PreparedCorpus<'a> {
         if terms.is_empty() {
             return vec![];
         }
-        let mut ranked = Vec::new();
+        // Rank borrowed candidates first; clone only the final shortlist.
+        let mut candidates = Vec::new();
         for prepared in &self.chunks {
             if !include(prepared.chunk) {
                 continue;
             }
-            // Preserve the old 10:3 body/path preference, without mixing lengths.
-            let score = self.content_stats.score(&prepared.content, &terms)
+            let baseline = self.content_stats.score(&prepared.content, &terms)
                 + 0.3 * self.path_stats.score(&prepared.path, &terms);
+            let score = baseline
+                + prepared
+                    .symbols
+                    .iter()
+                    .map(|symbol| {
+                        symbol.reference_weight * self.symbol_stats.score(&symbol.field, &terms)
+                    })
+                    .fold(0.0, f64::max);
             if score > 0.0 {
-                let mut chunk = prepared.chunk.clone();
-                chunk.lexical_score = score;
-                ranked.push(chunk);
+                candidates.push(Candidate {
+                    chunk: prepared.chunk,
+                    baseline,
+                    symbol_aware: score,
+                    fusion: 0.0,
+                });
             }
         }
-        ranked.sort_by(compare_chunks);
-        ranked.truncate(SHORTLIST_LIMIT);
-        ranked
+        fuse_candidates(candidates)
     }
 }
 
-/// Rank with BM25. Scores are relevance values, not probabilities.
+/// Fuse bounded body/path and symbol-aware BM25 rankings, then suppress
+/// redundant source ranges. Returned scores remain raw relevance values;
+/// shortlist order is determined by rank fusion, not by sorting those scores.
 pub fn rank_lexically(chunks: &[Chunk], question: &str) -> Vec<Chunk> {
     PreparedCorpus::new(chunks).rank(question, |_| true)
 }
@@ -277,8 +474,11 @@ pub fn search_workspace(cwd: &Path, question: &str) -> Result<Vec<Chunk>> {
 
 /// Read one snapshot for a multi-step investigation; no repeated filesystem scans.
 pub fn workspace_chunks(cwd: &Path) -> Result<Vec<Chunk>> {
-    let output = Command::new("rg")
-        .arg("--files")
+    let root = cwd
+        .canonicalize()
+        .context("Cannot resolve workspace root")?;
+    let output = Command::new(std::env::var_os("OKO_RIPGREP").unwrap_or_else(|| "rg".into()))
+        .args(["--no-config", "--files", "--null"])
         .current_dir(cwd)
         .output()
         .map_err(|e| {
@@ -307,8 +507,7 @@ pub fn workspace_chunks(cwd: &Path) -> Result<Vec<Chunk>> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut files: Vec<String> = stdout
-        .split('\n')
-        .map(|s| s.strip_suffix('\r').unwrap_or(s))
+        .split('\0')
         .filter(|s| !s.is_empty())
         .map(|s| s.replace('\\', "/"))
         .collect();
@@ -317,7 +516,10 @@ pub fn workspace_chunks(cwd: &Path) -> Result<Vec<Chunk>> {
     let mut chunks = vec![];
     for file in files {
         let read = || -> Result<Option<String>> {
-            let path = cwd.join(&file);
+            let path = cwd.join(&file).canonicalize()?;
+            if !path.starts_with(&root) {
+                return Ok(None);
+            }
             if fs::metadata(&path)?.len() > MAX_FILE_BYTES as u64 {
                 return Ok(None);
             }
