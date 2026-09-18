@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "A small code search CLI with TypeSafe AI Jev reranking.",
   "type": "module",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
   "bin": {
     "oko": "dist/cli.js"
   },
@@ -13,7 +16,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/*.test.js scripts/*.test.mjs",
-    "benchmark": "npm run build && node scripts/benchmark.mjs"
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "benchmark:items": "npm run build && node scripts/benchmark-items.mjs"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "0.6.0",

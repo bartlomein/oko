@@ -51,15 +51,15 @@ test("Jev receives one request with candidates plus an explicit none choice", as
   assert.equal(result.results[0]?.score, 0.8);
 
   const request = requests[0] as {
-    state: { question: string; candidates: Array<{ path: string; text: string }> };
+    state: { question: string; candidates: Array<{ source: string; text: string }> };
     questions: { selection: { criteria: Record<string, unknown> } };
   };
   assert.equal(request.state.question, "Which candidate matters?");
   assert.deepEqual(
-    request.state.candidates.map(({ path, text }) => [path, text]),
+    request.state.candidates.map(({ source, text }) => [source, text]),
     [
-      ["src/first.ts", "first candidate"],
-      ["src/second.ts", "second candidate"],
+      ["src/first.ts:1-3", "first candidate"],
+      ["src/second.ts:4-6", "second candidate"],
     ],
   );
   assert.deepEqual(Object.keys(request.questions.selection.criteria), [
@@ -81,7 +81,7 @@ test("Jev payload stays bounded, retains full chunks and maps only sent candidat
       assert.ok(sent.length > 0 && sent.length < large.length);
       sent.forEach((c: { text: string }, i: number) => assert.equal(c.text, large[i].text));
       assert.equal(Object.keys(request.questions.selection.criteria).length, sent.length + 1);
-      return { answers: { selection: { probabilities: { candidate_1: 0.8, candidate_30: 1, none: 0.1 } } } };
+      return { answers: { selection: { probabilities: { ...Object.fromEntries(sent.map((_: unknown, i: number) => [`candidate_${i + 1}`, i === 0 ? 0.8 : 0])), candidate_30: 1, none: 0.1 } } } };
     },
   }));
   assert.deepEqual(result.results.map(c => c.path), ["src/0.rs"]);

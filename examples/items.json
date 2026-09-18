@@ -1,0 +1,5 @@
+[
+  { "id": "ticket-101", "text": "Customer needs a copy of last month's invoice.", "source": "support/ticket-101" },
+  { "id": "ticket-102", "text": "Customer was charged twice and wants the duplicate payment refunded.", "source": "support/ticket-102" },
+  { "id": "ticket-103", "text": "Customer wants to change their delivery address.", "source": "support/ticket-103" }
+]

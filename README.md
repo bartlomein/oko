@@ -50,6 +50,54 @@ For local A/B benchmarking, pass `--no-jev`. This explicitly skips the Jev reque
 
 JSON output is written only to stdout, so diagnostics can safely be read from stderr.
 
+## Rank documents or database results
+
+Supply a JSON array of `{ "id": "unique-id", "text": "searchable content", "source": "optional URL or label" }`.
+Oko accepts up to 30 items and a JSON file up to 1 MiB. IDs and text must be
+non-empty strings; IDs must be unique and at most 200 characters. Other fields
+are discarded, so select the text you want to send explicitly.
+
+```sh
+node dist/cli.js rank --input examples/items.json "Who needs a refund?" --json
+```
+
+`rank` loads `.env` from the current directory and uses the same Jev request
+budget as code search. It preserves item IDs and optional source strings. It
+returns up to five items, or an empty list if none beats the `none` choice.
+`omittedCount` reports trailing items excluded by the request budget (not the
+number outside the top five). Supply candidates in your existing search order.
+`--no-jev` keeps that input order with zero scores; it is a baseline, not keyword
+search. Scores are relative to the supplied candidates, not universal relevance
+probabilities. Only supplied text/source/IDs are sent; Oko does not fetch URLs or
+connect to a database.
+
+The reusable ESM API is exported from the package, after building:
+
+```js
+import { rankItems } from 'oko';
+
+const result = await rankItems('Who needs a refund?', [
+  { id: 'row-42', text: 'Charged twice for the same order.', source: 'tickets/42' },
+], { apiKey: process.env.TYPESAFE_API_KEY, limit: 5 });
+console.log(result.results);
+```
+
+The library does not load `.env` itself; the caller provides `apiKey`.
+Use `noJev: true` for input order without an API call. Validation failures and
+provider errors reject the promise. `parseItems` is also exported for validating
+unknown JSON before ranking.
+
+Run the synthetic support-ticket benchmark (five Jev requests, no customer data):
+
+```sh
+npm run benchmark:items
+```
+
+Its report compares input order with Jev, includes a no-match question, and is
+saved under `benchmarks/results/`. It measures ranking API time, unlike the code
+benchmark's end-to-end CLI time. Neither small benchmark establishes general
+search accuracy.
+
 ## Search benchmark
 
 From the Oko directory, run:
