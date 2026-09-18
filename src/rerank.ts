@@ -2,6 +2,10 @@ import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
 
 import { compareRankedChunks, RESULT_LIMIT, type Chunk } from "./search.js";
 
+// Conservative payload cap, not an exact model-token count. Preserve complete
+// chunks and drop the lowest lexical candidates when context grows too large.
+export const MAX_JEV_REQUEST_BYTES = 32_000;
+
 export type RankingMethod = "lexical" | "jev";
 
 export interface SearchResult {
@@ -61,6 +65,28 @@ function isProbability(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function createRequest(question: string, candidates: Chunk[]) {
+  return {
+    state: {
+      question,
+      candidates: candidates.map((chunk, index) => ({
+        id: candidateId(index), path: chunk.path,
+        startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text,
+      })),
+    },
+    questions: {
+      selection: choice(
+        "Which code chunk best answers the question? Choose none when no candidate is sufficient.",
+        Object.fromEntries([
+          ...candidates.map((chunk, index) => [candidateId(index),
+            `The code in state candidate ${candidateId(index)} at ${chunk.path}:${chunk.startLine}-${chunk.endLine}.`]),
+          ["none", "None of the code chunks answers the question."],
+        ]),
+      ),
+    },
+  };
+}
+
 export async function rankWithJev(
   question: string,
   shortlist: Chunk[],
@@ -78,29 +104,17 @@ export async function rankWithJev(
   }
 
   try {
+    const candidates = [...shortlist];
+    let request = createRequest(question, candidates);
+    while (candidates.length && Buffer.byteLength(JSON.stringify(request), "utf8") > MAX_JEV_REQUEST_BYTES) {
+      candidates.pop();
+      request = createRequest(question, candidates);
+    }
+    if (candidates.length === 0) {
+      throw new Error("Question and first code chunk exceed the Jev request size budget.");
+    }
     const client = clientFactory(apiKey);
-    const criteria = Object.fromEntries([
-      ...shortlist.map((chunk, index) => [candidateId(index), chunk.text]),
-      ["none", "None of the code chunks answers the question."],
-    ]);
-    const response = await client.systemOne({
-      state: {
-        question,
-        candidates: shortlist.map((chunk, index) => ({
-          id: candidateId(index),
-          path: chunk.path,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          text: chunk.text,
-        })),
-      },
-      questions: {
-        selection: choice(
-          "Which code chunk best answers the question? Choose none when no candidate is sufficient.",
-          criteria,
-        ),
-      },
-    });
+    const response = await client.systemOne(request);
 
     const probabilities = response?.answers?.selection?.probabilities;
     if (!probabilities || typeof probabilities !== "object") {
@@ -108,7 +122,7 @@ export async function rankWithJev(
     }
 
     const noneScore = isProbability(probabilities.none) ? probabilities.none : 0;
-    const ranked = shortlist
+    const ranked = candidates
       .map((chunk, index) => ({
         chunk,
         score: isProbability(probabilities[candidateId(index)])

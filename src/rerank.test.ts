@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { rankLexically, rankWithJev } from "./rerank.js";
+import { MAX_JEV_REQUEST_BYTES, rankLexically, rankWithJev } from "./rerank.js";
 import type { Chunk } from "./search.js";
 
 const shortlist: Chunk[] = [
@@ -67,6 +67,30 @@ test("Jev receives one request with candidates plus an explicit none choice", as
     "candidate_2",
     "none",
   ]);
+  assert.equal(JSON.stringify(request).split("first candidate").length - 1, 1);
+});
+
+test("Jev payload stays bounded, retains full chunks and maps only sent candidates", async () => {
+  const large = Array.from({ length: 30 }, (_, index) => ({
+    ...shortlist[0], path: `src/${index}.rs`, text: `// ${index}\n` + "界".repeat(1500),
+  }));
+  const result = await rankWithJev("find code", large, "test-key", () => ({
+    systemOne: async (request) => {
+      assert.ok(Buffer.byteLength(JSON.stringify(request), "utf8") <= MAX_JEV_REQUEST_BYTES);
+      const sent = request.state.candidates;
+      assert.ok(sent.length > 0 && sent.length < large.length);
+      sent.forEach((c: { text: string }, i: number) => assert.equal(c.text, large[i].text));
+      assert.equal(Object.keys(request.questions.selection.criteria).length, sent.length + 1);
+      return { answers: { selection: { probabilities: { candidate_1: 0.8, candidate_30: 1, none: 0.1 } } } };
+    },
+  }));
+  assert.deepEqual(result.results.map(c => c.path), ["src/0.rs"]);
+  assert.equal(large.length, 30);
+});
+
+test("an oversized first chunk fails before spending an API request", async () => {
+  await assert.rejects(rankWithJev("find", [{ ...shortlist[0], text: "x".repeat(MAX_JEV_REQUEST_BYTES) }],
+    "test-key", () => { throw new Error("must not create client"); }), /exceed the Jev request size budget/);
 });
 
 test("a missing API key fails normal Jev ranking clearly", async () => {

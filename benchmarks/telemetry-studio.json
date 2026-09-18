@@ -1,0 +1,95 @@
+{
+  "description": "Five implementation-location smoke tests, verified from source. Not a general accuracy estimate or held-out evaluation.",
+  "cases": [
+    {
+      "id": "strava-token",
+      "question": "Where does Strava exchange an authorization code for access tokens?",
+      "expected": [
+        {
+          "path": "src/strava/oauth.rs",
+          "startLine": 394,
+          "endLine": 404,
+          "sha256": "0e49aba50390272eabbde4095bc2291bc53ebfea7db32f2ef9c8b84df78285eb",
+          "evidence": "exchange_code_for_tokens builds the authorization_code payload and posts to the token proxy.",
+          "function": {
+            "name": "exchange_code_for_tokens",
+            "startLine": 387,
+            "endLine": 433
+          }
+        }
+      ]
+    },
+    {
+      "id": "project-save",
+      "question": "Where is a project saved atomically by writing a temporary file and renaming it?",
+      "expected": [
+        {
+          "path": "src/project/mod.rs",
+          "startLine": 180,
+          "endLine": 189,
+          "sha256": "7d0daf1500a08bb559d654203aa3baa41ff60f9d2fdcca63a792d5289fce49be",
+          "evidence": "Project::save serializes the project, writes tsproj.tmp and renames it.",
+          "function": {
+            "name": "Project::save",
+            "startLine": 170,
+            "endLine": 193
+          }
+        }
+      ]
+    },
+    {
+      "id": "racebox-import",
+      "question": "Where is a RaceBox CSV file parsed into telemetry points?",
+      "expected": [
+        {
+          "path": "src/telemetry/racebox_csv_parser.rs",
+          "startLine": 81,
+          "endLine": 90,
+          "sha256": "8cbfd600d462831b1960817222c3340af9f5677cd35d96d1ddefb20b2fa0c0e9",
+          "evidence": "parse_racebox_csv loops through rows and calls parse_data_point.",
+          "function": {
+            "name": "parse_racebox_csv",
+            "startLine": 28,
+            "endLine": 103
+          }
+        }
+      ]
+    },
+    {
+      "id": "update-check",
+      "question": "Where does the app check for available updates on a background thread?",
+      "expected": [
+        {
+          "path": "src/updater/mod.rs",
+          "startLine": 147,
+          "endLine": 159,
+          "sha256": "0caa65c9fdcd1f06cc41416f11e7ba9192f05cf0b0d3c446f4415f2c7960e81b",
+          "evidence": "check_for_update spawns a thread and calls the update manager.",
+          "function": {
+            "name": "check_for_update",
+            "startLine": 137,
+            "endLine": 175
+          }
+        }
+      ]
+    },
+    {
+      "id": "gapless-eligibility",
+      "question": "Where is gapless playback eligibility checked for clips with end trims, mixed HDR, or gaps?",
+      "expected": [
+        {
+          "path": "src/app/handlers/playback/gapless.rs",
+          "startLine": 474,
+          "endLine": 486,
+          "sha256": "6cea48c944fd92cf9d4d597e3c5f4af31c60d365781a895ed9aa85c6eada2523",
+          "evidence": "clips_gapless_eligible checks clip count, HDR, source_out and gap_before.",
+          "function": {
+            "name": "clips_gapless_eligible",
+            "startLine": 474,
+            "endLine": 486
+          }
+        }
+      ]
+    }
+  ]
+}

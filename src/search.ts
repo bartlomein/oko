@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { stemmer } from "stemmer";
 
 export const MAX_FILE_BYTES = 256 * 1024;
 export const CHUNK_LINES = 40;
 export const CHUNK_OVERLAP = 5;
+export const FUNCTION_CHUNK_LINES = 120;
 export const SHORTLIST_LIMIT = 30;
 export const RESULT_LIMIT = 5;
 
@@ -13,15 +15,21 @@ const STOP_WORDS = new Set([
   "an",
   "and",
   "are",
+  "by",
   "do",
+  "does",
   "for",
   "how",
   "in",
   "is",
+  "it",
+  "its",
   "of",
   "on",
   "or",
   "the",
+  "this",
+  "that",
   "to",
   "what",
   "when",
@@ -40,7 +48,11 @@ export interface Chunk {
 }
 
 function tokenize(value: string): string[] {
-  return value.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+  return value
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .match(/[a-z0-9]+/g) ?? [];
 }
 
 function compareText(left: string, right: string): number {
@@ -56,37 +68,36 @@ function compareChunks(left: Chunk, right: Chunk): number {
   );
 }
 
-function scoreChunk(chunk: Chunk, question: string): number {
-  const terms = [...new Set(tokenize(question))].filter((term) => !STOP_WORDS.has(term));
-  const contentTerms = new Set(tokenize(chunk.text));
-  const pathTerms = new Set(tokenize(chunk.path));
-
-  return terms.reduce((score, term) => {
-    return score + (contentTerms.has(term) ? 10 : 0) + (pathTerms.has(term) ? 3 : 0);
-  }, 0);
-}
-
 export function chunkText(relativePath: string, text: string): Chunk[] {
   const lines = text.split(/\r\n|\n|\r/);
   if (lines.at(-1) === "") {
     lines.pop();
   }
 
+  // Heuristic declaration boundaries, not an AST parser. Unknown syntax keeps
+  // the fixed-window fallback; long declaration sections remain bounded.
+  const declarations: number[] = [];
+  if (/\.(?:rs|[cm]?js|jsx|ts|tsx|py)$/.test(relativePath)) {
+    for (let index = 0; index < lines.length; index++) {
+      if (!/^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|const|export|default)\s+)*(?:fn|function\*?|def)\s+[\w]+/.test(lines[index])) continue;
+      let start = index;
+      while (start > 0 && /^\s*(?:\/\/|#|\/\*\*|\*)/.test(lines[start - 1])) start--;
+      declarations.push(start);
+    }
+  }
+
   const chunks: Chunk[] = [];
-  const stride = Math.max(1, CHUNK_LINES - CHUNK_OVERLAP);
-
-  for (let start = 0; start < lines.length; start += stride) {
-    const end = Math.min(lines.length, start + CHUNK_LINES);
-    chunks.push({
-      path: relativePath,
-      startLine: start + 1,
-      endLine: end,
-      text: lines.slice(start, end).join("\n"),
-      lexicalScore: 0,
-    });
-
-    if (end === lines.length) {
-      break;
+  const boundaries = [...new Set([0, ...declarations, lines.length])];
+  const declarationStarts = new Set(declarations);
+  for (let section = 0; section < boundaries.length - 1; section++) {
+    const sectionStart = boundaries[section];
+    const sectionEnd = boundaries[section + 1];
+    const limit = declarationStarts.has(sectionStart) ? FUNCTION_CHUNK_LINES : CHUNK_LINES;
+    for (let start = sectionStart; start < sectionEnd; start += limit - CHUNK_OVERLAP) {
+      const end = Math.min(sectionEnd, start + limit);
+      chunks.push({ path: relativePath, startLine: start + 1, endLine: end,
+        text: lines.slice(start, end).join("\n"), lexicalScore: 0 });
+      if (end === sectionEnd) break;
     }
   }
 
@@ -94,8 +105,27 @@ export function chunkText(relativePath: string, text: string): Chunk[] {
 }
 
 export function rankLexically(chunks: Chunk[], question: string): Chunk[] {
+  // Cache stems only for this search, so repeated code words are cheap without
+  // accumulating a process-wide cache as workspaces change.
+  const stems = new Map<string, string>();
+  const normalize = (term: string): string => {
+    let normalized = stems.get(term);
+    if (normalized === undefined) {
+      normalized = stemmer(term);
+      stems.set(term, normalized);
+    }
+    return normalized;
+  };
+  const terms = [...new Set(tokenize(question).filter(term => !STOP_WORDS.has(term)).map(normalize))];
+  if (terms.length === 0) return [];
   const ranked = chunks
-    .map((chunk) => ({ ...chunk, lexicalScore: scoreChunk(chunk, question) }))
+    .map((chunk) => {
+      const contentTerms = new Set(tokenize(chunk.text).map(normalize));
+      const pathTerms = new Set(tokenize(chunk.path).map(normalize));
+      const lexicalScore = terms.reduce((score, term) =>
+        score + (contentTerms.has(term) ? 10 : 0) + (pathTerms.has(term) ? 3 : 0), 0);
+      return { ...chunk, lexicalScore };
+    })
     .sort(compareChunks);
   return ranked.filter((chunk) => chunk.lexicalScore > 0).slice(0, SHORTLIST_LIMIT);
 }
