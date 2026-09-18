@@ -7,10 +7,17 @@ test("parseArguments accepts a question and JSON flag in either order", () => {
   assert.deepEqual(parseArguments(["ask", "where", "is", "it?", "--json"]), {
     question: "where is it?",
     json: true,
+    noJev: false,
   });
   assert.deepEqual(parseArguments(["ask", "--json", "where is it?"]), {
     question: "where is it?",
     json: true,
+    noJev: false,
+  });
+  assert.deepEqual(parseArguments(["ask", "--no-jev", "where is it?"]), {
+    question: "where is it?",
+    json: false,
+    noJev: true,
   });
 });
 
@@ -49,4 +56,14 @@ test("human and JSON output include ranking, paths, ranges, and scores", () => {
     score: 13,
     text: "selected gapless playback",
   });
+});
+
+test("lexical-only output visibly identifies the explicit opt-out", () => {
+  const human = renderHuman("where is playback selected?", {
+    method: "lexical",
+    notice: "Lexical-only ranking requested via --no-jev.",
+    results: [],
+  });
+
+  assert.match(human, /Ranking: lexical-only \(--no-jev\)/);
 });

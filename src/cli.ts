@@ -1,12 +1,14 @@
 import { pathToFileURL } from "node:url";
 
-import { rankWithJev, type RankingResult } from "./rerank.js";
+import { rankLexically, rankWithJev, type RankingResult } from "./rerank.js";
 import { searchWorkspace } from "./search.js";
 
 export const USAGE = [
-  "Usage: oko ask [--json] \"question\"",
+  "Usage: oko ask [--json] [--no-jev] \"question\"",
   "",
   "Search the current working directory for relevant code chunks.",
+  "Normal searches require TYPESAFE_API_KEY and Jev reranking.",
+  "Use --no-jev for explicit local lexical-only benchmarking.",
 ].join("\n");
 
 export class UsageError extends Error {}
@@ -14,6 +16,7 @@ export class UsageError extends Error {}
 export interface ParsedArguments {
   question: string;
   json: boolean;
+  noJev: boolean;
 }
 
 export function parseArguments(args: string[]): ParsedArguments {
@@ -23,10 +26,13 @@ export function parseArguments(args: string[]): ParsedArguments {
   }
 
   let json = false;
+  let noJev = false;
   const questionParts: string[] = [];
   for (const argument of rest) {
     if (argument === "--json") {
       json = true;
+    } else if (argument === "--no-jev") {
+      noJev = true;
     } else if (argument.startsWith("-")) {
       throw new UsageError(`Unknown flag: ${argument}`);
     } else {
@@ -39,7 +45,7 @@ export function parseArguments(args: string[]): ParsedArguments {
     throw new UsageError("A non-empty question is required.");
   }
 
-  return { question, json };
+  return { question, json, noJev };
 }
 
 function humanSnippet(text: string): string {
@@ -49,7 +55,8 @@ function humanSnippet(text: string): string {
 }
 
 export function renderHuman(question: string, ranking: RankingResult): string {
-  const lines = [`Ranking: ${ranking.method}`, `Question: ${question}`, ""];
+  const rankingLabel = ranking.notice ? "lexical-only (--no-jev)" : ranking.method;
+  const lines = [`Ranking: ${rankingLabel}`, `Question: ${question}`, ""];
 
   if (ranking.results.length === 0) {
     lines.push("No matching chunks.");
@@ -77,6 +84,7 @@ export function renderJson(question: string, ranking: RankingResult): string {
     {
       question,
       ranking: ranking.method,
+      notice: ranking.notice,
       results: ranking.results,
     },
     null,
@@ -96,13 +104,15 @@ export async function run(args: string[], cwd: string): Promise<number> {
 
   try {
     const shortlist = await searchWorkspace(cwd, parsed.question);
-    const ranking = await rankWithJev(
-      parsed.question,
-      shortlist,
-      process.env.TYPESAFE_API_KEY?.trim() || undefined,
-    );
-    if (ranking.warning) {
-      process.stderr.write(`Warning: ${ranking.warning}\n`);
+    const ranking = parsed.noJev
+      ? rankLexically(shortlist)
+      : await rankWithJev(
+          parsed.question,
+          shortlist,
+          process.env.TYPESAFE_API_KEY?.trim() || undefined,
+        );
+    if (ranking.notice) {
+      process.stderr.write(`Notice: ${ranking.notice}\n`);
     }
     process.stdout.write(
       parsed.json

@@ -2,7 +2,7 @@ import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
 
 import { compareRankedChunks, RESULT_LIMIT, type Chunk } from "./search.js";
 
-export type RankingMethod = "lexical" | "jev" | "fallback";
+export type RankingMethod = "lexical" | "jev";
 
 export interface SearchResult {
   path: string;
@@ -15,7 +15,7 @@ export interface SearchResult {
 export interface RankingResult {
   method: RankingMethod;
   results: SearchResult[];
-  warning?: string;
+  notice?: string;
 }
 
 interface JevClientLike {
@@ -45,6 +45,14 @@ function lexicalResults(shortlist: Chunk[]): SearchResult[] {
   return shortlist.slice(0, RESULT_LIMIT).map((chunk) => toResult(chunk, chunk.lexicalScore));
 }
 
+export function rankLexically(shortlist: Chunk[]): RankingResult {
+  return {
+    method: "lexical",
+    results: lexicalResults(shortlist),
+    notice: "Lexical-only ranking requested via --no-jev.",
+  };
+}
+
 function candidateId(index: number): string {
   return `candidate_${index + 1}`;
 }
@@ -59,8 +67,14 @@ export async function rankWithJev(
   apiKey: string | undefined,
   clientFactory: JevClientFactory = createJevClient,
 ): Promise<RankingResult> {
-  if (!apiKey || shortlist.length === 0) {
-    return { method: "lexical", results: lexicalResults(shortlist) };
+  if (!apiKey) {
+    throw new Error(
+      "TYPESAFE_API_KEY is required for normal `oko ask`; use `--no-jev` for explicit lexical-only benchmarking.",
+    );
+  }
+
+  if (shortlist.length === 0) {
+    return { method: "jev", results: [] };
   }
 
   try {
@@ -110,11 +124,8 @@ export async function rankWithJev(
       .map(({ chunk, score }) => toResult(chunk, score));
 
     return { method: "jev", results: ranked };
-  } catch {
-    return {
-      method: "fallback",
-      results: lexicalResults(shortlist),
-      warning: "Jev ranking failed; using lexical fallback.",
-    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Jev ranking failed: ${message}`, { cause: error });
   }
 }

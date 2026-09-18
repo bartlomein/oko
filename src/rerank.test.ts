@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { rankWithJev } from "./rerank.js";
+import { rankLexically, rankWithJev } from "./rerank.js";
 import type { Chunk } from "./search.js";
 
 const shortlist: Chunk[] = [
@@ -69,20 +69,34 @@ test("Jev receives one request with candidates plus an explicit none choice", as
   ]);
 });
 
-test("a Jev failure returns lexical results with a fallback warning", async () => {
-  const result = await rankWithJev(
-    "Which candidate matters?",
-    shortlist,
-    "test-key",
-    () => ({
-      systemOne: async () => {
-        throw new Error("network unavailable");
-      },
-    }),
+test("a missing API key fails normal Jev ranking clearly", async () => {
+  await assert.rejects(
+    rankWithJev("Which candidate matters?", shortlist, undefined),
+    /TYPESAFE_API_KEY is required.*--no-jev/,
   );
+});
 
-  assert.equal(result.method, "fallback");
-  assert.equal(result.warning, "Jev ranking failed; using lexical fallback.");
+test("a Jev failure fails instead of silently using lexical results", async () => {
+  await assert.rejects(
+    rankWithJev(
+      "Which candidate matters?",
+      shortlist,
+      "test-key",
+      () => ({
+        systemOne: async () => {
+          throw new Error("network unavailable");
+        },
+      }),
+    ),
+    /Jev ranking failed: network unavailable/,
+  );
+});
+
+test("lexical-only ranking is explicitly marked for local benchmarking", () => {
+  const result = rankLexically(shortlist);
+
+  assert.equal(result.method, "lexical");
+  assert.equal(result.notice, "Lexical-only ranking requested via --no-jev.");
   assert.equal(result.results[0]?.path, "src/first.ts");
   assert.equal(result.results[0]?.score, 10);
 });

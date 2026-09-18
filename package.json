@@ -1,7 +1,7 @@
 {
   "name": "oko",
   "version": "0.1.0",
-  "description": "A small code search CLI with optional TypeSafe AI reranking.",
+  "description": "A small code search CLI with TypeSafe AI Jev reranking.",
   "type": "module",
   "bin": {
     "oko": "dist/cli.js"
