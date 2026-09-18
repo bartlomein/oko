@@ -2,11 +2,11 @@ mod benchmark;
 mod config;
 
 use anyhow::{Context, Result, bail};
-use oko::{RankOptions, parse_items, rank_items, search};
+use oko::{RankOptions, RankingIntent, parse_items, rank_items, search};
 use serde::Serialize;
 use std::{env, fs::File, io::Read, path::Path};
 
-const USAGE: &str = "Usage: oko ask [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires TYPESAFE_API_KEY (environment or .env in the current directory).\n--no-jev uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires TYPESAFE_API_KEY (environment or .env in the current directory).\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -14,6 +14,9 @@ struct Arguments {
     json: bool,
     no_jev: bool,
     input: Option<String>,
+    intent: RankingIntent,
+    deep: bool,
+    max_steps: Option<usize>,
 }
 
 fn parse_arguments(args: &[String]) -> Result<Arguments> {
@@ -33,12 +36,47 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
         json: false,
         no_jev: false,
         input: None,
+        deep: false,
+        max_steps: None,
+        intent: if command == "ask" {
+            RankingIntent::Implementation
+        } else {
+            RankingIntent::General
+        },
     };
+    let mut intent_seen = false;
     let mut question = vec![];
     let mut index = 1;
     while index < args.len() {
         let argument = &args[index];
         match argument.as_str() {
+            "--intent" => {
+                if intent_seen {
+                    bail!("Provide --intent only once.");
+                }
+                index += 1;
+                parsed.intent = args
+                    .get(index)
+                    .context("--intent requires implementation, explanation, or general.")?
+                    .parse()?;
+                intent_seen = true;
+            }
+            "--deep" if command == "ask" => parsed.deep = true,
+            "--max-steps" if command == "ask" => {
+                if parsed.max_steps.is_some() {
+                    bail!("Provide --max-steps only once.");
+                }
+                index += 1;
+                let steps: usize = args
+                    .get(index)
+                    .context("--max-steps requires a positive integer.")?
+                    .parse()
+                    .context("--max-steps requires a positive integer.")?;
+                if steps == 0 {
+                    bail!("--max-steps must be greater than zero.");
+                }
+                parsed.max_steps = Some(steps);
+            }
             "--json" => parsed.json = true,
             "--no-jev" => parsed.no_jev = true,
             "--input" if command == "rank" => {
@@ -63,6 +101,12 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
     }
     if command == "rank" && parsed.input.is_none() {
         bail!("oko rank requires --input items.json.");
+    }
+    if parsed.max_steps.is_some() && !parsed.deep {
+        bail!("--max-steps requires --deep.");
+    }
+    if parsed.deep && parsed.no_jev {
+        bail!("--deep uses Jev and cannot be combined with --no-jev.");
     }
     Ok(parsed)
 }
@@ -109,6 +153,7 @@ pub(crate) fn rank_code(
     chunks: &[search::Chunk],
     key: Option<String>,
     no_jev: bool,
+    intent: RankingIntent,
 ) -> Result<Vec<CodeResult>> {
     if !no_jev
         && key
@@ -145,6 +190,7 @@ pub(crate) fn rank_code(
                 api_key: key,
                 limit: 30,
                 no_jev: false,
+                intent,
             },
         )?;
         let mut scored: Vec<_> = ranking
@@ -214,6 +260,7 @@ fn run() -> Result<()> {
             &RankOptions {
                 api_key: key,
                 no_jev: parsed.no_jev,
+                intent: parsed.intent,
                 ..Default::default()
             },
         )?;
@@ -261,14 +308,57 @@ fn run() -> Result<()> {
             }
         }
     } else {
-        let shortlist = search::search_workspace(&cwd, &parsed.question)?;
-        let results = rank_code(&parsed.question, &shortlist, key, parsed.no_jev)?;
+        let mut investigation = None;
+        let results = if parsed.deep {
+            let key = key
+                .as_deref()
+                .context("TYPESAFE_API_KEY is required for --deep investigation.")?;
+            let corpus = search::workspace_chunks(&cwd)?;
+            let run = oko::investigate::investigate_with(
+                &parsed.question,
+                &corpus,
+                parsed.intent,
+                parsed.max_steps,
+                |request| oko::ranking::call_jev(request, key),
+            )?;
+            let results = run
+                .results
+                .iter()
+                .map(|f| CodeResult {
+                    path: f.chunk.path.clone(),
+                    start_line: f.chunk.start_line,
+                    end_line: f.chunk.end_line,
+                    text: f.chunk.text.clone(),
+                    score: f.score,
+                })
+                .collect();
+            let mut metadata = serde_json::to_value(&run)?;
+            metadata.as_object_mut().unwrap().remove("results");
+            eprintln!(
+                "Investigation: {} steps, {} Jev calls, stopped: {}",
+                run.steps, run.jev_calls, run.stop_reason
+            );
+            investigation = Some(metadata);
+            results
+        } else {
+            let shortlist = search::search_workspace(&cwd, &parsed.question)?;
+            rank_code(
+                &parsed.question,
+                &shortlist,
+                key,
+                parsed.no_jev,
+                parsed.intent,
+            )?
+        };
         let notice = "Lexical-only ranking requested via --no-jev.";
         if parsed.no_jev {
             eprintln!("Notice: {notice}");
         }
         if parsed.json {
             let mut output = serde_json::json!({"question": parsed.question, "ranking": if parsed.no_jev { "lexical" } else { "jev" }, "results": results});
+            if let Some(metadata) = investigation {
+                output["investigation"] = metadata;
+            }
             if parsed.no_jev {
                 output["notice"] = notice.into();
             }

@@ -129,43 +129,134 @@ pub fn chunk_text(path: &str, text: &str) -> Vec<Chunk> {
 fn normalize(term: String, stems: &mut HashMap<String, String>) -> String {
     stems.entry(term).or_insert_with_key(|s| stemmer(s)).clone()
 }
-pub fn rank_lexically(chunks: &[Chunk], question: &str) -> Vec<Chunk> {
-    let mut stems = HashMap::new();
-    let terms: HashSet<String> = tokenize(question)
-        .into_iter()
-        .filter(|s| !STOP_WORDS.contains(&s.as_str()))
-        .map(|s| normalize(s, &mut stems))
-        .collect();
-    if terms.is_empty() {
-        return vec![];
-    }
-    let mut ranked = Vec::new();
-    for chunk in chunks {
-        let content: HashSet<String> = tokenize(&chunk.text)
-            .into_iter()
-            .map(|s| normalize(s, &mut stems))
-            .collect();
-        let path: HashSet<String> = tokenize(&chunk.path)
-            .into_iter()
-            .map(|s| normalize(s, &mut stems))
-            .collect();
-        let score = terms
-            .iter()
-            .map(|s| if content.contains(s) { 10 } else { 0 })
-            .sum::<usize>()
-            + terms
-                .iter()
-                .map(|s| if path.contains(s) { 3 } else { 0 })
-                .sum::<usize>();
-        if score > 0 {
-            let mut c = chunk.clone();
-            c.lexical_score = score as f64;
-            ranked.push(c);
+
+/// BM25 over a snapshot: cache tokens once and retain corpus-wide statistics
+/// when filtering candidates. Body and path are independent fields.
+pub(crate) struct PreparedCorpus<'a> {
+    chunks: Vec<PreparedChunk<'a>>,
+    content_stats: FieldStats,
+    path_stats: FieldStats,
+}
+struct PreparedChunk<'a> {
+    chunk: &'a Chunk,
+    content: Field,
+    path: Field,
+}
+#[derive(Default)]
+struct Field {
+    counts: HashMap<String, usize>,
+    length: usize,
+}
+#[derive(Default)]
+struct FieldStats {
+    documents: usize,
+    total_length: usize,
+    frequencies: HashMap<String, usize>,
+}
+impl FieldStats {
+    fn add(&mut self, field: &Field) {
+        self.documents += 1;
+        self.total_length += field.length;
+        for term in field.counts.keys() {
+            *self.frequencies.entry(term.clone()).or_default() += 1;
         }
     }
-    ranked.sort_by(compare_chunks);
-    ranked.truncate(SHORTLIST_LIMIT);
-    ranked
+    fn score(&self, field: &Field, terms: &[String]) -> f64 {
+        if self.total_length == 0 || field.length == 0 {
+            return 0.0;
+        }
+        // Positive IDF and standard defaults; use exact token lengths.
+        // https://lucene.apache.org/core/9_6_0/core/org/apache/lucene/search/similarities/BM25Similarity.html
+        const K1: f64 = 1.2;
+        const B: f64 = 0.75;
+        let average = self.total_length as f64 / self.documents as f64;
+        let norm = K1 * (1.0 - B + B * field.length as f64 / average);
+        terms
+            .iter()
+            .map(|term| {
+                let tf = *field.counts.get(term).unwrap_or(&0) as f64;
+                if tf == 0.0 {
+                    return 0.0;
+                }
+                let df = self.frequencies[term] as f64;
+                let idf = (1.0 + (self.documents as f64 - df + 0.5) / (df + 0.5)).ln();
+                idf * (tf * (K1 + 1.0) / (tf + norm))
+            })
+            .sum()
+    }
+}
+impl<'a> PreparedCorpus<'a> {
+    pub(crate) fn new(chunks: &'a [Chunk]) -> Self {
+        let mut stems = HashMap::new();
+        let mut words = |text: &str| {
+            let mut field = Field::default();
+            for token in tokenize(text) {
+                *field
+                    .counts
+                    .entry(normalize(token, &mut stems))
+                    .or_default() += 1;
+                field.length += 1;
+            }
+            field
+        };
+        let mut content_stats = FieldStats::default();
+        let mut path_stats = FieldStats::default();
+        let chunks = chunks
+            .iter()
+            .map(|chunk| {
+                let content = words(&chunk.text);
+                let path = words(&chunk.path);
+                content_stats.add(&content);
+                path_stats.add(&path);
+                PreparedChunk {
+                    chunk,
+                    content,
+                    path,
+                }
+            })
+            .collect();
+        Self {
+            chunks,
+            content_stats,
+            path_stats,
+        }
+    }
+
+    pub(crate) fn rank(&self, question: &str, include: impl Fn(&Chunk) -> bool) -> Vec<Chunk> {
+        let mut terms: Vec<String> = tokenize(question)
+            .into_iter()
+            .filter(|s| !STOP_WORDS.contains(&s.as_str()))
+            .map(|s| stemmer(&s))
+            .collect();
+        // Stable floating-point accumulation regardless of HashMap random seeds.
+        terms.sort();
+        terms.dedup();
+        if terms.is_empty() {
+            return vec![];
+        }
+        let mut ranked = Vec::new();
+        for prepared in &self.chunks {
+            if !include(prepared.chunk) {
+                continue;
+            }
+            // Preserve the old 10:3 body/path preference, without mixing lengths.
+            let score = self.content_stats.score(&prepared.content, &terms)
+                + 0.3 * self.path_stats.score(&prepared.path, &terms);
+            if score > 0.0 {
+                let mut chunk = prepared.chunk.clone();
+                chunk.lexical_score = score;
+                ranked.push(chunk);
+            }
+        }
+        ranked.sort_by(compare_chunks);
+        ranked.truncate(SHORTLIST_LIMIT);
+        ranked
+    }
+}
+
+/// Rank with BM25. Scores are relevance values, not probabilities.
+pub fn rank_lexically(chunks: &[Chunk], question: &str) -> Vec<Chunk> {
+    PreparedCorpus::new(chunks).rank(question, |_| true)
 }
 fn js_whitespace(c: char) -> bool {
     matches!(
@@ -181,6 +272,11 @@ fn js_whitespace(c: char) -> bool {
     )
 }
 pub fn search_workspace(cwd: &Path, question: &str) -> Result<Vec<Chunk>> {
+    Ok(rank_lexically(&workspace_chunks(cwd)?, question))
+}
+
+/// Read one snapshot for a multi-step investigation; no repeated filesystem scans.
+pub fn workspace_chunks(cwd: &Path) -> Result<Vec<Chunk>> {
     let output = Command::new("rg")
         .arg("--files")
         .current_dir(cwd)
@@ -239,7 +335,7 @@ pub fn search_workspace(cwd: &Path, question: &str) -> Result<Vec<Chunk>> {
             chunks.extend(chunk_text(&file, &text));
         }
     }
-    Ok(rank_lexically(&chunks, question))
+    Ok(chunks)
 }
 #[cfg(test)]
 mod tests {
@@ -254,8 +350,8 @@ mod tests {
         );
         let chunks = chunk_text("project.rs", "fn atomic_rename() {}\n");
         assert_eq!(
-            rank_lexically(&chunks, "where is renaming done atomically")[0].lexical_score,
-            20.0
+            rank_lexically(&chunks, "where is renaming done atomically"),
+            rank_lexically(&chunks, "rename atomic")
         );
     }
     #[test]
@@ -315,3 +411,7 @@ mod tests {
         assert_eq!(result[0].text, "needle");
     }
 }
+
+#[cfg(test)]
+#[path = "bm25_tests.rs"]
+mod bm25_tests;

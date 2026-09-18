@@ -53,6 +53,7 @@ fn mock_run(
                 Err(error) => panic!("mock did not receive request: {error}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
@@ -243,5 +244,136 @@ fn ask_maps_provider_ids_to_code_and_breaks_ties_deterministically() {
         assert_eq!(item["endLine"], 1);
         assert_eq!(item["text"], "fn authentication() {}");
         assert!(item.get("id").is_none());
+    }
+}
+
+#[test]
+fn intent_defaults_and_overrides_use_one_ranking_request() {
+    let temp = tempfile::tempdir().unwrap();
+    input(temp.path());
+    fs::write(temp.path().join("auth.rs"), "fn refund() {}\n").unwrap();
+    for (mode, intent, expected) in [
+        ("ask", None, "actual implementation"),
+        ("rank", None, "Which item best answers"),
+        ("ask", Some("general"), "Which item best answers"),
+        ("ask", Some("explanation"), "best explains"),
+        ("rank", Some("implementation"), "actual implementation"),
+        ("rank", Some("explanation"), "best explains"),
+    ] {
+        let mut cmd = command(temp.path());
+        cmd.env("TYPESAFE_API_KEY", "fake-key")
+            .args([mode, "refund", "--json"]);
+        if mode == "rank" {
+            cmd.args(["--input", "items.json"]);
+        }
+        if let Some(intent) = intent {
+            cmd.args(["--intent", intent]);
+        }
+        let (output, _, body) = mock_run(&mut cmd, |request| {
+            let mut probabilities = serde_json::Map::new();
+            probabilities.insert("none".into(), json!(0.1));
+            for candidate in request["state"]["candidates"].as_array().unwrap() {
+                probabilities.insert(candidate["candidate"].as_str().unwrap().into(), json!(0.9));
+            }
+            json!({"answers":{"selection":{"probabilities":probabilities}}})
+        });
+        assert!(!success(output)["results"].as_array().unwrap().is_empty());
+        assert!(
+            body["questions"]["selection"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains(expected)
+        );
+        assert_eq!(body["state"]["question"], "refund");
+    }
+}
+
+#[test]
+fn invalid_intents_fail_and_offline_intents_need_no_network() {
+    let temp = tempfile::tempdir().unwrap();
+    input(temp.path());
+    for flags in [
+        vec!["--intent"],
+        vec!["--intent", "unknown"],
+        vec!["--intent", "general", "--intent", "general"],
+    ] {
+        let output = command(temp.path())
+            .args(["rank", "refund", "--input", "items.json"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("intent"));
+    }
+    for intent in ["general", "explanation", "implementation"] {
+        let output = command(temp.path())
+            .args([
+                "rank",
+                "refund",
+                "--input",
+                "items.json",
+                "--no-jev",
+                "--json",
+                "--intent",
+                intent,
+            ])
+            .output()
+            .unwrap();
+        let result = success(output);
+        assert_eq!(result["ranking"], "input");
+        assert_eq!(result["results"][0]["id"], "ticket");
+        assert_eq!(result["results"][0]["score"].as_f64(), Some(0.0));
+    }
+}
+
+#[test]
+fn deep_mode_uses_existing_jev_key_and_reports_budget_stop() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("auth.rs"),
+        "fn authenticate() { validate_token(); }\n",
+    )
+    .unwrap();
+    fs::write(temp.path().join(".env"), "TYPESAFE_API_KEY=fake-deep-key\n").unwrap();
+    let mut cmd = command(temp.path());
+    cmd.args([
+        "ask",
+        "authenticate token",
+        "--deep",
+        "--max-steps",
+        "1",
+        "--json",
+    ]);
+    let (output, headers, request) = mock_run(&mut cmd, |_| probabilities());
+    assert!(headers.contains("authorization: bearer fake-deep-key"));
+    assert!(request["questions"]["selection"].is_object());
+    let value = success(output);
+    assert_eq!(value["ranking"], "jev");
+    assert_eq!(value["results"][0]["path"], "auth.rs");
+    assert_eq!(value["investigation"]["steps"], 1);
+    assert_eq!(value["investigation"]["jevCalls"], 1);
+    assert_eq!(value["investigation"]["complete"], false);
+    assert_eq!(value["investigation"]["stopReason"], "step_limit");
+}
+
+#[test]
+fn deep_flags_reject_incompatible_or_ambiguous_limits() {
+    let temp = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["ask", "q", "--max-steps", "1"],
+        vec!["ask", "q", "--deep", "--no-jev"],
+        vec!["ask", "q", "--deep", "--max-steps", "0"],
+        vec!["ask", "q", "--deep", "--max-steps", "-1"],
+        vec!["ask", "q", "--deep", "--max-steps", "1", "--max-steps", "2"],
+        vec!["rank", "q", "--input", "items.json", "--deep"],
+    ] {
+        assert!(
+            !command(temp.path())
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
     }
 }

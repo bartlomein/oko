@@ -1,0 +1,27 @@
+{
+  "description": "Synthetic intent smoke tests. Same question and candidates; only ranking intent changes. Not a general accuracy estimate.",
+  "cases": [
+    {
+      "id": "refund",
+      "question": "How does an order refund work?",
+      "items": [
+        { "id": "guide", "source": "docs/refunds.md", "text": "Refunds return a paid order's money to the original payment method. The service checks that the order was paid, requests a refund from the payment provider, and records the refunded status after confirmation." },
+        { "id": "implementation", "source": "src/refunds.ts", "text": "export async function refundOrder(orderId: string) { const order = await orders.get(orderId); if (order.status !== 'paid') throw new Error('Order must be paid'); const refund = await payments.refund(order.paymentId); await orders.update(orderId, { status: 'refunded', refundId: refund.id }); return refund; }" },
+        { "id": "caller", "source": "src/refund-button.ts", "text": "button.onclick = async () => { await refundOrder(selectedOrder.id); showSuccess(); };" },
+        { "id": "unrelated", "source": "tickets/123", "text": "Please change the delivery address for my order." }
+      ],
+      "expected": { "implementation": "implementation", "explanation": "guide" }
+    },
+    {
+      "id": "expired-cache",
+      "question": "How are expired cache entries removed?",
+      "items": [
+        { "id": "implementation", "source": "src/cache.rs", "text": "pub fn remove_expired(&mut self, now: Instant) { self.entries.retain(|_, entry| entry.expires_at > now); }" },
+        { "id": "caller", "source": "src/worker.rs", "text": "fn tick(cache: &mut Cache) { cache.remove_expired(Instant::now()); }" },
+        { "id": "guide", "source": "knowledge-base/expiration", "text": "Cache expiration prevents stale values from being reused. A cleanup pass compares each entry's expiration time with the current time. Entries that have already expired are removed; entries whose expiration is still in the future are retained." },
+        { "id": "unrelated", "source": "records/config", "text": "The application displays dates in the user's selected time zone." }
+      ],
+      "expected": { "implementation": "implementation", "explanation": "guide" }
+    }
+  ]
+}

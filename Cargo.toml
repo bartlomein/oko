@@ -22,10 +22,6 @@ tempfile = "3"
 name = "oko"
 path = "src/main.rs"
 
-[[bin]]
-name = "oko-parity"
-path = "src/bin/parity.rs"
-
 [profile.release]
 lto = "thin"
 codegen-units = 1

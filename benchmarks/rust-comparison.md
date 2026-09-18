@@ -1,5 +1,8 @@
 # Rust rewrite comparison — 2026-09-18
 
+Historical report. The TypeScript reference, its tests, and the runtime parity
+tools have since been retired; the results below describe the original migration.
+
 Branch: `codex/rust-rewrite`. TypeScript reference: `933eabdb6dfdaef148790bc9a3147e0721f76841`.
 Measured on macOS ARM64, using a Rust release build and Node 22.14.0.
 Linux runtime behavior and performance have not been measured.
@@ -40,26 +43,6 @@ Provider latency varies. The historical TypeScript ticket benchmark timed API
 ranking only; the Rust ticket benchmark times the whole CLI, so those timings
 are not comparable. These fixtures are smoke tests, not general accuracy proof.
 
-## Reproduce
-
-From the repository root:
-
-```sh
-npm --prefix reference/typescript ci
-npm --prefix reference/typescript test
-cargo test --locked
-cargo clippy --all-targets --locked -- -D warnings
-cargo build --release --locked
-node scripts/parity-runtimes.mjs
-node scripts/compare-runtimes.mjs /path/to/telemetry-studio
-target/release/oko benchmark --repo /path/to/telemetry-studio
-target/release/oko benchmark-items
-```
-
-The last two commands each make five paid Jev requests and load the API key from
-the current directory's `.env` or the environment. Code fixture source hashes
-must match before requests run. Add `--no-jev` for offline native benchmarks.
-
 Local detailed reports (generated and ignored by Git):
 
 - `benchmarks/results/runtimes-2026-09-18T11-34-00.815Z/report.json`
@@ -67,7 +50,5 @@ Local detailed reports (generated and ignored by Git):
 - `benchmarks/results/2026-09-18T11-35-19.432Z/report.json`
 - `benchmarks/results/items-2026-09-18T11-35-41.149Z/report.json`
 
-The production CLI/library and benchmark commands are Rust. JavaScript remains
-only in the preserved reference and developer comparison harness. Install
-`--bin oko` for normal use; `oko-parity` is a development diagnostic. No Node.js
-runtime is required by the application. Code discovery still requires ripgrep.
+The production CLI/library and its tests are Rust. Optional JavaScript agent
+benchmark runners remain. Code discovery requires ripgrep.

@@ -1,16 +1,11 @@
-import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, readFile, readdir, stat } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const reference = resolve(root, 'reference/typescript');
 export const rustBinary = resolve(root, 'target/release/oko');
-export const parityBinary = resolve(root, 'target/release/oko-parity');
-export const runtimes = ['typescript', 'rust'];
 
 export function runProcess(command, args, { cwd = root, input, timeout = 60_000 } = {}) {
   return new Promise((resolveResult, reject) => {
@@ -40,33 +35,6 @@ export function runProcess(command, args, { cwd = root, input, timeout = 60_000 
     });
     child.stdin.end(input);
   });
-}
-
-export async function requireArtifacts({ diagnostic = false } = {}) {
-  for (const path of [resolve(reference, 'dist/cli.js'), rustBinary, ...(diagnostic ? [parityBinary] : [])]) {
-    try { await access(path, path.endsWith('.js') ? constants.R_OK : constants.X_OK); }
-    catch { throw new Error(`Missing built artifact: ${path}. Run cargo build --release and npm --prefix reference/typescript run build first.`); }
-  }
-  const result = await runProcess('rg', ['--version']);
-  if (result.code !== 0) throw new Error('ripgrep is required for runtime comparisons.');
-}
-
-export async function runCli(runtime, args, cwd) {
-  return runtime === 'typescript'
-    ? runProcess(process.execPath, [resolve(reference, 'dist/cli.js'), ...args], { cwd })
-    : runProcess(rustBinary, args, { cwd });
-}
-
-export async function runJson(runtime, args, cwd) {
-  const result = await runCli(runtime, args, cwd);
-  if (result.code !== 0) throw new Error(`${runtime} failed (exit ${result.code}): ${result.stderr.trim()}`);
-  try { return { ...result, value: JSON.parse(result.stdout) }; }
-  catch { throw new Error(`${runtime} returned invalid JSON`); }
-}
-
-export function assertParity(left, right, label) {
-  try { assert.deepStrictEqual(left, right); }
-  catch (error) { throw new Error(`Runtime parity failed: ${label}\n${error.message}`); }
 }
 
 export function median(values) {
@@ -101,21 +69,4 @@ export async function workspaceSnapshot(directory) {
     if (info.isFile() && info.size <= 256 * 1024) sourceHashes[name] = hash(await readFile(absolute));
   }
   return { ...git, visibleFileCount: files.length, sourceHashes };
-}
-
-export async function implementationSnapshot({ diagnostic = false } = {}) {
-  const sourceHashes = {};
-  const walk = async directory => {
-    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile()) sourceHashes[path.slice(root.length + 1)] = hash(await readFile(path));
-    }
-  };
-  for (const directory of [resolve(root, 'src'), resolve(reference, 'src'), resolve(reference, 'dist')]) await walk(directory);
-  for (const path of [resolve(root, 'Cargo.toml'), resolve(root, 'Cargo.lock'), resolve(reference, 'package.json'),
-    resolve(reference, 'package-lock.json'), rustBinary, ...(diagnostic ? [parityBinary] : [])]) {
-    sourceHashes[path.slice(root.length + 1)] = hash(await readFile(path));
-  }
-  return { ...await gitSnapshot(root), sourceHashes };
 }

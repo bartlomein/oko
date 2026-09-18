@@ -1,0 +1,290 @@
+{
+  "description": "Five existing development questions plus ten source-verified questions frozen before the expanded comparison. One repository, mostly localized implementation lookups; not a general accuracy estimate.",
+  "cases": [
+    {
+      "id": "strava-token",
+      "question": "Where does Strava exchange an authorization code for access tokens?",
+      "expected": [
+        {
+          "path": "src/strava/oauth.rs",
+          "startLine": 394,
+          "endLine": 404,
+          "sha256": "0e49aba50390272eabbde4095bc2291bc53ebfea7db32f2ef9c8b84df78285eb",
+          "evidence": "exchange_code_for_tokens builds the authorization_code payload and posts to the token proxy.",
+          "function": {
+            "name": "exchange_code_for_tokens",
+            "startLine": 387,
+            "endLine": 433
+          }
+        }
+      ],
+      "group": "development"
+    },
+    {
+      "id": "project-save",
+      "question": "Where is a project saved atomically by writing a temporary file and renaming it?",
+      "expected": [
+        {
+          "path": "src/project/mod.rs",
+          "startLine": 180,
+          "endLine": 189,
+          "sha256": "7d0daf1500a08bb559d654203aa3baa41ff60f9d2fdcca63a792d5289fce49be",
+          "evidence": "Project::save serializes the project, writes tsproj.tmp and renames it.",
+          "function": {
+            "name": "Project::save",
+            "startLine": 170,
+            "endLine": 193
+          }
+        }
+      ],
+      "group": "development"
+    },
+    {
+      "id": "racebox-import",
+      "question": "Where is a RaceBox CSV file parsed into telemetry points?",
+      "expected": [
+        {
+          "path": "src/telemetry/racebox_csv_parser.rs",
+          "startLine": 81,
+          "endLine": 90,
+          "sha256": "8cbfd600d462831b1960817222c3340af9f5677cd35d96d1ddefb20b2fa0c0e9",
+          "evidence": "parse_racebox_csv loops through rows and calls parse_data_point.",
+          "function": {
+            "name": "parse_racebox_csv",
+            "startLine": 28,
+            "endLine": 103
+          }
+        }
+      ],
+      "group": "development"
+    },
+    {
+      "id": "update-check",
+      "question": "Where does the app check for available updates on a background thread?",
+      "expected": [
+        {
+          "path": "src/updater/mod.rs",
+          "startLine": 147,
+          "endLine": 159,
+          "sha256": "0caa65c9fdcd1f06cc41416f11e7ba9192f05cf0b0d3c446f4415f2c7960e81b",
+          "evidence": "check_for_update spawns a thread and calls the update manager.",
+          "function": {
+            "name": "check_for_update",
+            "startLine": 137,
+            "endLine": 175
+          }
+        }
+      ],
+      "group": "development"
+    },
+    {
+      "id": "gapless-eligibility",
+      "question": "Where is gapless playback eligibility checked for clips with end trims, mixed HDR, or gaps?",
+      "expected": [
+        {
+          "path": "src/app/handlers/playback/gapless.rs",
+          "startLine": 474,
+          "endLine": 486,
+          "sha256": "6cea48c944fd92cf9d4d597e3c5f4af31c60d365781a895ed9aa85c6eada2523",
+          "evidence": "clips_gapless_eligible checks clip count, HDR, source_out and gap_before.",
+          "function": {
+            "name": "clips_gapless_eligible",
+            "startLine": 474,
+            "endLine": 486
+          }
+        }
+      ],
+      "group": "development"
+    },
+    {
+      "id": "optional-values",
+      "group": "new",
+      "question": "Where are two optional telemetry values interpolated while preserving the available value when the other is missing?",
+      "expected": [
+        {
+          "path": "src/telemetry/utils.rs",
+          "startLine": 64,
+          "endLine": 68,
+          "sha256": "908d1740815a956f485958af363e75e3a1df0f24b1704bb4d6ef3045cd9b30cd",
+          "evidence": "Matches both optional values and interpolates or preserves the present value.",
+          "function": {
+            "name": "lerp_option",
+            "startLine": 63,
+            "endLine": 70
+          }
+        }
+      ]
+    },
+    {
+      "id": "road-slope",
+      "group": "new",
+      "question": "Where is road slope computed from elevation and distance changes and clamped to a reasonable range?",
+      "expected": [
+        {
+          "path": "src/telemetry/utils.rs",
+          "startLine": 114,
+          "endLine": 120,
+          "sha256": "908d1740815a956f485958af363e75e3a1df0f24b1704bb4d6ef3045cd9b30cd",
+          "evidence": "Computes percentage elevation change per horizontal distance and clamps to -50 through 50.",
+          "function": {
+            "name": "calculate_gradient",
+            "startLine": 97,
+            "endLine": 124
+          }
+        }
+      ]
+    },
+    {
+      "id": "gpx-repair",
+      "group": "new",
+      "question": "Where are nonstandard GPX exports repaired by fixing the version and stripping satellite-count elements?",
+      "expected": [
+        {
+          "path": "src/telemetry/gpx_parser.rs",
+          "startLine": 78,
+          "endLine": 84,
+          "sha256": "14eb6b6679c0bf34f16ceb694df9a6504062b0ae22b81d00795271812076ff14",
+          "evidence": "Patches version for GPX 1.1 namespace and strips siv elements.",
+          "function": {
+            "name": "sanitize_nonstandard_gpx",
+            "startLine": 76,
+            "endLine": 87
+          }
+        }
+      ]
+    },
+    {
+      "id": "export-size",
+      "group": "new",
+      "question": "Where is the estimated exported video size calculated with a safety margin based on duration and resolution?",
+      "expected": [
+        {
+          "path": "src/export/service/utils/disk_utils.rs",
+          "startLine": 25,
+          "endLine": 33,
+          "sha256": "c6e30e21e3c62abed6fee594e83272a02a75dbfe0cb3621490608504837c7518",
+          "evidence": "Selects bitrate by height then multiplies duration by bitrate with a 20 percent margin.",
+          "function": {
+            "name": "estimate_output_size",
+            "startLine": 24,
+            "endLine": 34
+          }
+        }
+      ]
+    },
+    {
+      "id": "disk-space",
+      "group": "new",
+      "question": "Where does export reject an output when the destination disk has less free space than required?",
+      "expected": [
+        {
+          "path": "src/export/service/utils/disk_utils.rs",
+          "startLine": 68,
+          "endLine": 73,
+          "sha256": "c6e30e21e3c62abed6fee594e83272a02a75dbfe0cb3621490608504837c7518",
+          "evidence": "Compares available bytes to estimated size and returns InsufficientSpace.",
+          "function": {
+            "name": "check_disk_space",
+            "startLine": 47,
+            "endLine": 77
+          }
+        }
+      ]
+    },
+    {
+      "id": "mach-speed",
+      "group": "new",
+      "question": "Where is vehicle speed converted to a Mach number using altitude while rejecting non-finite speeds?",
+      "expected": [
+        {
+          "path": "src/utils/atmosphere.rs",
+          "startLine": 58,
+          "endLine": 61,
+          "sha256": "b4e07436f5b4a8c897678d3a8fe4fc44714f759f7388725542cef23fa3cc16cf",
+          "evidence": "Rejects nonfinite speed then divides by altitude dependent speed of sound.",
+          "function": {
+            "name": "mach_number",
+            "startLine": 57,
+            "endLine": 62
+          }
+        }
+      ]
+    },
+    {
+      "id": "unicode-path",
+      "group": "new",
+      "question": "Where are long display paths shortened from the beginning without breaking Unicode characters?",
+      "expected": [
+        {
+          "path": "src/utils/formatting.rs",
+          "startLine": 95,
+          "endLine": 105,
+          "sha256": "6328757a8774b2527bf3da38138e7e6a9371f231cc6016397209183bcabd71d5",
+          "evidence": "Keeps the final characters using chars iteration and prefixes an ellipsis.",
+          "function": {
+            "name": "truncate_start_for_display",
+            "startLine": 86,
+            "endLine": 106
+          }
+        }
+      ]
+    },
+    {
+      "id": "intel-mitigation",
+      "group": "new",
+      "question": "Where is the Intel HD 5500 workaround restricted to Windows SDR H.264 exports?",
+      "expected": [
+        {
+          "path": "src/export/service/utils/encoding_utils.rs",
+          "startLine": 147,
+          "endLine": 150,
+          "sha256": "09cf3878997e6007457ca76a9e94ad08981dcfb0cc9dc5687aea407d06ec645b",
+          "evidence": "Requires Windows, non HDR, H264 and matching adapter.",
+          "function": {
+            "name": "should_use_hd5500_windows_h264_mitigation",
+            "startLine": 143,
+            "endLine": 151
+          }
+        }
+      ]
+    },
+    {
+      "id": "parser-dispatch",
+      "group": "new",
+      "question": "Where is an imported telemetry file sent to the GPX, FIT, RaceBox, VBO, or DJI subtitle parser based on its extension?",
+      "expected": [
+        {
+          "path": "src/telemetry/mod.rs",
+          "startLine": 606,
+          "endLine": 618,
+          "sha256": "befc8c58b7152c60ba1a7872d2140a40b4886de838aae36a2693c2d835b81eca",
+          "evidence": "Dispatches by lowercase extension and reports unsupported extensions.",
+          "function": {
+            "name": "parse_file",
+            "startLine": 582,
+            "endLine": 638
+          }
+        }
+      ]
+    },
+    {
+      "id": "centisecond-time",
+      "group": "new",
+      "question": "Where are durations rounded to hundredths of a second and formatted with hours only when needed?",
+      "expected": [
+        {
+          "path": "src/utils/formatting.rs",
+          "startLine": 44,
+          "endLine": 55,
+          "sha256": "6328757a8774b2527bf3da38138e7e6a9371f231cc6016397209183bcabd71d5",
+          "evidence": "Rounds total centiseconds and formats optional hours.",
+          "function": {
+            "name": "format_time_cs",
+            "startLine": 43,
+            "endLine": 57
+          }
+        }
+      ]
+    }
+  ]
+}
