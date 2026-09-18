@@ -1,48 +1,101 @@
 # Oko
 
-Oko is a Rust CLI and library for finding relevant code and ranking supplied text.
-The application and its tests are Rust. Node.js is used only by optional
-developer benchmark runners.
+Find relevant code by asking a question, or rank your own documents and records.
+Oko is an experimental Rust CLI and library that combines local BM25 search with
+[Jev](https://typesafe.ai/) reranking. Results include file paths, line numbers,
+and source snippets.
 
-See [the measured Rust comparison](benchmarks/rust-comparison.md): local code
-search was effectively unchanged; supplied-item CLI overhead fell from about
-40 ms to 5 ms, with matching behavior on the tested fixtures.
+Oko runs without Node.js. Ordinary searches make one Jev request; optional deep
+search lets Jev choose additional searches and reads. You can also use local
+BM25 search without an API key.
 
-## Install and run
+**Data sent to Jev:** normal search sends your question and selected source
+snippets to TypeSafe AI. Deep search can send more snippets across multiple
+requests. Supplied-item ranking sends the items you provide, within the request
+budget. Use `--no-jev` for local-only operation.
 
-Build with a current stable Rust toolchain (edition 2024) and install
-[ripgrep](https://github.com/BurntSushi/ripgrep) for code discovery:
+## Quickstart
+
+Install a current stable [Rust toolchain](https://rustup.rs/) and
+[ripgrep](https://github.com/BurntSushi/ripgrep), then clone and install Oko:
 
 ```sh
+git clone https://github.com/bartlomein/oko.git
+cd oko
 cargo install --path . --bin oko --locked
 oko --help
+```
+
+Try a local search in this repository immediately—no API key required:
+
+```sh
+oko ask "where are search candidates ranked?" --no-jev
+```
+
+For Jev reranking, obtain a TypeSafe AI API key and save it once:
+
+```sh
+oko auth login
+```
+
+Paste the key at the hidden prompt. Oko stores it in your operating system's
+credential store, so it works across project directories.
+
+Oko searches **the directory you run it from**:
+
+```sh
 cd /path/to/your/project
 oko ask "where is authentication handled?"
 oko ask "where is authentication handled?" --json
-oko ask "where is authentication handled?" --no-jev
 oko ask "how does authentication work?" --intent explanation
+oko ask "where is authentication handled?" --deep --max-steps 5
 ```
 
-For a local release build instead, run `cargo build --release --locked --bin oko`.
-The executable is `target/release/oko` (`oko.exe` on Windows). Build for each
-operating system and CPU architecture you distribute to. No JavaScript wrapper
-is required. Code search requires `rg` on PATH; supplied-item ranking does not.
+Normal searches require the Jev key; `--no-jev` does not. Deep search always uses
+Jev. For documents or database rows supplied as JSON, see [Rank documents or database results](#rank-documents-or-database-results).
 
-Put your TypeSafe AI API key in `.env` **in the directory where you run Oko**:
+## Configuration
 
-```dotenv
-TYPESAFE_API_KEY=your-api-key
+Manage your saved TypeSafe AI key:
+
+```sh
+oko auth login   # Save a key, or replace the saved key
+oko auth status  # Show whether a key is configured and its active source
+oko auth logout  # Delete the saved key from this computer
 ```
 
-Use `.env.example` as a template. Existing shell variables take precedence,
-including an explicitly empty value. Values are literal, without `$VARIABLE`
-expansion. `.env` and `.env.*` are ignored by Git except `.env.example`.
-When invoking Oko from another repository, put the key in that repository's
-ignored `.env` or export `TYPESAFE_API_KEY` in your shell.
+Login uses hidden terminal input; do not pass keys as command arguments. Status
+never displays the key. Login and status do not validate it with TypeSafe; the
+next Jev request checks whether it works. Logout deletes the local saved copy,
+not the key at TypeSafe. Revoke a key through TypeSafe when needed.
+
+Saved keys use macOS Keychain, Windows Credential Manager, or Linux Secret
+Service. Linux needs an available, unlocked Secret Service and session D-Bus.
+If secure storage is unavailable, Oko reports an error and never saves a
+plaintext fallback. For headless servers and CI, supply `TYPESAFE_API_KEY` through
+the environment or an ignored `.env` instead.
+
+Credential priority is **shell environment > current directory `.env` > saved
+OS credential**. An explicitly empty environment or `.env` value disables
+lower-priority credentials. Login/logout do not edit these overrides; remove
+them yourself when switching to a saved key. `--no-jev` bypasses credential
+loading entirely.
+
+For project-specific configuration, copy `.env.example` to `.env` and set
+`TYPESAFE_API_KEY`. Values are literal, without `$VARIABLE` expansion. Oko only
+loads `.env` from the directory you run it from, not its installation folder.
+This repository ignores `.env` and `.env.*` except `.env.example`; ensure your
+other projects ignore their `.env` files too.
 
 `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL` may be set in the process
 environment. Their defaults are `https://api.typesafe.ai` and `jev-latest`.
 These two settings are not read from `.env`.
+
+For a local release build instead of installation, run
+`cargo build --release --locked --bin oko`. The executable is
+`target/release/oko` (`oko.exe` on Windows). Build separately for each operating
+system and architecture. Code search requires `rg` on PATH; supplied-item
+ranking does not. Node.js is only needed for optional developer benchmark runners.
 
 ## Code search
 
@@ -220,11 +273,18 @@ fn main() -> anyhow::Result<()> {
 ```
 
 The library is synchronous and returns `Result`; async callers should run it on
-a blocking worker. It does not load `.env` itself. Use `no_jev: true` to preserve
+a blocking worker. It does not load `.env` or the OS credential store itself; pass `api_key` explicitly. Use `no_jev: true` to preserve
 input order without a request. `parse_items` validates unknown JSON first.
 
 
 ## Accuracy benchmarks
+
+Benchmarks are optional. Normal use does not require Telemetry Studio or another
+private checkout. `cargo test --locked` requires no API key or external checkout. The published code
+accuracy results use a small, repeatedly used Telemetry Studio development
+fixture; they are not a general claim of matching Codex or OpenCode. The code
+benchmark requires a matching checkout and validates its source hashes. The
+item benchmark uses synthetic records and is portable.
 
 The application includes native Rust benchmark commands:
 
@@ -233,8 +293,9 @@ oko benchmark --repo /path/to/telemetry-studio --repeats 1
 oko benchmark-items --repeats 1
 ```
 
-Run these from Oko's directory to load its `.env` and save reports under
-`benchmarks/results/` (ignored). Each command makes five Jev requests per repeat.
+These commands use the same credential priority as searches, including saved
+keys. Run them from Oko's directory to save reports under `benchmarks/results/`
+(ignored). Each command makes five Jev requests per repeat.
 Code benchmarking validates source hashes against the embedded
 `benchmarks/telemetry-studio.json` fixture before requesting Jev. It reads the
 target repository without editing it. Item benchmarking uses only synthetic
@@ -259,6 +320,9 @@ commit, working-tree status, and expected-source hashes must match. Repeats are
 limited to 1–10. Errors count as misses and produce a nonzero exit status.
 
 ## Development
+
+Optional Node.js benchmark runners read keys from the shell or this repository's
+`.env`; they do not read the OS credential store.
 
 ### Compare against Codex CLI
 
@@ -359,3 +423,8 @@ cargo test --locked
 ```
 
 Third-party parser/stemmer notices are in `THIRD_PARTY_NOTICES.md`.
+
+## License
+
+Oko is licensed under the [MIT License](LICENSE). Attribution and license terms
+for the included parser and stemmer code are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

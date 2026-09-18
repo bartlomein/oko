@@ -1,3 +1,4 @@
+mod auth;
 mod benchmark;
 mod config;
 
@@ -6,7 +7,7 @@ use oko::{RankOptions, RankingIntent, parse_items, rank_items, search};
 use serde::Serialize;
 use std::{env, fs::File, io::Read, path::Path};
 
-const USAGE: &str = "Usage: oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires TYPESAFE_API_KEY (environment or .env in the current directory).\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -112,16 +113,7 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
 }
 
 pub(crate) fn api_key(cwd: &Path) -> Result<Option<String>> {
-    let existing = env::var("TYPESAFE_API_KEY").ok();
-    let from_file = match std::fs::read(cwd.join(".env")) {
-        Ok(bytes) => config::parse_env(&String::from_utf8_lossy(&bytes)).remove("TYPESAFE_API_KEY"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
-    Ok(existing
-        .or(from_file)
-        .map(|key| config::trim(&key).to_string())
-        .filter(|key| !key.is_empty()))
+    auth::api_key(cwd)
 }
 
 fn read_items(path: &Path) -> Result<Vec<oko::RankItem>> {
@@ -161,7 +153,7 @@ pub(crate) fn rank_code(
             .is_none_or(|key| config::trim(key).is_empty())
     {
         bail!(
-            "TYPESAFE_API_KEY is required for normal `oko ask`; use `--no-jev` for explicit lexical-only benchmarking."
+            "TYPESAFE_API_KEY is required for normal `oko ask`; run `oko auth login`, set it in the environment or .env; use `--no-jev` for explicit lexical-only benchmarking."
         );
     }
     let scored: Vec<(search::Chunk, f64)> = if no_jev {
@@ -250,8 +242,11 @@ fn run() -> Result<()> {
     {
         return benchmark::run(&args, &cwd);
     }
+    if args.first().is_some_and(|arg| arg == "auth") {
+        return auth::run(&args[1..], &cwd);
+    }
     let parsed = parse_arguments(&args).map_err(|error| anyhow::anyhow!("{error}\n\n{USAGE}"))?;
-    let key = api_key(&cwd)?;
+    let key = if parsed.no_jev { None } else { api_key(&cwd)? };
     if let Some(input) = parsed.input {
         let items = read_items(&cwd.join(input))?;
         let ranking = rank_items(

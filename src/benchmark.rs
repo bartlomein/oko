@@ -407,7 +407,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<()> {
     let key = if options.no_jev {
         None
     } else {
-        Some(super::api_key(cwd)?.context("Add TYPESAFE_API_KEY to the environment or current directory .env before benchmarking.")?)
+        Some(super::api_key(cwd)?.context("Run `oko auth login` or add TYPESAFE_API_KEY to the environment or current directory .env before benchmarking.")?)
     };
     let started_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let directory = cwd.join("benchmarks/results").join(format!(

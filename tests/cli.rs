@@ -149,7 +149,11 @@ fn command_errors_and_explicit_offline_mode() {
         vec!["ask", "--unknown", "question"],
         vec!["rank", "question"],
     ] {
-        let output = command(temp.path()).args(args).output().unwrap();
+        let output = command(temp.path())
+            .env("TYPESAFE_API_KEY", "")
+            .args(args)
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr).starts_with("Error:"));
         assert!(output.stdout.is_empty());
@@ -376,4 +380,95 @@ fn deep_flags_reject_incompatible_or_ambiguous_limits() {
                 .success()
         );
     }
+}
+
+#[test]
+fn auth_status_obeys_overrides_without_disclosing_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join(".env"), "TYPESAFE_API_KEY=file-secret\n").unwrap();
+    for (shell, source, configured) in [
+        (None, "current directory .env", true),
+        (Some("shell-secret"), "environment", true),
+        (Some(""), "environment", false),
+    ] {
+        let mut cmd = command(temp.path());
+        if let Some(value) = shell {
+            cmd.env("TYPESAFE_API_KEY", value);
+        }
+        let output = cmd.args(["auth", "status"]).output().unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains(source));
+        assert_eq!(text.contains("not configured"), !configured);
+        assert!(!text.contains("file-secret"));
+        assert!(!text.contains("shell-secret"));
+        assert!(output.stderr.is_empty());
+    }
+    fs::write(temp.path().join(".env"), "TYPESAFE_API_KEY=\n").unwrap();
+    let output = command(temp.path())
+        .args(["auth", "status"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("empty; lower-priority keys are not used")
+    );
+}
+
+#[test]
+fn auth_rejects_key_arguments_and_noninteractive_login() {
+    let temp = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["auth", "login", "fake-sensitive-key"],
+        vec!["auth", "fake-sensitive-key"],
+    ] {
+        let output = command(temp.path()).args(args).output().unwrap();
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("fake-sensitive-key"));
+        assert!(output.stdout.is_empty());
+    }
+    let output = command(temp.path())
+        .args(["auth", "login"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("interactive terminal"));
+    let output = command(temp.path())
+        .args(["auth", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("oko auth logout"));
+}
+
+#[test]
+fn environment_and_offline_mode_bypass_unreadable_env_file() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(".env")).unwrap();
+    input(temp.path());
+    let output = command(temp.path())
+        .env("TYPESAFE_API_KEY", "fake-secret")
+        .args(["auth", "status"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("environment"));
+    let output = command(temp.path())
+        .args(["auth", "status"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Cannot read"));
+    let output = command(temp.path())
+        .args([
+            "rank",
+            "refund",
+            "--input",
+            "items.json",
+            "--no-jev",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(success(output)["ranking"], "input");
 }
