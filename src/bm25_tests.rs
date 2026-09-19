@@ -19,6 +19,126 @@ fn score_for(results: &[Chunk], path: &str) -> f64 {
 }
 
 #[test]
+fn implementation_intent_protects_source_from_prose_crowding() {
+    for (extension, declaration) in [
+        ("rs", "pub fn choose() {"),
+        ("py", "def choose():"),
+        ("ts", "export function choose() {"),
+        ("go", "func choose() {"),
+        ("java", "public void choose() {"),
+        ("cs", "public void Choose() {"),
+        ("cpp", "void choose() {"),
+        ("kt", "fun choose() {"),
+    ] {
+        let mut chunks: Vec<_> = (0..75)
+            .map(|i| {
+                document(
+                    &format!("notes/{i:02}.md"),
+                    "select destination tenant workspace",
+                )
+            })
+            .collect();
+        let path = format!("src/decision.{extension}");
+        chunks.push(document(
+            &path,
+            &format!(
+                "{declaration}\nreturn tenant.destination;\n{}",
+                "unrelated ".repeat(100)
+            ),
+        ));
+        let question = "select destination tenant workspace";
+        let broad = rank_lexically(&chunks, question);
+        assert!(!broad.iter().any(|chunk| chunk.path == path));
+        for intent in [RankingIntent::General, RankingIntent::Explanation] {
+            assert_eq!(rank_lexically_with_intent(&chunks, question, intent), broad);
+        }
+        let ranked = rank_lexically_with_intent(&chunks, question, RankingIntent::Implementation);
+        assert_eq!(ranked.len(), SHORTLIST_LIMIT);
+        assert_eq!(ranked[0].path, path);
+        assert!(ranked.iter().any(|chunk| chunk.path.ends_with(".md")));
+        let source = PreparedCorpus::new(&chunks).rank(question, |chunk| chunk.path == path);
+        assert_eq!(ranked[0].lexical_score, source[0].lexical_score);
+        chunks.reverse();
+        assert_eq!(
+            rank_lexically_with_intent(&chunks, question, RankingIntent::Implementation),
+            ranked
+        );
+    }
+}
+
+#[test]
+fn implementation_intent_keeps_source_only_and_fallback_corpora_unchanged() {
+    for extension in ["rs", "md", "customlang"] {
+        let chunks: Vec<_> = (0..50)
+            .map(|i| {
+                document(
+                    &format!("data/{i:02}.{extension}"),
+                    &format!("quartz {}", "filler ".repeat(i)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rank_lexically_with_intent(&chunks, "quartz", RankingIntent::Implementation),
+            rank_lexically(&chunks, "quartz")
+        );
+    }
+    let chunks = [
+        document("src/irrelevant.rs", "quartz"),
+        document("notes.md", "amber"),
+    ];
+    assert_eq!(
+        rank_lexically_with_intent(&chunks, "amber", RankingIntent::Implementation),
+        rank_lexically(&chunks, "amber")
+    );
+}
+
+#[test]
+fn implementation_source_quota_preserves_broad_evidence_and_filters() {
+    let mut chunks: Vec<_> = (0..50)
+        .map(|i| document(&format!("notes/{i:02}.md"), "quartz amber"))
+        .collect();
+    chunks.extend((0..25).map(|i| {
+        document(
+            &format!("src/{i:02}.rs"),
+            &format!("quartz {}", "filler ".repeat(100)),
+        )
+    }));
+    let prepared = PreparedCorpus::new(&chunks);
+    let ranked = prepared.rank_with_intent("quartz amber", |_| true, RankingIntent::Implementation);
+    assert_eq!(ranked.len(), SHORTLIST_LIMIT);
+    assert_eq!(
+        ranked
+            .iter()
+            .filter(|chunk| chunk.path.ends_with(".rs"))
+            .count(),
+        IMPLEMENTATION_SOURCE_SLOTS
+    );
+    assert_eq!(
+        ranked
+            .iter()
+            .filter(|chunk| chunk.path.ends_with(".md"))
+            .count(),
+        SHORTLIST_LIMIT - IMPLEMENTATION_SOURCE_SLOTS
+    );
+    let restricted = prepared.rank_with_intent(
+        "quartz amber",
+        |chunk| chunk.path.ends_with(".md"),
+        RankingIntent::Implementation,
+    );
+    assert_eq!(
+        restricted,
+        prepared.rank("quartz amber", |chunk| chunk.path.ends_with(".md"))
+    );
+    for (index, chunk) in ranked.iter().enumerate() {
+        assert!(
+            ranked[..index]
+                .iter()
+                .all(|previous| !redundant_source(previous, chunk))
+        );
+    }
+}
+
+#[test]
 fn bm25_matches_hand_calculated_body_and_path_fields() {
     let chunks = [
         document("quartz.rs", "quartz quartz filler"),

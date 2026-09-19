@@ -15,12 +15,21 @@ struct Client {
     input: Option<ChildStdin>,
     output: Receiver<Value>,
     id: u64,
+    _cache: Option<tempfile::TempDir>,
 }
 impl Client {
     fn start(root: &Path, offline: bool, endpoint: Option<&str>) -> Self {
+        let cache = tempfile::tempdir().unwrap();
+        let mut client = Self::start_with_cache(root, offline, endpoint, cache.path());
+        client._cache = Some(cache);
+        client
+    }
+    fn start_with_cache(root: &Path, offline: bool, endpoint: Option<&str>, cache: &Path) -> Self {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_oko"));
         cmd.args(["mcp", "--root"])
             .arg(root)
+            .env("OKO_CACHE_DIR", cache)
+            .env("OKO_NO_CACHE", "0")
             .env("TYPESAFE_API_KEY", "")
             .env_remove("TYPESAFE_DEFAULT_MODEL")
             .stdin(Stdio::piped())
@@ -51,6 +60,7 @@ impl Client {
             input: Some(input),
             output,
             id: 0,
+            _cache: None,
         }
     }
     fn send(&mut self, value: Value) {
@@ -79,6 +89,50 @@ impl Client {
     fn search(&mut self, args: Value) -> Value {
         self.request("tools/call", json!({"name":"search","arguments":args}))
     }
+}
+
+#[test]
+fn stdio_search_reuses_memory_and_disk_preparation_across_server_restarts() {
+    let root = fixture();
+    let cache = tempfile::tempdir().unwrap();
+    let mut client = Client::start_with_cache(root.path(), true, None, cache.path());
+    client.initialize();
+    let cold = client.search(json!({"question":"authentication token"}));
+    let cold_packet = assert_packet_envelope(&cold);
+    assert_eq!(cold_packet["timings"]["cache"]["status"], "cold");
+    assert_eq!(cold_packet["timings"]["cache"]["rebuiltFiles"], 1);
+
+    let warm = client.search(json!({"question":"authentication token"}));
+    let warm_packet = assert_packet_envelope(&warm);
+    assert_eq!(warm_packet["timings"]["cache"]["status"], "memory");
+    assert_eq!(warm_packet["timings"]["cache"]["rebuiltFiles"], 0);
+    assert_eq!(warm_packet["timings"]["cache"]["reusedFiles"], 1);
+    assert_eq!(cold_packet["results"], warm_packet["results"]);
+    drop(client);
+
+    let mut client = Client::start_with_cache(root.path(), true, None, cache.path());
+    client.initialize();
+    let restarted = client.search(json!({"question":"authentication token"}));
+    let restarted_packet = assert_packet_envelope(&restarted);
+    assert_eq!(restarted_packet["timings"]["cache"]["status"], "disk");
+    assert_eq!(restarted_packet["timings"]["cache"]["rebuiltFiles"], 0);
+    assert_eq!(cold_packet["results"], restarted_packet["results"]);
+
+    fs::write(
+        root.path().join("auth.rs"),
+        "fn revoke_authentication_token() {}\n",
+    )
+    .unwrap();
+    let changed = client.search(json!({"question":"authentication token"}));
+    let changed_packet = assert_packet_envelope(&changed);
+    assert_eq!(changed_packet["timings"]["cache"]["rebuiltFiles"], 1);
+    assert!(
+        changed_packet["results"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("revoke_authentication")
+    );
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
 }
 impl Drop for Client {
     fn drop(&mut self) {
@@ -298,8 +352,11 @@ fn ripgrep_config_cannot_enable_outside_symlink_reads() {
     .unwrap();
     let config = outside.path().join("ripgrep-config");
     fs::write(&config, "--follow\n").unwrap();
+    let cache = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_oko"))
         .current_dir(root.path())
+        .env("OKO_CACHE_DIR", cache.path())
+        .env("OKO_NO_CACHE", "0")
         .env("RIPGREP_CONFIG_PATH", config)
         .args(["ask", "outside secret", "--no-jev", "--json"])
         .output()
@@ -435,8 +492,187 @@ fn assert_packet_envelope(response: &Value) -> &Value {
 }
 
 #[test]
+fn implementation_intent_recovers_prose_crowded_source_in_one_request() {
+    let root = tempfile::tempdir().unwrap();
+    let question = "select parcel depot delivery";
+    for index in 0..75 {
+        fs::write(root.path().join(format!("guide{index:02}.md")), question).unwrap();
+    }
+    let source = format!(
+        "pub fn choose(shipment: &Parcel) -> Depot {{\n    // {}\n    shipment.depot\n}}",
+        "unrelated ".repeat(100),
+    );
+    fs::write(root.path().join("decision.rs"), &source).unwrap();
+    let corpus = oko::search::workspace_chunks(root.path()).unwrap();
+    let broad = oko::search::rank_lexically(&corpus, question);
+    assert_eq!(broad.len(), 30);
+    assert!(broad.iter().all(|chunk| chunk.path != "decision.rs"));
+
+    for intent in [None, Some("general"), Some("explanation")] {
+        let implementation = intent.is_none();
+        let mut args = json!({"question":question});
+        if let Some(intent) = intent {
+            args["intent"] = json!(intent);
+        }
+        let (response, requests) =
+            search_with_counted_provider(root.path(), args, move |request| {
+                relevance_response(request, |candidate| {
+                    let path = candidate["source"].as_str().unwrap();
+                    if (implementation && path.starts_with("decision.rs:"))
+                        || (!implementation && path.starts_with("guide00.md:"))
+                    {
+                        0.95
+                    } else {
+                        0.05
+                    }
+                })
+            });
+        assert_eq!(requests.len(), 1);
+        let mut application_request = requests[0].clone();
+        // Transport adds the model after the application request budget check.
+        application_request.as_object_mut().unwrap().remove("model");
+        assert!(serde_json::to_vec(&application_request).unwrap().len() <= 32_000);
+        let candidates = requests[0]["state"]["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 30);
+        let paths: Vec<_> = candidates
+            .iter()
+            .map(|candidate| {
+                candidate["source"]
+                    .as_str()
+                    .unwrap()
+                    .split(':')
+                    .next()
+                    .unwrap()
+            })
+            .collect();
+        let packet = assert_packet_envelope(&response);
+        assert_eq!(packet["ranking"], "jev");
+        assert_eq!(packet["retrieval"]["omittedCandidates"], 0);
+        if implementation {
+            let helper = candidates
+                .iter()
+                .find(|candidate| {
+                    candidate["source"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("decision.rs:")
+                })
+                .expect("default implementation retrieval must recover the actual source");
+            assert!(helper["text"].as_str().unwrap().contains("shipment.depot"));
+            let winner = &packet["results"][0];
+            assert_eq!(winner["path"], "decision.rs");
+            assert_eq!(winner["startLine"], 1);
+            assert_eq!(winner["endLine"], source.lines().count());
+            assert_eq!(winner["text"], source);
+        } else {
+            assert_eq!(
+                paths,
+                broad
+                    .iter()
+                    .map(|chunk| chunk.path.as_str())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(packet["results"][0]["path"], "guide00.md");
+        }
+    }
+
+    let mut offline = Client::start(root.path(), true, None);
+    offline.initialize();
+    let response = offline.search(json!({"question":question}));
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(packet["ranking"], "lexical");
+    let paths: Vec<_> = packet["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        broad
+            .iter()
+            .take(3)
+            .map(|chunk| chunk.path.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn headerless_primary_keeps_late_decision_evidence_when_the_winner_fits() {
+    let root = tempfile::tempdir().unwrap();
+    let mut lines = vec!["    step();"; 400];
+    lines[0] = "pub fn process_batch() {";
+    lines[123] = "    trace(\"pending records checked before persisting records\");";
+    lines[204] = "    if !pending_records.is_empty() {";
+    lines[205] = "        let accepted = pending_records.into_iter().filter(|record| {";
+    lines[206] = "            !index.contains(record.key)";
+    lines[207] = "        }).collect();";
+    lines[208] = "        persist(accepted);";
+    lines[209] = "    }";
+    lines[399] = "}";
+    fs::write(root.path().join("worker.rs"), lines.join("\n")).unwrap();
+    let corpus = oko::search::workspace_chunks(root.path()).unwrap();
+    let winner = corpus
+        .iter()
+        .find(|chunk| chunk.text.contains("!index.contains(record.key)"))
+        .unwrap();
+    assert_eq!((winner.start_line, winner.end_line), (116, 235));
+    assert!(!winner.text.contains("fn process_batch"));
+    let (response, requests) = search_with_counted_provider(
+        root.path(),
+        json!({"question":"where pending records are checked before persisting records"}),
+        |request| {
+            let target = request["state"]["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|candidate| candidate["source"] == "worker.rs:116-235")
+                .expect("the full headerless winner must enter reranking");
+            assert!(
+                target["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("!index.contains(record.key)")
+            );
+            relevance_response(request, |candidate| {
+                if candidate["source"] == "worker.rs:116-235" {
+                    0.95
+                } else {
+                    0.01
+                }
+            })
+        },
+    );
+    assert_eq!(requests.len(), 1);
+    let packet = assert_packet_envelope(&response);
+    let primary = &packet["results"][0];
+    assert_eq!(primary["path"], "worker.rs");
+    let start = primary["startLine"].as_u64().unwrap() as usize;
+    let end = primary["endLine"].as_u64().unwrap() as usize;
+    assert!(start <= winner.start_line && end >= winner.end_line);
+    assert_eq!(primary["text"], lines[start - 1..end].join("\n"));
+    assert!(
+        primary["text"]
+            .as_str()
+            .unwrap()
+            .contains("!index.contains(record.key)")
+    );
+    assert!(
+        primary["text"]
+            .as_str()
+            .unwrap()
+            .contains("persist(accepted)")
+    );
+    assert_eq!(
+        primary["truncated"], true,
+        "the containing function is still incomplete"
+    );
+}
+
+#[test]
 fn normal_packet_retains_thirty_previews_and_expands_a_late_winner_in_one_call() {
     let root = tempfile::tempdir().unwrap();
+    let mut full_source_bytes = 0;
     for index in 0..30 {
         let mut lines = vec![
             format!("fn authenticate_{index:02}() {{"),
@@ -446,12 +682,18 @@ fn normal_packet_retains_thirty_previews_and_expands_a_late_winner_in_one_call()
         for line in 0..65 {
             lines.push(format!(
                 "    // authentication step {line:02}: {}",
-                "source evidence retains the original surrounding implementation ".repeat(2)
+                "source evidence keeps surrounding code"
             ));
         }
         lines.push("}".into());
-        fs::write(root.path().join(format!("{index:02}.rs")), lines.join("\n")).unwrap();
+        let source = lines.join("\n");
+        full_source_bytes += source.len();
+        fs::write(root.path().join(format!("{index:02}.rs")), source).unwrap();
     }
+    assert!(
+        full_source_bytes > 32_000,
+        "full candidates exceed the provider request budget"
+    );
     fs::write(
         root.path().join("support.rs"),
         "fn verify_credentials() { compare_digest(); }\nfn write_session() { persist_cookie(); }\n",
@@ -496,6 +738,11 @@ fn normal_packet_retains_thirty_previews_and_expands_a_late_winner_in_one_call()
     let result = &packet["results"][0];
     assert_eq!(result["path"], expected_path);
     let source = fs::read_to_string(root.path().join(expected_path)).unwrap();
+    assert_eq!(
+        result["text"], source,
+        "the affordable primary implementation is complete"
+    );
+    assert_eq!(result["truncated"], false);
     let start = result["startLine"].as_u64().unwrap() as usize;
     let end = result["endLine"].as_u64().unwrap() as usize;
     assert_eq!(
@@ -815,6 +1062,94 @@ fn packet_budget_counts_utf8_json_escaping_question_and_compatibility_content() 
 }
 
 #[test]
+fn packet_preserves_complete_primary_implementation_before_lower_ranked_context() {
+    let root = tempfile::tempdir().unwrap();
+    let implementation = format!(
+        "pub fn authenticate_session(expired: bool) -> bool {{\n{}\n    if expired {{\n        return false;\n    }}\n    true\n}}",
+        (0..75)
+            .map(|line| format!("    record_check({line});"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(implementation.lines().count() > 60);
+    fs::write(root.path().join("session.rs"), &implementation).unwrap();
+    for index in 0..2 {
+        let lines = (0..80)
+            .map(|line| {
+                format!(
+                    "    // authentication alternative {line}: {}",
+                    "\"\\😀\t".repeat(30)
+                )
+            })
+            .collect::<Vec<_>>();
+        fs::write(
+            root.path().join(format!("alternative{index}.rs")),
+            format!(
+                "fn authenticate_alternative_{index}() {{\n{}\n}}",
+                lines.join("\n")
+            ),
+        )
+        .unwrap();
+    }
+    let (response, requests) = search_with_counted_provider(
+        root.path(),
+        json!({"question":"Where does authentication reject an expired session?"}),
+        |request| {
+            for path in ["session.rs:", "alternative0.rs:", "alternative1.rs:"] {
+                assert!(
+                    request["state"]["candidates"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|candidate| candidate["source"].as_str().unwrap().starts_with(path)),
+                    "the fixture must exercise all ranked alternatives: {path}"
+                );
+            }
+            relevance_response(request, |candidate| {
+                if candidate["source"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("session.rs:")
+                {
+                    0.95
+                } else {
+                    0.7
+                }
+            })
+        },
+    );
+    assert_eq!(requests.len(), 1, "packet expansion adds no provider calls");
+    let packet = assert_packet_envelope(&response);
+    let primary = &packet["results"][0];
+    assert_eq!(primary["path"], "session.rs");
+    assert_eq!(primary["symbol"]["name"], "authenticate_session");
+    assert_eq!(primary["startLine"], 1);
+    assert_eq!(primary["endLine"], implementation.lines().count());
+    assert_eq!(primary["text"], implementation);
+    assert_eq!(primary["truncated"], false);
+    assert_eq!(
+        packet["truncated"], true,
+        "lower-priority context was omitted"
+    );
+    for result in packet["results"].as_array().unwrap() {
+        let source =
+            fs::read_to_string(root.path().join(result["path"].as_str().unwrap())).unwrap();
+        let start = result["startLine"].as_u64().unwrap() as usize;
+        let end = result["endLine"].as_u64().unwrap() as usize;
+        let expected = source
+            .lines()
+            .skip(start - 1)
+            .take(end - start + 1)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            result["text"], expected,
+            "returned spans must be exact source"
+        );
+    }
+}
+
+#[test]
 fn escaped_packet_fitting_preserves_useful_source_instead_of_over_shrinking() {
     let root = tempfile::tempdir().unwrap();
     for index in 0..6 {
@@ -836,17 +1171,55 @@ fn escaped_packet_fitting_preserves_useful_source_instead_of_over_shrinking() {
         let response = client.search(json!({"question":question}));
         let packet = assert_packet_envelope(&response);
         let results = packet["results"].as_array().unwrap();
-        assert_eq!(
-            results.len(),
-            3,
-            "all three matches fit with compact context"
-        );
+        assert!(!results.is_empty(), "the best match must survive fitting");
         assert!(
-            results.iter().all(|result| result["text"]
+            results[0]["text"]
                 .as_str()
                 .unwrap()
-                .contains("// authentication")),
-            "JSON escaping must not reduce every result to just a function header"
+                .contains("// authentication"),
+            "JSON escaping must not reduce the primary result to just a function header"
         );
+        assert_eq!(results[0]["truncated"], true);
+        assert_eq!(packet["truncated"], true);
     }
+}
+
+#[test]
+fn cached_syntax_supports_validators_with_one_provider_call_and_bounded_wire_output() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("decode.ts"), "import { TextRule, PayloadRule } from './rules.js';\nexport function decodePayload(input: string): unknown | null {\n const text = TextRule.parse(input);\n return PayloadRule.parse(JSON.parse(text));\n}\n").unwrap();
+    fs::write(root.path().join("rules.ts"), "export const TextRule = text().min(1);\nexport const PayloadRule = object({ tick: number().finite(), id: text().min(1) });\n").unwrap();
+    let (response, requests) = search_with_counted_provider(
+        root.path(),
+        json!({"question":"decode payload and validate text rules"}),
+        |request| {
+            relevance_response(request, |candidate| {
+                if candidate["source"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("decode.ts:")
+                {
+                    0.95
+                } else {
+                    0.01
+                }
+            })
+        },
+    );
+    assert_eq!(requests.len(), 1);
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(packet["results"][0]["definitionComplete"], true);
+    assert_eq!(packet["results"][0]["truncated"], false);
+    let related = packet["related"].as_array().unwrap();
+    assert_eq!(related.len(), 2);
+    assert!(
+        related
+            .iter()
+            .all(|value| value["path"] == "rules.ts" && value["relation"] == "resolved_definition")
+    );
+    assert!(
+        related
+            .iter()
+            .any(|value| value["text"].as_str().unwrap().contains("finite"))
+    );
 }

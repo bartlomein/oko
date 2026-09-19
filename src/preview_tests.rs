@@ -612,3 +612,88 @@ fn long_attached_documentation_cannot_displace_distinct_body_evidence() {
         );
     }
 }
+
+#[test]
+fn headerless_guard_keeps_nested_decisions_before_repeated_keyword_mentions() {
+    for (extension, block, evidence) in [
+        (
+            "ts",
+            "    if (pendingRecords.length > 0) {\n        const accepted = pendingRecords.filter(record => {\n            if (record.externalKey) {\n                return !index.containsExternal(record.externalKey);\n            }\n            return !index.containsLocal(record.key);\n        });\n        persist(accepted);\n    }",
+            "return !index.containsLocal(record.key);",
+        ),
+        (
+            "rs",
+            "    if !pending_records.is_empty() {\n        let accepted = pending_records.into_iter().filter(|record| {\n            if let Some(key) = record.external_key {\n                return !index.contains_external(key);\n            }\n            !index.contains_local(record.key)\n        }).collect();\n        persist(accepted);\n    }",
+            "!index.contains_local(record.key)",
+        ),
+        (
+            "py",
+            "    if pending_records:\n        accepted = []\n        for record in pending_records:\n            if record.external_key:\n                present = index.contains_external(record.external_key)\n            else:\n                present = index.contains_local(record.key)\n            if not present:\n                accepted.append(record)\n        persist(accepted)",
+            "present = index.contains_local(record.key)",
+        ),
+    ] {
+        let text = format!(
+            "{}\n{block}\n    finish();",
+            "    trace(\"pending records checked before persisting records\");\n".repeat(35)
+        );
+        let candidates: Vec<_> = (0..30)
+            .map(|index| {
+                chunk(
+                    &format!("src/worker_{index}.{extension}"),
+                    201,
+                    text.clone(),
+                )
+            })
+            .collect();
+        let question = "where pending records are checked before persisting records";
+        let items = ranking_previews(question, &candidates, RankingIntent::Implementation).unwrap();
+        assert_eq!(items.len(), 30);
+        for item in &items {
+            assert!(item.text.contains(evidence), "{extension}: {}", item.text);
+            assert!(
+                item.text.contains("persist(accepted)"),
+                "{extension}: {}",
+                item.text
+            );
+            for line in item.text.lines().filter(|line| !line.starts_with('[')) {
+                let (number, content) = line.split_once(": ").unwrap();
+                let number: usize = number.parse().unwrap();
+                if !content.contains(TRUNCATED) {
+                    assert_eq!(content, text.lines().nth(number - 201).unwrap());
+                }
+            }
+        }
+        let (request, retained) =
+            ranking::prepare_request_with_intent(question, &items, RankingIntent::Implementation)
+                .unwrap();
+        assert_eq!(retained.len(), 30);
+        assert!(serde_json::to_vec(&request).unwrap().len() <= ranking::MAX_JEV_REQUEST_BYTES);
+    }
+}
+
+#[test]
+fn decision_context_stays_bounded_and_does_not_promote_prose() {
+    let source = [
+        "    if pending_records:",
+        "        accepted = select(pending_records)",
+        "        persist(accepted)",
+        "    unrelated_operation()",
+    ];
+    assert_eq!(decision_block(&source, 0, "worker.py"), Some(vec![0, 1, 2]));
+    assert_eq!(decision_block(&source, 0, "guide.md"), None);
+    assert_eq!(decision_block(&source, 0, "unknown.custom"), None);
+    assert_eq!(
+        decision_block(
+            &["    // if pending_records {", "        prose"],
+            0,
+            "worker.rs"
+        ),
+        None,
+    );
+    let mut long_block = vec!["    if !pending_records.is_empty() {"];
+    long_block.extend(std::iter::repeat_n("        inspect();", 100));
+    assert_eq!(
+        decision_block(&long_block, 0, "worker.rs").unwrap().len(),
+        BLOCK_LINES,
+    );
+}

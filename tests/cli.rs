@@ -4,20 +4,80 @@ use std::{
     fs,
     io::{Read, Write},
     net::TcpListener,
+    ops::{Deref, DerefMut},
     path::Path,
     process::{Command, Output},
     thread,
     time::{Duration, Instant},
 };
 
-fn command(cwd: &Path) -> Command {
+struct TestCommand {
+    command: Command,
+    _cache: tempfile::TempDir,
+}
+
+impl Deref for TestCommand {
+    type Target = Command;
+    fn deref(&self) -> &Self::Target {
+        &self.command
+    }
+}
+
+impl DerefMut for TestCommand {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.command
+    }
+}
+
+fn command(cwd: &Path) -> TestCommand {
+    let cache = tempfile::tempdir().unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_oko"));
     command
         .current_dir(cwd)
+        .env("OKO_CACHE_DIR", cache.path())
+        .env("OKO_NO_CACHE", "0")
         .env_remove("TYPESAFE_API_KEY")
         .env_remove("TYPESAFE_DEFAULT_MODEL")
         .env("TYPESAFE_BASE_URL", "http://127.0.0.1:1");
-    command
+    TestCommand {
+        command,
+        _cache: cache,
+    }
+}
+
+#[test]
+fn ask_reuses_preparation_across_processes_and_refreshes_changed_source() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let source = root.path().join("archive.rs");
+    fs::write(&source, "fn verify_archive_checksum() {}\n").unwrap();
+    let run = || {
+        success(
+            command(root.path())
+                .env("OKO_CACHE_DIR", cache.path())
+                .args(["ask", "--no-jev", "--json", "archive checksum"])
+                .output()
+                .unwrap(),
+        )
+    };
+    let cold = run();
+    assert_eq!(cold["cache"]["status"], "cold");
+    assert_eq!(cold["cache"]["rebuiltFiles"], 1);
+    let restarted = run();
+    assert_eq!(restarted["cache"]["status"], "disk");
+    assert_eq!(restarted["cache"]["rebuiltFiles"], 0);
+    assert_eq!(restarted["cache"]["reusedFiles"], 1);
+    assert_eq!(cold["results"], restarted["results"]);
+    fs::write(&source, "fn repair_archive_checksum() {}\n").unwrap();
+    let changed = run();
+    assert_eq!(changed["cache"]["rebuiltFiles"], 1);
+    assert!(
+        changed["results"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("repair_archive")
+    );
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
 }
 
 fn success(output: Output) -> Value {

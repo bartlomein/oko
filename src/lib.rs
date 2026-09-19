@@ -1,8 +1,10 @@
 pub mod context;
 pub mod investigate;
+pub mod navigation;
 pub mod preview;
 pub mod ranking;
 pub mod search;
+pub mod search_cache;
 pub mod stemmer;
 
 pub use ranking::{

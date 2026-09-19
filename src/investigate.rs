@@ -87,8 +87,16 @@ fn queries(question: &str) -> Vec<String> {
     queries.extend(terms);
     queries
 }
+#[cfg(test)]
 fn search_actions(corpus: &[Chunk], question: &str, intent: RankingIntent) -> Vec<Action> {
     let prepared = search::PreparedCorpus::new(corpus);
+    search_actions_prepared(&prepared, question, intent)
+}
+fn search_actions_prepared(
+    prepared: &search::PreparedCorpus,
+    question: &str,
+    intent: RankingIntent,
+) -> Vec<Action> {
     let mut actions = Vec::new();
     for query in queries(question) {
         let chunks = prepared
@@ -213,15 +221,52 @@ pub fn investigate_with(
     corpus: &[Chunk],
     intent: RankingIntent,
     max_steps: Option<usize>,
-    mut call: impl FnMut(&Value) -> Result<Value>,
+    call: impl FnMut(&Value) -> Result<Value>,
 ) -> Result<Investigation> {
+    validate_request(question, max_steps)?;
+    let prepared = search::PreparedCorpus::new(corpus);
+    investigate_prepared_with(question, corpus, &prepared, intent, max_steps, call)
+}
+
+/// Investigate using one content-validated workspace snapshot. All searches,
+/// related reads, and returned evidence use the same captured source contents.
+pub fn investigate_snapshot_with(
+    question: &str,
+    snapshot: &crate::search_cache::WorkspaceSnapshot,
+    intent: RankingIntent,
+    max_steps: Option<usize>,
+    call: impl FnMut(&Value) -> Result<Value>,
+) -> Result<Investigation> {
+    validate_request(question, max_steps)?;
+    investigate_prepared_with(
+        question,
+        snapshot.chunks(),
+        snapshot.prepared(),
+        intent,
+        max_steps,
+        call,
+    )
+}
+
+fn validate_request(question: &str, max_steps: Option<usize>) -> Result<()> {
     if question.trim().is_empty() {
         bail!("A non-empty question is required");
     }
     if max_steps == Some(0) {
         bail!("--max-steps must be greater than zero");
     }
-    let mut pending = search_actions(corpus, question, intent);
+    Ok(())
+}
+
+fn investigate_prepared_with(
+    question: &str,
+    corpus: &[Chunk],
+    prepared: &search::PreparedCorpus,
+    intent: RankingIntent,
+    max_steps: Option<usize>,
+    mut call: impl FnMut(&Value) -> Result<Value>,
+) -> Result<Investigation> {
+    let mut pending = search_actions_prepared(prepared, question, intent);
     let mut current = pending.remove(0);
     let mut seen = HashSet::new();
     let mut attempted = HashSet::new();
@@ -449,6 +494,83 @@ mod tests {
         chunks
     }
     const QUESTION: &str = "Where are two optional telemetry values interpolated while preserving available values when the other is missing?";
+    #[test]
+    fn cached_investigation_preserves_requests_results_and_captured_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        for chunk in corpus() {
+            let path = root.path().join(chunk.path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, chunk.text).unwrap();
+        }
+        let corpus = search::workspace_chunks(root.path()).unwrap();
+        let mut cache =
+            crate::search_cache::WorkspaceCache::with_directory(storage.path().to_path_buf());
+        let cold = cache.load(root.path()).unwrap();
+        let warm = cache.load(root.path()).unwrap();
+        let restarted =
+            crate::search_cache::WorkspaceCache::with_directory(storage.path().to_path_buf())
+                .load(root.path())
+                .unwrap();
+        assert_eq!(warm.timings.rebuilt_files, 0);
+        assert_eq!(restarted.timings.rebuilt_files, 0);
+
+        fn response(request: &Value) -> Value {
+            if request["questions"]["candidate_1"].is_object() {
+                relevance_response(request, |candidate| {
+                    if candidate["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("fn blend_present")
+                    {
+                        0.9
+                    } else {
+                        0.01
+                    }
+                })
+            } else {
+                probability_response(request, "next_action", "action_0")
+            }
+        }
+
+        let mut expected_requests = Vec::new();
+        let expected = investigate_with(
+            QUESTION,
+            &corpus,
+            RankingIntent::Implementation,
+            Some(3),
+            |request| {
+                expected_requests.push(request.clone());
+                Ok(response(request))
+            },
+        )
+        .unwrap();
+        assert!(expected.jev_calls > 1, "exercise follow-up searches");
+
+        // A request uses its captured contents even if a file changes while
+        // the agent/provider is working. The next load discovers this edit.
+        std::fs::write(root.path().join("src/utils.rs"), "fn changed() {}\n").unwrap();
+        for workspace in [cold, warm, restarted] {
+            let mut requests = Vec::new();
+            let actual = investigate_snapshot_with(
+                QUESTION,
+                &workspace.snapshot,
+                RankingIntent::Implementation,
+                Some(3),
+                |request| {
+                    requests.push(request.clone());
+                    Ok(response(request))
+                },
+            )
+            .unwrap();
+            assert_eq!(requests, expected_requests);
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+        }
+    }
+
     #[test]
     fn jev_can_recover_after_a_bad_shortlist_using_only_typed_actions() {
         let corpus = corpus();

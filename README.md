@@ -91,6 +91,33 @@ other projects ignore their `.env` files too.
 environment. Their defaults are `https://api.typesafe.ai` and `jev-latest`.
 These two settings are not read from `.env`.
 
+Code search automatically caches prepared search data in the operating system's
+user-cache directory, outside the repository. The first search builds the cache;
+later CLI invocations and MCP searches reuse it. MCP also retains the latest
+search scope in memory. Every search still discovers files and checks their
+contents, so edits, deletions, ignored files, and branch changes refresh the
+results. Different search directories have separate cache identities.
+Larger scopes use up to four file readers. Unchanged files reuse cached chunk
+boundaries, and an unchanged workspace also reuses corpus ranking statistics.
+File preparation also uses up to four workers for larger scopes. JavaScript and
+TypeScript syntax facts are cached per file; edits invalidate those facts, while
+relationships are resolved against the current snapshot. Fresh-process
+disk loading runs alongside the source scan; memory reuse skips disk loading.
+Returned source is reconstructed from freshly read bytes, with content hashes
+and cache validation checked before reuse. Cache format upgrades rebuild once.
+The default location is `~/Library/Caches/oko/search` on macOS,
+`$XDG_CACHE_HOME/oko/search` (or `~/.cache/oko/search`) on Linux, and
+`%LOCALAPPDATA%\oko\search` on Windows.
+
+Set `OKO_CACHE_DIR` in the process environment to choose the cache directory, or
+`OKO_NO_CACHE=1` to bypass memory and disk reuse. These settings are not read from
+`.env`. An override inside the searched directory uses memory reuse only, so Oko
+does not add cache files to the repository it is searching. Cache files contain
+source-derived search features and identifiers; keep the directory private.
+They are disposable: missing, incompatible, damaged, or
+unwritable caches fall back to preparing current files. Caching does not change
+ranking or remove Jev requests.
+
 For a local release build instead of installation, run
 `cargo build --release --locked --bin oko`. The executable is
 `target/release/oko` (`oko.exe` on Windows). Build separately for each operating
@@ -171,20 +198,54 @@ The server exposes `search` with these inputs:
 - `max_steps`: deep mode only, 1–5, defaults to 5.
 
 Results include an automatic context packet: up to three ranked matches with
-source excerpts and up to two related definition candidates. Paths are relative
+source excerpts and up to two supporting definitions or callers. Paths are relative
 to the returned search directory, with inclusive line ranges. Context is drawn
 from the same file snapshot as the search, deduplicated, and bounded. Detected
-function headers are lexical hints, not parser-verified ownership; shortened
-excerpts are marked. Related lookup preserves call qualification, excludes
+function headers remain lexical hints; JavaScript/TypeScript additionally use
+cached Tree-sitter function boundaries. Shortened excerpts are marked.
+Related lookup preserves call qualification, excludes
 unresolved receiver calls, and omits ambiguous definitions instead of filling
 the packet with namesakes. It supports simple local Rust module paths and
 imports; unsupported syntax falls back to the primary source excerpts. This
 is not compiler-level name or type resolution. Related code is found locally;
 context expansion adds no model call.
 
+For JavaScript, TypeScript, and TSX, the cached syntax index can attach directly
+referenced constants, validators, types, and verified callers. It follows local
+bindings, explicit relative imports and aliases, and unambiguous extension
+substitution such as `.js` to `.ts`. Explicit `tsconfig.json` path mappings are
+supported when their base can be established. Unknown inherited configuration,
+re-exports, namespace imports, ambiguous modules, and methods requiring runtime
+type information are omitted. Other languages retain conservative lexical
+lookup. Parser errors or limits abstain from syntax relationships and retain the
+existing lexical fallback. Supporting snippets prioritize explicitly named
+symbols, then direct runtime dependencies, callers, and static types. Name and
+path relevance break ties within those groups. This does not change the search
+ranking sent to Jev.
+
+`definitionComplete` means the returned excerpt contains a proven full definition;
+it does not mean every dependency or caller is included. A `resolved_caller`
+includes the actual call location in `referencedFrom` and its primary definition
+in `target`. Supporting evidence is removed if its primary anchor is trimmed away.
+
+When a top-ranked function has a known boundary and is at most 256 lines,
+Oko considers its full implementation instead of the usual 60-line source window.
+If the primary source match lacks a complete function boundary, Oko retains its
+winning chunk when it fits within 256 lines and known declaration boundaries.
+It still marks that excerpt as incomplete; retaining a chunk does not prove a
+complete function. This avoids discarding late evidence after Jev selected it.
+Under the response cap, lower-ranked matches are dropped first, followed by
+related definitions, before shortening the primary excerpt. Helpers whose
+references disappear are omitted too. Alternatives remain when they fit; a
+complete primary excerpt can accompany a packet-level `truncated` flag because
+other evidence was omitted. Larger or uncertain functions retain focused,
+bounded excerpts. This policy adds no provider requests.
+
 Multiline signatures are scanned within a fixed limit. When a declaration's
 extent cannot be established, Oko returns bounded source context marked
 `truncated` rather than treating a header as a complete implementation.
+The cached TypeScript parser establishes function boundaries for union and
+structural return annotations; uncertain lexical-only boundaries use the fallback.
 
 Normal searches rank compact, line-labelled previews instead of full chunks.
 Preview size adapts to the existing 32,000-byte Jev request budget. Winner IDs
@@ -213,6 +274,17 @@ adds its model field), preview building, and client-side reranking time
 Deep mode reports investigation time instead. These times exclude Codex's
 reasoning, answer generation, and client transport overhead. No request bodies
 or credentials are logged. Timing and context metadata are automatic.
+`timings.cache` reports cache status, reused/rebuilt file counts, and the time
+spent scanning, loading, validating/rebuilding file data, building corpus statistics,
+and saving. A disk hit reconstructs source from cached boundaries and validates
+saved features; zero rebuilt files means no file tokenization, stemming, or
+syntax parsing was repeated. `aggregateReused` indicates whether corpus statistics were reused;
+additions, edits, removals, and scope changes rebuild the affected statistics.
+`navigationMs` measures rebuilding the syntax lookup indexes from cached facts.
+`scanLoadOverlapped` reports concurrent disk loading and scanning. Individual
+phase durations can overlap and must not be added to estimate total time.
+`shortlistMs` measures query ranking after preparation. CLI `ask --json` exposes
+the same cache metadata in its `cache` field.
 
 See [context packet validation](benchmarks/context-packet.md) for offline
 coverage checks, local overhead measurements, and validation limits.
@@ -261,16 +333,29 @@ Identical source candidates are counted once. Final selection suppresses
 same-file excerpts overlapping at least half the shorter range, while distinct
 functions and the lightly overlapping windows of long functions remain eligible.
 There is no blanket penalty for additional matches from the same file.
+For normal implementation searches, up to 15 of the 30 slots are reserved for
+matching source candidates from the same ranking applied to supported code files.
+Remaining slots come from the broad ranking, with overlapping excerpts counted
+once. This prevents documentation from crowding out all implementations while
+preserving access to prose and unsupported file types. General, explanation,
+and lexical-only searches retain the broad ranking.
 Declaration hints cover common Rust, Python, JavaScript/TypeScript, Go, Java,
 C#, C/C++, Kotlin and Swift syntax. Other syntax and non-code files retain
 content/path search. No repository-specific paths or framework rules are used.
 
-Term counts and path tokens are cached within each search snapshot. Only the
-selected chunks are cloned. Deep search retains full-snapshot statistics even
+Term counts, path tokens, and symbol features are reused across searches when
+their source contents are unchanged. Global statistics refresh when the corpus
+changes. Ranking, previews, and returned context all use the same captured
+snapshot for each request. Only selected chunks are cloned for ranking results.
+Deep search retains full-snapshot statistics even
 when filtering to source files. Scores are relevance values, not probabilities;
 shortlist order reflects rank fusion while reported lexical scores retain the
 underlying BM25 relevance. Compact previews prioritize declaration headers over
 ordinary variable assignments and preserve a bounded multiline header prefix.
+They also prioritize up to 12 contiguous lines of a query-matching control-flow
+block, so nearby predicates and outcomes can survive the preview budget.
+This is an indentation-based context hint, not a language parser; multiline
+conditions and unsupported syntax use the existing preview selection.
 This adds no model requests: normal search still uses one Jev call with the
 existing 30-item, 32,000-byte request budget. See the
 [rank-fusion audit](benchmarks/rank-fusion.md) for offline results and limits;
@@ -371,10 +456,12 @@ Both `ask` and `rank` accept `--intent implementation|explanation|general`:
 | `general` | Items that directly help answer all or part of the question | `rank` and the Rust library |
 
 The command chooses the default; Oko does not ask AI to guess the intent.
-Intent only changes the instructions within the existing Jev request. A normal
+Intent changes the instructions within the existing Jev request. For normal
+code search, implementation intent also reserves source candidates as described
+above; supplied-item `rank` does not apply this source selection. A normal
 nonempty ranking still makes one call, with the same 32,000-byte budget and no
 retries. Instructions and candidate text share that budget. No
-file types are excluded and candidate discovery is unchanged. `--no-jev` makes
+file types are excluded from discovery. `--no-jev` makes
 zero calls and bypasses intent-based ranking, preserving its existing results.
 
 ```sh

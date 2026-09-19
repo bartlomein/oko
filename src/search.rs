@@ -1,14 +1,17 @@
-use crate::stemmer::stemmer;
+use crate::{ranking::RankingIntent, stemmer::stemmer};
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
     fs,
+    io::Read,
     path::Path,
     process::Command,
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
+    thread,
 };
 
 pub const MAX_FILE_BYTES: usize = 256 * 1024;
@@ -20,6 +23,10 @@ pub const RESULT_LIMIT: usize = 5;
 // Retrieve broadly in memory, then keep the existing small Jev request.
 const RETRIEVAL_WINDOW: usize = 100;
 const RRF_CONSTANT: f64 = 60.0;
+// Implementation searches protect half the bounded reranking request for
+// source matches. The other half remains available to the broad ranking so
+// prose and unsupported source formats can still supply useful evidence.
+const IMPLEMENTATION_SOURCE_SLOTS: usize = SHORTLIST_LIMIT / 2;
 const STOP_WORDS: &[&str] = &[
     "a", "an", "and", "are", "by", "do", "does", "for", "how", "in", "is", "it", "its", "of", "on",
     "or", "the", "this", "that", "to", "what", "when", "where", "which", "who", "why",
@@ -145,23 +152,194 @@ fn normalize(term: String, stems: &mut HashMap<String, String>) -> String {
 
 /// BM25 over a snapshot: cache tokens once and retain corpus-wide statistics
 /// when filtering candidates. Body, path and declaration names are independent fields.
-pub(crate) struct PreparedCorpus<'a> {
-    chunks: Vec<PreparedChunk<'a>>,
+pub(crate) struct PreparedCorpus {
+    source_chunks: Arc<[Chunk]>,
+    chunks: Vec<PreparedChunk>,
     content_stats: FieldStats,
     path_stats: FieldStats,
     symbol_stats: FieldStats,
 }
-struct PreparedChunk<'a> {
-    chunk: &'a Chunk,
-    content: Field,
-    path: Field,
-    symbols: Vec<Symbol<'a>>,
+struct PreparedChunk {
+    source_index: usize,
+    content: Arc<Field>,
+    path: Arc<Field>,
+    symbols: Vec<Symbol>,
 }
-struct Symbol<'a> {
-    name: &'a str,
-    field: Field,
+#[derive(Clone, Serialize, Deserialize)]
+struct Symbol {
+    name: String,
+    field: Arc<Field>,
+    #[serde(skip)]
     reference_weight: f64,
 }
+
+/// Query-independent file features. Raw source text is deliberately not persisted.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct PreparedFile {
+    path: String,
+    path_field: Arc<Field>,
+    chunks: Vec<PreparedChunkFeatures>,
+    // All identifiers, including names with no declaration in the current corpus:
+    // a new declaration can change reference weights in otherwise unchanged files.
+    identifiers: HashSet<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct PreparedChunkFeatures {
+    start_line: usize,
+    end_line: usize,
+    source_digest: [u8; 32],
+    content: Arc<Field>,
+    symbols: Vec<Symbol>,
+}
+
+impl PreparedFile {
+    /// Reattach cached boundaries to freshly captured source. File hashes are
+    /// checked by the caller; chunk hashes and complete range coverage defend
+    /// against malformed records without repeating declaration discovery.
+    pub(crate) fn restore_chunks(&self, path: &str, text: &str) -> Option<Vec<Chunk>> {
+        let mut lines: Vec<&str> = patterns().lines.split(text).collect();
+        if lines.last() == Some(&"") {
+            lines.pop();
+        }
+        if lines.is_empty() {
+            return (self.chunks.is_empty() && self.matches(&[])).then(Vec::new);
+        }
+        if self.path != path || self.chunks.is_empty() {
+            return None;
+        }
+        let mut previous_end: usize = 0;
+        let mut chunks = Vec::with_capacity(self.chunks.len());
+        for cached in &self.chunks {
+            let start = cached.start_line.checked_sub(1)?;
+            if cached.end_line <= start
+                || cached.end_line > lines.len()
+                || cached.end_line - start > FUNCTION_CHUNK_LINES
+                || cached.end_line <= previous_end
+                || (chunks.is_empty() && start != 0)
+                || (!chunks.is_empty()
+                    && start != previous_end
+                    && previous_end.checked_sub(CHUNK_OVERLAP) != Some(start))
+            {
+                return None;
+            }
+            chunks.push(Chunk {
+                path: path.to_owned(),
+                start_line: cached.start_line,
+                end_line: cached.end_line,
+                text: lines[start..cached.end_line].join("\n"),
+                lexical_score: 0.0,
+            });
+            previous_end = cached.end_line;
+        }
+        (previous_end == lines.len() && self.matches(&chunks)).then_some(chunks)
+    }
+
+    /// Reject incompatible/corrupt records without repeating tokenization or stemming.
+    pub(crate) fn matches(&self, chunks: &[Chunk]) -> bool {
+        self.chunks.len() == chunks.len()
+            && self.path_field.valid_for(self.path.len())
+            && self.identifiers.iter().all(|name| {
+                !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+            })
+            && self.chunks.iter().zip(chunks).all(|(prepared, chunk)| {
+                chunk.path == self.path
+                    && prepared.start_line == chunk.start_line
+                    && prepared.end_line == chunk.end_line
+                    && prepared.source_digest
+                        == <[u8; 32]>::from(Sha256::digest(chunk.text.as_bytes()))
+                    && prepared.content.valid_for(chunk.text.len())
+                    && prepared.symbols.len() <= chunk.text.len()
+                    && prepared.symbols.iter().all(|symbol| {
+                        !symbol.name.is_empty()
+                            && chunk.text.contains(&symbol.name)
+                            && symbol.field.valid_for(symbol.name.len())
+                    })
+            })
+    }
+}
+
+fn words(text: &str, stems: &mut HashMap<String, String>) -> Field {
+    let mut field = Field::default();
+    for token in tokenize(text) {
+        *field.counts.entry(normalize(token, stems)).or_default() += 1;
+        field.length += 1;
+    }
+    field
+}
+
+/// Shares stemming work across changed files during one workspace refresh.
+#[derive(Default)]
+pub(crate) struct FilePreparer {
+    stems: HashMap<String, String>,
+}
+impl FilePreparer {
+    pub(crate) fn prepare_file(&mut self, chunks: &[Chunk]) -> PreparedFile {
+        prepare_file_with_stems(chunks, &mut self.stems)
+    }
+}
+
+#[cfg(test)]
+fn prepare_file(chunks: &[Chunk]) -> PreparedFile {
+    FilePreparer::default().prepare_file(chunks)
+}
+
+fn prepare_file_with_stems(chunks: &[Chunk], stems: &mut HashMap<String, String>) -> PreparedFile {
+    let path = chunks.first().map_or("", |chunk| chunk.path.as_str());
+    debug_assert!(chunks.iter().all(|chunk| chunk.path == path));
+    let supported = patterns().symbol_extension.is_match(path);
+    let pattern = if patterns().typed_extension.is_match(path) {
+        &patterns().typed_symbol
+    } else {
+        &patterns().symbol
+    };
+    let mut identifiers = HashSet::new();
+    let prepared = chunks
+        .iter()
+        .map(|chunk| {
+            let symbols = if supported {
+                identifiers.extend(
+                    chunk
+                        .text
+                        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned),
+                );
+                pattern
+                    .captures_iter(&chunk.text)
+                    .flat_map(|captures| {
+                        captures
+                            .iter()
+                            .skip(1)
+                            .flatten()
+                            .map(|name| name.as_str().to_owned())
+                            .collect::<Vec<_>>()
+                    })
+                    .map(|name| Symbol {
+                        field: Arc::new(words(&name, stems)),
+                        name,
+                        reference_weight: 1.0,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            PreparedChunkFeatures {
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                source_digest: Sha256::digest(chunk.text.as_bytes()).into(),
+                content: Arc::new(words(&chunk.text, stems)),
+                symbols,
+            }
+        })
+        .collect();
+    PreparedFile {
+        path: path.to_owned(),
+        path_field: Arc::new(words(path, stems)),
+        chunks: prepared,
+        identifiers,
+    }
+}
+#[derive(Clone, Copy)]
 struct Candidate<'a> {
     chunk: &'a Chunk,
     baseline: f64,
@@ -248,23 +426,89 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
     }
     ranked
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Field {
     counts: HashMap<String, usize>,
     length: usize,
 }
-#[derive(Default)]
+impl Field {
+    fn valid_for(&self, source_bytes: usize) -> bool {
+        self.length <= source_bytes
+            && self
+                .counts
+                .values()
+                .all(|&count| count > 0 && count <= self.length)
+            && self
+                .counts
+                .values()
+                .try_fold(0usize, |sum, &count| sum.checked_add(count))
+                == Some(self.length)
+            && self.counts.keys().all(|term| {
+                !term.is_empty()
+                    && term.len() <= source_bytes
+                    && term
+                        .bytes()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            })
+    }
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct FieldStats {
     documents: usize,
     total_length: usize,
     frequencies: HashMap<String, usize>,
 }
+
+/// Only corpus-wide data is saved here; token fields remain in PreparedFile.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct PreparedStatistics {
+    content: FieldStats,
+    path: FieldStats,
+    symbol: FieldStats,
+    reference_weights: Vec<Vec<f64>>,
+}
+
 impl FieldStats {
+    fn valid_for<'a>(&self, fields: impl Iterator<Item = &'a Field>) -> bool {
+        let mut documents = 0usize;
+        let mut total_length = 0usize;
+        for field in fields {
+            documents += 1;
+            let Some(length) = total_length.checked_add(field.length) else {
+                return false;
+            };
+            total_length = length;
+            if field
+                .counts
+                .keys()
+                .any(|term| !self.frequencies.contains_key(term))
+            {
+                return false;
+            }
+        }
+        self.documents == documents
+            && self.total_length == total_length
+            && self
+                .frequencies
+                .values()
+                .all(|&count| count > 0 && count <= documents)
+            && self.frequencies.keys().all(|term| {
+                !term.is_empty()
+                    && term
+                        .bytes()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            })
+    }
+
     fn add(&mut self, field: &Field) {
         self.documents += 1;
         self.total_length += field.length;
         for term in field.counts.keys() {
-            *self.frequencies.entry(term.clone()).or_default() += 1;
+            if let Some(frequency) = self.frequencies.get_mut(term) {
+                *frequency += 1;
+            } else {
+                self.frequencies.insert(term.clone(), 1);
+            }
         }
     }
     fn score(&self, field: &Field, terms: &[String]) -> f64 {
@@ -291,124 +535,219 @@ impl FieldStats {
             .sum()
     }
 }
-impl<'a> PreparedCorpus<'a> {
-    pub(crate) fn new(chunks: &'a [Chunk]) -> Self {
-        let mut stems = HashMap::new();
-        let mut words = |text: &str| {
-            let mut field = Field::default();
-            for token in tokenize(text) {
-                *field
-                    .counts
-                    .entry(normalize(token, &mut stems))
-                    .or_default() += 1;
-                field.length += 1;
+impl PreparedCorpus {
+    pub(crate) fn statistics(&self) -> PreparedStatistics {
+        PreparedStatistics {
+            content: self.content_stats.clone(),
+            path: self.path_stats.clone(),
+            symbol: self.symbol_stats.clone(),
+            reference_weights: self
+                .chunks
+                .iter()
+                .map(|chunk| {
+                    chunk
+                        .symbols
+                        .iter()
+                        .map(|symbol| symbol.reference_weight)
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+
+    /// An unchanged workspace can reuse its corpus statistics. This path is
+    /// intentionally restricted to ordered, distinct source chunks from the
+    /// workspace cache; the general constructor still accepts arbitrary input.
+    pub(crate) fn from_cached_statistics<'a>(
+        source_chunks: Arc<[Chunk]>,
+        files: impl IntoIterator<Item = &'a PreparedFile>,
+        statistics: &PreparedStatistics,
+    ) -> Result<Self> {
+        let mut chunks = Vec::with_capacity(source_chunks.len());
+        for file in files {
+            for features in &file.chunks {
+                let index = chunks.len();
+                let source = source_chunks
+                    .get(index)
+                    .context("Missing cached source chunk")?;
+                if source.path != file.path
+                    || source.start_line != features.start_line
+                    || source.end_line != features.end_line
+                {
+                    bail!("Cached corpus boundaries mismatch");
+                }
+                let weights = statistics
+                    .reference_weights
+                    .get(index)
+                    .context("Missing cached reference weights")?;
+                if weights.len() != features.symbols.len()
+                    || weights
+                        .iter()
+                        .any(|weight| !weight.is_finite() || !(1.0..=3.0).contains(weight))
+                {
+                    bail!("Invalid cached reference weights");
+                }
+                let mut symbols = features.symbols.clone();
+                for (symbol, weight) in symbols.iter_mut().zip(weights) {
+                    symbol.reference_weight = *weight;
+                }
+                chunks.push(PreparedChunk {
+                    source_index: index,
+                    content: Arc::clone(&features.content),
+                    path: Arc::clone(&file.path_field),
+                    symbols,
+                });
             }
-            field
-        };
+        }
+        if chunks.len() != source_chunks.len()
+            || statistics.reference_weights.len() != chunks.len()
+            || !statistics
+                .content
+                .valid_for(chunks.iter().map(|c| c.content.as_ref()))
+            || !statistics
+                .path
+                .valid_for(chunks.iter().map(|c| c.path.as_ref()))
+            || !statistics.symbol.valid_for(
+                chunks
+                    .iter()
+                    .flat_map(|c| c.symbols.iter().map(|s| s.field.as_ref())),
+            )
+        {
+            bail!("Invalid cached corpus statistics");
+        }
+        Ok(Self {
+            source_chunks,
+            chunks,
+            content_stats: statistics.content.clone(),
+            path_stats: statistics.path.clone(),
+            symbol_stats: statistics.symbol.clone(),
+        })
+    }
+
+    pub(crate) fn new(chunks: &[Chunk]) -> Self {
+        let mut by_path: HashMap<&str, Vec<Chunk>> = HashMap::new();
+        let mut paths = Vec::new();
+        for chunk in chunks {
+            if !by_path.contains_key(chunk.path.as_str()) {
+                paths.push(chunk.path.as_str());
+            }
+            by_path.entry(&chunk.path).or_default().push(chunk.clone());
+        }
+        let mut preparer = FilePreparer::default();
+        let files: Vec<_> = paths
+            .iter()
+            .map(|path| preparer.prepare_file(&by_path[path]))
+            .collect();
+        Self::from_files(chunks, &files).expect("freshly prepared files match their source")
+    }
+
+    pub(crate) fn from_files<'a>(
+        chunks: &[Chunk],
+        files: impl IntoIterator<Item = &'a PreparedFile>,
+    ) -> Result<Self> {
+        Self::from_shared_files(Arc::from(chunks), files)
+    }
+
+    /// Share captured source with context/preview consumers without duplicating
+    /// every source string. Prepared chunks refer only to stable array indexes.
+    pub(crate) fn from_shared_files<'a>(
+        chunks: Arc<[Chunk]>,
+        files: impl IntoIterator<Item = &'a PreparedFile>,
+    ) -> Result<Self> {
+        let mut prepared_files = HashMap::new();
+        for file in files {
+            if prepared_files.insert(file.path.as_str(), file).is_some() {
+                bail!("Duplicate prepared file");
+            }
+        }
+        let mut offsets: HashMap<&str, usize> = HashMap::new();
+        let mut seen = HashSet::new();
         let mut content_stats = FieldStats::default();
         let mut path_stats = FieldStats::default();
         let mut symbol_stats = FieldStats::default();
-        let mut path_fields = HashMap::new();
-        let mut seen = HashSet::new();
-        let mut prepared_chunks: Vec<PreparedChunk<'_>> = chunks
-            .iter()
-            // An identical source submitted twice must neither change corpus
-            // statistics nor consume a retrieval slot or earn a second vote.
-            .filter(|chunk| {
-                seen.insert((
-                    chunk.path.as_str(),
-                    chunk.start_line,
-                    chunk.end_line,
-                    chunk.text.as_str(),
-                ))
-            })
-            .map(|chunk| {
-                let content = words(&chunk.text);
-                let path = path_fields
-                    .entry(chunk.path.as_str())
-                    .or_insert_with(|| words(&chunk.path))
-                    .clone();
-                let symbol_names: Vec<&str> = if patterns().symbol_extension.is_match(&chunk.path) {
-                    let pattern = if patterns().typed_extension.is_match(&chunk.path) {
-                        &patterns().typed_symbol
-                    } else {
-                        &patterns().symbol
-                    };
-                    pattern
-                        .captures_iter(&chunk.text)
-                        .flat_map(|captures| {
-                            captures
-                                .iter()
-                                .skip(1)
-                                .flatten()
-                                .map(|name| name.as_str())
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    Vec::new()
-                };
-                let symbols = symbol_names
-                    .into_iter()
-                    .map(|name| {
-                        let field = words(name);
-                        symbol_stats.add(&field);
-                        Symbol {
-                            name,
-                            field,
-                            reference_weight: 1.0,
-                        }
-                    })
-                    .collect();
-                content_stats.add(&content);
-                path_stats.add(&path);
-                PreparedChunk {
-                    chunk,
-                    content,
-                    path,
-                    symbols,
-                }
-            })
-            .collect();
-        // Cross-file references distinguish reusable entry points from isolated
-        // declarations. Count each file once, irrespective of overlapping chunks.
-        let mut references: HashMap<&str, HashSet<&str>> = prepared_chunks
-            .iter()
-            .flat_map(|chunk| chunk.symbols.iter().map(|symbol| symbol.name))
-            .map(|name| (name, HashSet::new()))
-            .collect();
-        for chunk in chunks {
-            if !patterns().symbol_extension.is_match(&chunk.path) {
+        let mut prepared_chunks = Vec::new();
+        for (source_index, chunk) in chunks.iter().enumerate() {
+            let file = prepared_files
+                .get(chunk.path.as_str())
+                .context("Missing prepared file")?;
+            let offset = offsets.entry(&chunk.path).or_default();
+            let features = file.chunks.get(*offset).context("Missing prepared chunk")?;
+            *offset += 1;
+            if features.start_line != chunk.start_line || features.end_line != chunk.end_line {
+                bail!("Prepared chunk boundaries do not match source");
+            }
+            // Preserve input order and identical-source deduplication from the
+            // uncached corpus, including callers that provide interleaved files.
+            if !seen.insert((
+                chunk.path.as_str(),
+                chunk.start_line,
+                chunk.end_line,
+                chunk.text.as_str(),
+            )) {
                 continue;
             }
-            for identifier in chunk
-                .text
-                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-            {
-                if let Some(files) = references.get_mut(identifier) {
-                    files.insert(&chunk.path);
+            content_stats.add(&features.content);
+            path_stats.add(&file.path_field);
+            for symbol in &features.symbols {
+                symbol_stats.add(&symbol.field);
+            }
+            prepared_chunks.push(PreparedChunk {
+                source_index,
+                content: features.content.clone(),
+                path: file.path_field.clone(),
+                symbols: features.symbols.clone(),
+            });
+        }
+        if prepared_files
+            .iter()
+            .any(|(path, file)| offsets.get(path).copied().unwrap_or(0) != file.chunks.len())
+        {
+            bail!("Prepared file chunk count does not match source");
+        }
+        // Rebuild corpus-wide statistics when any file changes. Each file gets
+        // at most one reference vote, regardless of overlapping/repeated chunks.
+        let mut references: HashMap<&str, usize> = prepared_files
+            .values()
+            .flat_map(|file| file.chunks.iter())
+            .flat_map(|chunk| chunk.symbols.iter().map(|symbol| symbol.name.as_str()))
+            .map(|name| (name, 0))
+            .collect();
+        for file in prepared_files.values() {
+            for identifier in &file.identifiers {
+                if let Some(files) = references.get_mut(identifier.as_str()) {
+                    // identifiers is already distinct within this file, and
+                    // prepared_files has exactly one record per source path.
+                    *files += 1;
                 }
             }
         }
         for prepared in &mut prepared_chunks {
             for symbol in &mut prepared.symbols {
-                let other_files = references[symbol.name]
-                    .iter()
-                    .filter(|path| **path != prepared.chunk.path)
-                    .count();
-                // Bounded lexical hint, not a resolved call graph.
+                let own_file = prepared_files[chunks[prepared.source_index].path.as_str()];
+                let own_reference = usize::from(own_file.identifiers.contains(&symbol.name));
+                let other_files = references[symbol.name.as_str()] - own_reference;
                 symbol.reference_weight = 1.0 + (other_files as f64).ln_1p().min(2.0);
             }
         }
-        Self {
+        Ok(Self {
+            source_chunks: chunks,
             chunks: prepared_chunks,
             content_stats,
             path_stats,
             symbol_stats,
-        }
+        })
     }
 
     pub(crate) fn rank(&self, question: &str, include: impl Fn(&Chunk) -> bool) -> Vec<Chunk> {
+        self.rank_with_intent(question, include, RankingIntent::General)
+    }
+
+    pub(crate) fn rank_with_intent(
+        &self,
+        question: &str,
+        include: impl Fn(&Chunk) -> bool,
+        intent: RankingIntent,
+    ) -> Vec<Chunk> {
         let mut terms: Vec<String> = tokenize(question)
             .into_iter()
             .filter(|s| !STOP_WORDS.contains(&s.as_str()))
@@ -423,7 +762,8 @@ impl<'a> PreparedCorpus<'a> {
         // Rank borrowed candidates first; clone only the final shortlist.
         let mut candidates = Vec::new();
         for prepared in &self.chunks {
-            if !include(prepared.chunk) {
+            let chunk = &self.source_chunks[prepared.source_index];
+            if !include(chunk) {
                 continue;
             }
             let baseline = self.content_stats.score(&prepared.content, &terms)
@@ -438,14 +778,43 @@ impl<'a> PreparedCorpus<'a> {
                     .fold(0.0, f64::max);
             if score > 0.0 {
                 candidates.push(Candidate {
-                    chunk: prepared.chunk,
+                    chunk,
                     baseline,
                     symbol_aware: score,
                     fusion: 0.0,
                 });
             }
         }
-        fuse_candidates(candidates)
+        if !matches!(intent, RankingIntent::Implementation) {
+            return fuse_candidates(candidates);
+        }
+        // Score against the same corpus-wide statistics in both lanes. File
+        // extensions are only candidate hints: tests, callers and comments
+        // still need the reranker's implementation judgment.
+        let source = fuse_candidates(
+            candidates
+                .iter()
+                .filter(|candidate| patterns().symbol_extension.is_match(&candidate.chunk.path))
+                .copied()
+                .collect(),
+        );
+        let broad = fuse_candidates(candidates);
+        let mut selected: Vec<_> = source
+            .into_iter()
+            .take(IMPLEMENTATION_SOURCE_SLOTS)
+            .collect();
+        for candidate in broad {
+            if !selected
+                .iter()
+                .any(|previous| redundant_source(&candidate, previous))
+            {
+                selected.push(candidate);
+            }
+            if selected.len() == SHORTLIST_LIMIT {
+                break;
+            }
+        }
+        selected
     }
 }
 
@@ -454,6 +823,15 @@ impl<'a> PreparedCorpus<'a> {
 /// shortlist order is determined by rank fusion, not by sorting those scores.
 pub fn rank_lexically(chunks: &[Chunk], question: &str) -> Vec<Chunk> {
     PreparedCorpus::new(chunks).rank(question, |_| true)
+}
+/// Bound implementation retrieval without letting keyword-rich prose occupy
+/// every reranking slot. General and explanation searches retain broad ranking.
+pub fn rank_lexically_with_intent(
+    chunks: &[Chunk],
+    question: &str,
+    intent: RankingIntent,
+) -> Vec<Chunk> {
+    PreparedCorpus::new(chunks).rank_with_intent(question, |_| true, intent)
 }
 fn js_whitespace(c: char) -> bool {
     matches!(
@@ -474,6 +852,22 @@ pub fn search_workspace(cwd: &Path, question: &str) -> Result<Vec<Chunk>> {
 
 /// Read one snapshot for a multi-step investigation; no repeated filesystem scans.
 pub fn workspace_chunks(cwd: &Path) -> Result<Vec<Chunk>> {
+    Ok(workspace_files(cwd)?
+        .into_iter()
+        .flat_map(|file| chunk_text(&file.path, &file.text))
+        .collect())
+}
+
+pub(crate) struct WorkspaceFile {
+    pub path: String,
+    pub text: String,
+    /// Digest includes the original bytes, including any leading BOM.
+    pub digest: String,
+    /// Digest of the captured, BOM-normalized text, reused by syntax facts.
+    pub text_digest: [u8; 32],
+}
+
+pub(crate) fn workspace_files(cwd: &Path) -> Result<Vec<WorkspaceFile>> {
     let root = cwd
         .canonicalize()
         .context("Cannot resolve workspace root")?;
@@ -513,35 +907,252 @@ pub fn workspace_chunks(cwd: &Path) -> Result<Vec<Chunk>> {
         .collect();
     files.sort_by(|a, b| compare_text(a, b));
     files.dedup();
-    let mut chunks = vec![];
-    for file in files {
-        let read = || -> Result<Option<String>> {
-            let path = cwd.join(&file).canonicalize()?;
-            if !path.starts_with(&root) {
-                return Ok(None);
-            }
-            if fs::metadata(&path)?.len() > MAX_FILE_BYTES as u64 {
-                return Ok(None);
-            }
-            let bytes = fs::read(path).context("reading search file")?;
-            if bytes.len() > MAX_FILE_BYTES || bytes.contains(&0) {
-                return Ok(None);
-            }
-            // TextDecoder strips one leading UTF-8 BOM by default.
-            let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
-            Ok(std::str::from_utf8(bytes).ok().map(str::to_owned))
-        };
-        if let Ok(Some(text)) = read()
-            && !text.trim_matches(js_whitespace).is_empty()
-        {
-            chunks.extend(chunk_text(&file, &text));
-        }
+    // Bound concurrency independently of repository size. Small scopes avoid
+    // thread startup overhead; every accepted file is still read and hashed.
+    let workers = if files.len() < 64 {
+        1
+    } else {
+        thread::available_parallelism().map_or(1, |count| count.get().min(4))
+    };
+    read_workspace_paths(&root, &files, workers)
+}
+
+fn read_workspace_file(root: &Path, file: &str) -> Result<Option<WorkspaceFile>> {
+    let path = root.join(file).canonicalize()?;
+    if !path.starts_with(root) {
+        return Ok(None);
     }
-    Ok(chunks)
+    let handle = fs::File::open(path).context("opening search file")?;
+    let metadata = handle.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+        return Ok(None);
+    }
+    // A file growing after the metadata check cannot cause an unbounded read.
+    let mut bytes = Vec::with_capacity(metadata.len() as usize + 1);
+    handle
+        .take(MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("reading search file")?;
+    if bytes.len() > MAX_FILE_BYTES || bytes.contains(&0) {
+        return Ok(None);
+    }
+    let raw_digest = Sha256::digest(&bytes);
+    let digest = format!("{raw_digest:x}");
+    // TextDecoder strips one leading UTF-8 BOM by default.
+    let (bytes, text_digest) = match bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        Some(text) => (text, Sha256::digest(text).into()),
+        None => (bytes.as_slice(), raw_digest.into()),
+    };
+    Ok(std::str::from_utf8(bytes).ok().and_then(|text| {
+        (!text.trim_matches(js_whitespace).is_empty()).then(|| WorkspaceFile {
+            path: file.to_owned(),
+            text: text.to_owned(),
+            digest,
+            text_digest,
+        })
+    }))
+}
+
+fn read_workspace_paths(
+    root: &Path,
+    files: &[String],
+    workers: usize,
+) -> Result<Vec<WorkspaceFile>> {
+    let read_batch = |batch: &[String]| {
+        batch
+            .iter()
+            .filter_map(|file| read_workspace_file(root, file).ok().flatten())
+            .collect::<Vec<_>>()
+    };
+    if workers <= 1 || files.is_empty() {
+        return Ok(read_batch(files));
+    }
+    thread::scope(|scope| {
+        let batches: Vec<_> = files
+            .chunks(files.len().div_ceil(workers.min(4)))
+            .map(|batch| {
+                match thread::Builder::new().spawn_scoped(scope, move || read_batch(batch)) {
+                    Ok(handle) => Ok(handle),
+                    // Resource-constrained hosts can keep using serial reads.
+                    Err(_) => Err(read_batch(batch)),
+                }
+            })
+            .collect();
+        let mut accepted = Vec::new();
+        let mut failure = None;
+        // Joining in batch order preserves the deterministic discovery order.
+        for batch in batches {
+            let result = match batch {
+                Ok(handle) => handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Search file reader failed")),
+                Err(files) => Ok(files),
+            };
+            match result {
+                Ok(files) => accepted.extend(files),
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(accepted),
+        }
+    })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_file_reads_preserve_order_bytes_and_eligibility() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let mut files = Vec::new();
+        for index in 0..96 {
+            let path = format!("{index:03}.rs");
+            fs::write(
+                root.join(&path),
+                format!("\u{feff}fn archive_{index}() {{}}\r\n// 🦀\r\n"),
+            )
+            .unwrap();
+            files.push(path);
+        }
+        for (path, bytes) in [
+            ("binary", b"a\0b".to_vec()),
+            ("invalid", vec![0xff]),
+            ("large", vec![b'x'; MAX_FILE_BYTES + 1]),
+            ("blank", b" \n\r\t".to_vec()),
+        ] {
+            fs::write(root.join(path), bytes).unwrap();
+            files.push(path.into());
+        }
+        files.push("missing".into());
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("external.rs"), "fn external() {}").unwrap();
+        files.push(outside.path().join("external.rs").to_str().unwrap().into());
+        let serial = read_workspace_paths(&root, &files, 1).unwrap();
+        assert_eq!(serial.len(), 96);
+        for _ in 0..3 {
+            let parallel = read_workspace_paths(&root, &files, 4).unwrap();
+            assert_eq!(
+                serial
+                    .iter()
+                    .map(|file| (&file.path, &file.text, &file.digest))
+                    .collect::<Vec<_>>(),
+                parallel
+                    .iter()
+                    .map(|file| (&file.path, &file.text, &file.digest))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert!(serial[0].text.starts_with("fn archive_0"));
+        assert!(serial[0].text.ends_with("// 🦀\r\n"));
+        assert!(read_workspace_paths(&root, &[], 4).unwrap().is_empty());
+    }
+
+    #[test]
+    fn persisted_features_preserve_scores_and_source_order() {
+        let first = chunk_text("engine.rs", "pub fn parse_ledger() { load_accounts(); }\n");
+        let second = chunk_text(
+            "client.ts",
+            "export function loadAccounts() { parse_ledger(); }\n",
+        );
+        let docs = chunk_text("guide.md", "The ledger parser loads account records.\n");
+        let mut chunks = Vec::new();
+        chunks.extend(second.clone());
+        chunks.extend(first.clone());
+        chunks.extend(docs.clone());
+        // Duplicate and interleaved inputs are supported by the public ranker.
+        chunks.extend(first.clone());
+        let mut repeated_first = first.clone();
+        repeated_first.extend(first);
+        let files: Vec<PreparedFile> = [&repeated_first[..], &second, &docs]
+            .into_iter()
+            .map(|file| {
+                let prepared = prepare_file(file);
+                let encoded = serde_json::to_vec(&prepared).unwrap();
+                let decoded: PreparedFile = serde_json::from_slice(&encoded).unwrap();
+                assert!(decoded.matches(file));
+                decoded
+            })
+            .collect();
+        let restored = PreparedCorpus::from_files(&chunks, &files).unwrap();
+        let fresh = PreparedCorpus::new(&chunks);
+        for question in [
+            "ledger parser",
+            "loading accounts",
+            "parse_ledger",
+            "unmatched",
+            "",
+        ] {
+            assert_eq!(
+                restored.rank(question, |_| true),
+                fresh.rank(question, |_| true)
+            );
+            assert_eq!(
+                restored.rank(question, |c| c.path.ends_with(".rs")),
+                fresh.rank(question, |c| c.path.ends_with(".rs"))
+            );
+        }
+    }
+
+    #[test]
+    fn reused_identifiers_notice_new_declarations_and_removed_callers() {
+        let callers = chunk_text("client.rs", "fn existing_client() { parse_ledger(); }\n");
+        // Prepare before a declaration exists. Caching only names known to the
+        // old corpus would miss this reference when the implementation appears.
+        let retained = prepare_file(&callers);
+        assert!(retained.identifiers.contains("parse_ledger"));
+        let implementation = chunk_text("engine.rs", "pub fn parse_ledger() {}\n");
+        let new_file = prepare_file(&implementation);
+        let mut combined = implementation.clone();
+        combined.extend(callers);
+        let refreshed = PreparedCorpus::from_files(&combined, [&new_file, &retained]).unwrap();
+        assert_eq!(
+            refreshed.rank("parse ledger", |_| true),
+            rank_lexically(&combined, "parse ledger")
+        );
+        assert_eq!(
+            refreshed.chunks[0].symbols[0].reference_weight,
+            1.0 + 2.0_f64.ln()
+        );
+        let removed = PreparedCorpus::from_files(&implementation, [&new_file]).unwrap();
+        assert_eq!(removed.chunks[0].symbols[0].reference_weight, 1.0);
+        assert_eq!(
+            removed.rank("parse ledger", |_| true),
+            rank_lexically(&implementation, "parse ledger")
+        );
+    }
+
+    #[test]
+    fn invalid_prepared_records_are_rejected() {
+        let chunks = chunk_text("engine.rs", "fn parse_ledger() {}\n");
+        let prepared = prepare_file(&chunks);
+        assert!(prepared.matches(&chunks));
+        let changed = chunk_text("engine.rs", "fn other_ledger() {}\n");
+        assert!(!prepared.matches(&changed));
+        let renamed = chunk_text("renamed.rs", "fn parse_ledger() {}\n");
+        assert!(!prepared.matches(&renamed));
+        let mut corrupt = prepared.clone();
+        Arc::make_mut(&mut corrupt.chunks[0].content).length = usize::MAX;
+        assert!(!corrupt.matches(&chunks));
+        let mut corrupt = prepared.clone();
+        Arc::make_mut(&mut corrupt.chunks[0].content)
+            .counts
+            .insert("parse".into(), usize::MAX);
+        assert!(!corrupt.matches(&chunks));
+        let mut corrupt = prepared.clone();
+        corrupt.chunks[0].symbols[0].name = "not_in_source".into();
+        assert!(!corrupt.matches(&chunks));
+        assert!(PreparedCorpus::from_files(&chunks, []).is_err());
+        assert!(PreparedCorpus::from_files(&chunks, [&prepared, &prepared]).is_err());
+        let mut corrupt = prepared;
+        corrupt.chunks.clear();
+        assert!(PreparedCorpus::from_files(&chunks, [&corrupt]).is_err());
+    }
+
     #[test]
     fn code_names_and_word_variants() {
         assert_eq!(

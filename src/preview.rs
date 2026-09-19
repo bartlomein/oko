@@ -19,6 +19,7 @@ const MIN_TEXT_BYTES: usize = 64;
 const HEADER_LINES: usize = 4;
 const SIGNATURE_SCAN_LINES: usize = 64;
 const CONTEXT_LINES: usize = 12;
+const BLOCK_LINES: usize = 12;
 const OMITTED: &str = "[omitted]";
 const TRUNCATED: &str = "[truncated]";
 
@@ -292,6 +293,16 @@ impl<'a> PreparedPreview<'a> {
                 }
             }
         }
+        // A predicate alone cannot show whether matching records are retained,
+        // rejected or transformed. Reserve a small, contiguous decision block
+        // before isolated keyword matches spend the preview allowance.
+        if let Some(block) = scored.iter().find_map(|&(index, count)| {
+            (count > 0)
+                .then(|| decision_block(&lines, index, &chunk.path))
+                .flatten()
+        }) {
+            priority.extend(block);
+        }
         // Prefer covering different parts of the question before repeating
         // the same keyword-heavy comments or diagnostics. This is source- and
         // language-independent, and bounded even for a very long question.
@@ -496,6 +507,64 @@ fn is_body_evidence(line: &str) -> bool {
         && !line.starts_with("/*")
         && !line.starts_with('*')
         && line.chars().any(|ch| ch.is_alphanumeric())
+}
+
+/// A bounded context hint, not a parser or a claim that the block is complete.
+/// Indentation identifies nearby children without counting delimiters inside
+/// strings/comments. Unindented/minified code keeps the ordinary preview path.
+fn decision_block(lines: &[&str], anchor: usize, path: &str) -> Option<Vec<usize>> {
+    let extension = path.rsplit_once('.')?.1;
+    if !matches!(
+        extension,
+        "rs" | "js"
+            | "mjs"
+            | "cjs"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "py"
+            | "pyi"
+            | "go"
+            | "java"
+            | "cs"
+            | "c"
+            | "h"
+            | "cc"
+            | "cpp"
+            | "hpp"
+            | "swift"
+            | "kt"
+    ) {
+        return None;
+    }
+    let line = lines[anchor].trim();
+    let keyword = line.split(|ch: char| !ch.is_ascii_alphabetic()).next()?;
+    if !matches!(keyword, "if" | "for" | "while" | "match" | "switch")
+        || !(line.ends_with('{') || (matches!(extension, "py" | "pyi") && line.ends_with(':')))
+    {
+        return None;
+    }
+    let indent = indentation(lines[anchor]);
+    let mut block = vec![anchor];
+    for (index, line) in lines
+        .iter()
+        .enumerate()
+        .take(anchor + BLOCK_LINES)
+        .skip(anchor + 1)
+    {
+        if line.trim().is_empty() {
+            block.push(index);
+            continue;
+        }
+        if indentation(line) <= indent {
+            if line.trim_start().starts_with('}') {
+                block.push(index);
+            }
+            break;
+        }
+        block.push(index);
+    }
+    (block.len() > 1).then_some(block)
 }
 
 fn is_declaration(line: &str, path: &str) -> bool {

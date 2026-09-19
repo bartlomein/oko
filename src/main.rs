@@ -340,15 +340,19 @@ fn run() -> Result<()> {
             }
         }
     } else {
+        if parsed.deep && key.is_none() {
+            bail!("TYPESAFE_API_KEY is required for --deep investigation.");
+        }
+        let workspace = oko::search_cache::WorkspaceCache::new().load(&cwd)?;
+        let snapshot = workspace.snapshot;
         let mut investigation = None;
         let results = if parsed.deep {
             let key = key
                 .as_deref()
                 .context("TYPESAFE_API_KEY is required for --deep investigation.")?;
-            let corpus = search::workspace_chunks(&cwd)?;
-            let run = oko::investigate::investigate_with(
+            let run = oko::investigate::investigate_snapshot_with(
                 &parsed.question,
-                &corpus,
+                &snapshot,
                 parsed.intent,
                 parsed.max_steps,
                 |request| oko::ranking::call_jev(request, key),
@@ -373,12 +377,15 @@ fn run() -> Result<()> {
             investigation = Some(metadata);
             results
         } else {
-            let corpus = search::workspace_chunks(&cwd)?;
-            let shortlist = search::rank_lexically(&corpus, &parsed.question);
+            let shortlist = if parsed.no_jev {
+                snapshot.rank(&parsed.question)
+            } else {
+                snapshot.rank_with_intent(&parsed.question, parsed.intent)
+            };
             rank_code(
                 &parsed.question,
                 &shortlist,
-                &corpus,
+                snapshot.chunks(),
                 key,
                 parsed.no_jev,
                 parsed.intent,
@@ -390,6 +397,7 @@ fn run() -> Result<()> {
         }
         if parsed.json {
             let mut output = serde_json::json!({"question": parsed.question, "ranking": if parsed.no_jev { "lexical" } else { "jev" }, "results": results});
+            output["cache"] = serde_json::to_value(workspace.timings)?;
             if let Some(metadata) = investigation {
                 output["investigation"] = metadata;
             }
