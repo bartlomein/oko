@@ -1,13 +1,15 @@
 # Oko
 
-**Help your coding agent find the right code with fewer searches.**
+**Help your coding agent find code faster and use fewer tokens.**
 
-Oko gives Codex, Claude Code, and OpenCode relevant source snippets through MCP,
-helping reduce repeated searches, file reads, and tokens spent exploring your
-codebase. It runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to
-rank results. You can also use it directly from your terminal.
+Oko helps Codex, Claude Code, and OpenCode spend less time searching and fewer
+tokens reading irrelevant code. It delivers relevant source snippets through
+MCP so your agent can get to the task sooner. Gains vary by task and coding tool.
 
-[Install](#install) · [Connect your coding tool](#connect-your-coding-tool) · [CLI examples](#use-in-your-terminal) · [Documentation](#documentation)
+Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
+source snippets. Use it through your coding agent or directly from your terminal.
+
+[Install](#install) · [Connect your coding tool](#connect-your-coding-tool) · [Benchmarks](#benchmarks) · [CLI examples](#use-in-your-terminal) · [Documentation](#documentation)
 
 ```sh
 oko ask "where is authentication handled?"
@@ -149,6 +151,31 @@ Jev requests and can take longer. `--no-jev` uses local keyword ranking only.
 
 To replace, check, or remove your saved key, use `oko auth login`,
 `oko auth status`, or `oko auth logout`.
+
+## Benchmarks
+
+In a **108-session pilot** on Astro, HTTPX, and ripgrep, we compared each coding
+tool with and without Oko on the same six search and six small editing tasks.
+These are **average seconds and agent tokens per task**, not isolated search timings.
+
+| Coding tool | Without Oko | Warm Oko | Cold Oko |
+| --- | --- | --- | --- |
+| Codex — time | 27.7 s | 25.7 s (**7.4% less**) | 28.9 s (**4.0% more**) |
+| Codex — tokens | 76,022 | 64,336 (**15.4% fewer**) | 61,073 (**19.7% fewer**) |
+| OpenCode — time | 25.7 s | 21.1 s (**18.0% less**) | 23.7 s (**8.0% less**) |
+| OpenCode — tokens | 35,772 | 19,252 (**46.2% fewer**) | 19,624 (**45.1% fewer**) |
+| Claude Code — time | 11.0 s | 9.1 s (**17.1% less**) | 9.1 s (**17.1% less**) |
+| Claude Code — tokens | 29,093 | 25,772 (**11.4% fewer**) | 23,274 (**20.0% fewer**) |
+
+Warm means a prebuilt disk index; its preparation is excluded from timing. Cold
+starts with an empty Oko cache. Tokens include cached input and exclude Jev,
+so these percentages are not dollar savings. One observation per task and
+condition; results vary, and cold Oko was slower for Codex in this run.
+
+Automated grading passed 92/108 sessions. Review found correct source evidence
+and passing focused edit checks in the flagged cases, with one response-format
+violation remaining. See [results, methodology, and grading limitations](docs/benchmark-results.md)
+and the [reproduction instructions](scripts/benchmark-public/README.md).
 
 ## Privacy
 

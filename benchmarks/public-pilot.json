@@ -1,0 +1,2221 @@
+{
+  "description": "Sanitized observations from the 108-session public-repository pilot. Grades are the original automated grades, before manual review.",
+  "settings": {
+    "astro": {
+      "commit": "db2eaf17ce84a5f75c5eab30f4ae15af32de1a13",
+      "versions": {
+        "codex": "codex-cli 0.155.0",
+        "opencode": "1.18.31",
+        "claude": "2.1.278 (Claude Code)"
+      },
+      "models": {
+        "codex": "gpt-5.6-sol",
+        "opencode": "openai/gpt-5.6-sol",
+        "claude": "claude-sonnet-5"
+      },
+      "effort": "low",
+      "jevModel": "jev-1.13.0",
+      "okoSha256": "658becc26d7050b369c2d467c91a74e3ca4083a3ec59fd5ecaea8a562663de69",
+      "tasksSha256": "bc545312fb239a25ec0c8f5dee088a018c269efad5fc89912e8aaa64e029fcc0",
+      "implementationSha256": "8ba2933f812c8ce35bcbfb62a6188df79759f88ac6c931b8c1806836fe5af72a"
+    },
+    "httpx": {
+      "commit": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+      "versions": {
+        "codex": "codex-cli 0.155.0",
+        "opencode": "1.18.31",
+        "claude": "2.1.278 (Claude Code)"
+      },
+      "models": {
+        "codex": "gpt-5.6-sol",
+        "opencode": "openai/gpt-5.6-sol",
+        "claude": "claude-sonnet-5"
+      },
+      "effort": "low",
+      "jevModel": "jev-1.13.0",
+      "okoSha256": "658becc26d7050b369c2d467c91a74e3ca4083a3ec59fd5ecaea8a562663de69",
+      "tasksSha256": "bc545312fb239a25ec0c8f5dee088a018c269efad5fc89912e8aaa64e029fcc0",
+      "implementationSha256": "8ba2933f812c8ce35bcbfb62a6188df79759f88ac6c931b8c1806836fe5af72a"
+    },
+    "ripgrep": {
+      "commit": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "versions": {
+        "codex": "codex-cli 0.155.0",
+        "opencode": "1.18.31",
+        "claude": "2.1.278 (Claude Code)"
+      },
+      "models": {
+        "codex": "gpt-5.6-sol",
+        "opencode": "openai/gpt-5.6-sol",
+        "claude": "claude-sonnet-5"
+      },
+      "effort": "low",
+      "jevModel": "jev-1.13.0",
+      "okoSha256": "658becc26d7050b369c2d467c91a74e3ca4083a3ec59fd5ecaea8a562663de69",
+      "tasksSha256": "bc545312fb239a25ec0c8f5dee088a018c269efad5fc89912e8aaa64e029fcc0",
+      "implementationSha256": "8ba2933f812c8ce35bcbfb62a6188df79759f88ac6c931b8c1806836fe5af72a"
+    }
+  },
+  "runs": [
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 29.974327208008617,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 110090,
+        "uncachedInput": 25337,
+        "cacheRead": 83712,
+        "cacheWrite": 0,
+        "output": 1041
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 18.986334042157978,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 41592,
+        "uncachedInput": 11819,
+        "cacheRead": 29440,
+        "cacheWrite": 0,
+        "output": 333
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 13.330324000213295,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 31283,
+        "uncachedInput": 13260,
+        "cacheRead": 17792,
+        "cacheWrite": 0,
+        "output": 231
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 22.132877542171627,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 29268,
+        "uncachedInput": 17454,
+        "cacheRead": 11136,
+        "cacheWrite": 0,
+        "output": 678
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 11.319556457921863,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 9195,
+        "uncachedInput": 5663,
+        "cacheRead": 3328,
+        "cacheWrite": 0,
+        "output": 204
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 11.175078125204891,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 8756,
+        "uncachedInput": 5299,
+        "cacheRead": 3328,
+        "cacheWrite": 0,
+        "output": 129
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 5.541967374738306,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 12339,
+        "uncachedInput": 4,
+        "cacheRead": 5504,
+        "cacheWrite": 6705,
+        "output": 126
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 6.34088349994272,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 16397,
+        "uncachedInput": 6,
+        "cacheRead": 12670,
+        "cacheWrite": 3380,
+        "output": 341
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-internal-path",
+      "repository": "astro",
+      "kind": "search",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 4.99648420792073,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 12340,
+        "uncachedInput": 4,
+        "cacheRead": 9755,
+        "cacheWrite": 2455,
+        "output": 126
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 12.659868000075221,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 7492,
+        "uncachedInput": 4083,
+        "cacheRead": 3328,
+        "cacheWrite": 0,
+        "output": 81
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 15.346656457986683,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 13408,
+        "uncachedInput": 6429,
+        "cacheRead": 6656,
+        "cacheWrite": 0,
+        "output": 323
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 12.228704375214875,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 13572,
+        "uncachedInput": 5427,
+        "cacheRead": 7936,
+        "cacheWrite": 0,
+        "output": 209
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 5.951985584106296,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18694,
+        "uncachedInput": 6,
+        "cacheRead": 16151,
+        "cacheWrite": 2304,
+        "output": 233
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 5.998225333169103,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18857,
+        "uncachedInput": 6,
+        "cacheRead": 16173,
+        "cacheWrite": 2435,
+        "output": 243
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 10.317926834337413,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 28147,
+        "uncachedInput": 10,
+        "cacheRead": 24753,
+        "cacheWrite": 2765,
+        "output": 619
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 14.830788209103048,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 28230,
+        "uncachedInput": 6765,
+        "cacheRead": 21120,
+        "cacheWrite": 0,
+        "output": 345
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 20.32860879180953,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 52625,
+        "uncachedInput": 11992,
+        "cacheRead": 40192,
+        "cacheWrite": 0,
+        "output": 441
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-proxy-priority",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 18.256834749598056,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 42813,
+        "uncachedInput": 12531,
+        "cacheRead": 29952,
+        "cacheWrite": 0,
+        "output": 330
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 4.645573459099978,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 12243,
+        "uncachedInput": 4,
+        "cacheRead": 9773,
+        "cacheWrite": 2340,
+        "output": 126
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 5.142220875248313,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 16475,
+        "uncachedInput": 6,
+        "cacheRead": 13038,
+        "cacheWrite": 3096,
+        "output": 335
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 3.98471995908767,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 12243,
+        "uncachedInput": 4,
+        "cacheRead": 9773,
+        "cacheWrite": 2340,
+        "output": 126
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 11.683523832820356,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 30791,
+        "uncachedInput": 13717,
+        "cacheRead": 16896,
+        "cacheWrite": 0,
+        "output": 178
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 24.78556350013241,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 75536,
+        "uncachedInput": 20105,
+        "cacheRead": 54912,
+        "cacheWrite": 0,
+        "output": 519
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 12.641630332916975,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 30252,
+        "uncachedInput": 3253,
+        "cacheRead": 26752,
+        "cacheWrite": 0,
+        "output": 247
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 9.396185167133808,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 7652,
+        "uncachedInput": 4225,
+        "cacheRead": 3328,
+        "cacheWrite": 0,
+        "output": 99
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 10.709802667144686,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 7674,
+        "uncachedInput": 4239,
+        "cacheRead": 3328,
+        "cacheWrite": 0,
+        "output": 107
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-overflow",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 11.935958165675402,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 12076,
+        "uncachedInput": 8211,
+        "cacheRead": 3712,
+        "cacheWrite": 0,
+        "output": 153
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 16.816759624984115,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 8988,
+        "uncachedInput": 5397,
+        "cacheRead": 3328,
+        "cacheWrite": 0,
+        "output": 263
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 25.05978308338672,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 43719,
+        "uncachedInput": 14648,
+        "cacheRead": 28416,
+        "cacheWrite": 0,
+        "output": 655
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 17.38528608297929,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 14700,
+        "uncachedInput": 9284,
+        "cacheRead": 5120,
+        "cacheWrite": 0,
+        "output": 296
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.209039916284382,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 32564,
+        "uncachedInput": 8,
+        "cacheRead": 26963,
+        "cacheWrite": 5123,
+        "output": 470
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.893741875421256,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 31067,
+        "uncachedInput": 8,
+        "cacheRead": 25964,
+        "cacheWrite": 4624,
+        "output": 471
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 10.976483749691397,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 33722,
+        "uncachedInput": 10,
+        "cacheRead": 27985,
+        "cacheWrite": 5023,
+        "output": 704
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 23.022636292036623,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 64413,
+        "uncachedInput": 16899,
+        "cacheRead": 46976,
+        "cacheWrite": 0,
+        "output": 538
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 17.126693541184068,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 48226,
+        "uncachedInput": 16237,
+        "cacheRead": 31616,
+        "cacheWrite": 0,
+        "output": 373
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-slash-redirect",
+      "repository": "astro",
+      "kind": "search",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 16.739068584050983,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 49038,
+        "uncachedInput": 17488,
+        "cacheRead": 31104,
+        "cacheWrite": 0,
+        "output": 446
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 12.901794792152941,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 33434,
+        "uncachedInput": 10,
+        "cacheRead": 27953,
+        "cacheWrite": 4444,
+        "output": 1027
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 8.619706499855965,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 28836,
+        "uncachedInput": 8,
+        "cacheRead": 24720,
+        "cacheWrite": 3663,
+        "output": 445
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 8.805912083014846,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 29918,
+        "uncachedInput": 8,
+        "cacheRead": 25544,
+        "cacheWrite": 3964,
+        "output": 402
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 33.68123908294365,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 58922,
+        "uncachedInput": 14702,
+        "cacheRead": 43392,
+        "cacheWrite": 0,
+        "output": 828
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 24.579240459017456,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 62483,
+        "uncachedInput": 20444,
+        "cacheRead": 41216,
+        "cacheWrite": 0,
+        "output": 823
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 29.749523541890085,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 70072,
+        "uncachedInput": 27997,
+        "cacheRead": 41216,
+        "cacheWrite": 0,
+        "output": 859
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 19.512336832936853,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20242,
+        "uncachedInput": 10937,
+        "cacheRead": 8832,
+        "cacheWrite": 0,
+        "output": 473
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 21.57321441685781,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20720,
+        "uncachedInput": 12551,
+        "cacheRead": 7680,
+        "cacheWrite": 0,
+        "output": 489
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-multipart-length",
+      "repository": "httpx",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 19.428029832895845,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 19199,
+        "uncachedInput": 9869,
+        "cacheRead": 8832,
+        "cacheWrite": 0,
+        "output": 498
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 36.156804791651666,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 86080,
+        "uncachedInput": 16246,
+        "cacheRead": 68608,
+        "cacheWrite": 0,
+        "output": 1226
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 46.67742716567591,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 90535,
+        "uncachedInput": 20259,
+        "cacheRead": 68992,
+        "cacheWrite": 0,
+        "output": 1284
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 39.73395504197106,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 95296,
+        "uncachedInput": 26434,
+        "cacheRead": 67840,
+        "cacheWrite": 0,
+        "output": 1022
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 41.157833917066455,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 68529,
+        "uncachedInput": 16781,
+        "cacheRead": 50560,
+        "cacheWrite": 0,
+        "output": 1188
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 45.199132749810815,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 34792,
+        "uncachedInput": 13877,
+        "cacheRead": 19584,
+        "cacheWrite": 0,
+        "output": 1331
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 35.83415595814586,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 25352,
+        "uncachedInput": 9860,
+        "cacheRead": 14592,
+        "cacheWrite": 0,
+        "output": 900
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 17.743613542057574,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 62488,
+        "uncachedInput": 14,
+        "cacheRead": 54131,
+        "cacheWrite": 6961,
+        "output": 1382
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 18.723290708381683,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 66252,
+        "uncachedInput": 16,
+        "cacheRead": 58887,
+        "cacheWrite": 6147,
+        "output": 1202
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-hidden-walk",
+      "repository": "ripgrep",
+      "kind": "search",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 15.965195792261511,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 36914,
+        "uncachedInput": 10,
+        "cacheRead": 31692,
+        "cacheWrite": 3957,
+        "output": 1255
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.12596333399415,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20990,
+        "uncachedInput": 6,
+        "cacheRead": 17971,
+        "cacheWrite": 2462,
+        "output": 551
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.639220125041902,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 24163,
+        "uncachedInput": 8,
+        "cacheRead": 21160,
+        "cacheWrite": 2350,
+        "output": 645
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 7.768535790964961,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20942,
+        "uncachedInput": 6,
+        "cacheRead": 17984,
+        "cacheWrite": 2476,
+        "output": 476
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 33.28109583305195,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 73901,
+        "uncachedInput": 7269,
+        "cacheRead": 65792,
+        "cacheWrite": 0,
+        "output": 840
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 29.04360841680318,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 54494,
+        "uncachedInput": 4308,
+        "cacheRead": 49536,
+        "cacheWrite": 0,
+        "output": 650
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 25.19190637487918,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 55677,
+        "uncachedInput": 22929,
+        "cacheRead": 32128,
+        "cacheWrite": 0,
+        "output": 620
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 30.70286470791325,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 46221,
+        "uncachedInput": 18975,
+        "cacheRead": 26624,
+        "cacheWrite": 0,
+        "output": 622
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 22.890351249836385,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 19202,
+        "uncachedInput": 10434,
+        "cacheRead": 8320,
+        "cacheWrite": 0,
+        "output": 448
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-query-delimiter",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 21.492680500261486,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 17962,
+        "uncachedInput": 9577,
+        "cacheRead": 7936,
+        "cacheWrite": 0,
+        "output": 449
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 25.02399208303541,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 50743,
+        "uncachedInput": 4200,
+        "cacheRead": 45824,
+        "cacheWrite": 0,
+        "output": 719
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 21.8285562498495,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 55656,
+        "uncachedInput": 8375,
+        "cacheRead": 46720,
+        "cacheWrite": 0,
+        "output": 561
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 22.05595333315432,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 54322,
+        "uncachedInput": 7422,
+        "cacheRead": 46336,
+        "cacheWrite": 0,
+        "output": 564
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 18.256532582920045,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18042,
+        "uncachedInput": 5156,
+        "cacheRead": 12416,
+        "cacheWrite": 0,
+        "output": 470
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 24.506596208084375,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 22278,
+        "uncachedInput": 10292,
+        "cacheRead": 11392,
+        "cacheWrite": 0,
+        "output": 594
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 19.430879374966025,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18033,
+        "uncachedInput": 5145,
+        "cacheRead": 12416,
+        "cacheWrite": 0,
+        "output": 472
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 8.831498832907528,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20891,
+        "uncachedInput": 6,
+        "cacheRead": 17947,
+        "cacheWrite": 2425,
+        "output": 513
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 8.489427958149463,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20890,
+        "uncachedInput": 6,
+        "cacheRead": 17951,
+        "cacheWrite": 2427,
+        "output": 506
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-empty-unquote",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 7.703086333815008,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 16925,
+        "uncachedInput": 6,
+        "cacheRead": 14709,
+        "cacheWrite": 1700,
+        "output": 510
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 30.671560375019908,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 28999,
+        "uncachedInput": 14167,
+        "cacheRead": 13952,
+        "cacheWrite": 0,
+        "output": 880
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 29.850020959042013,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 28809,
+        "uncachedInput": 13975,
+        "cacheRead": 13952,
+        "cacheWrite": 0,
+        "output": 882
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 29.797983707860112,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 36947,
+        "uncachedInput": 10056,
+        "cacheRead": 25984,
+        "cacheWrite": 0,
+        "output": 907
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 12.647941874805838,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 31100,
+        "uncachedInput": 8,
+        "cacheRead": 26229,
+        "cacheWrite": 3883,
+        "output": 980
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 19.930069250054657,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 49698,
+        "uncachedInput": 12,
+        "cacheRead": 41738,
+        "cacheWrite": 6150,
+        "output": 1798
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 13.865364500321448,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 33196,
+        "uncachedInput": 8,
+        "cacheRead": 27470,
+        "cacheWrite": 4683,
+        "output": 1035
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 36.03886012500152,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 71319,
+        "uncachedInput": 14460,
+        "cacheRead": 55680,
+        "cacheWrite": 0,
+        "output": 1179
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 40.39009670820087,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 126477,
+        "uncachedInput": 18944,
+        "cacheRead": 106240,
+        "cacheWrite": 0,
+        "output": 1293
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "ripgrep-lowercase-size",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 35.664228999987245,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 71382,
+        "uncachedInput": 14522,
+        "cacheRead": 55680,
+        "cacheWrite": 0,
+        "output": 1180
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": false
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 42.63540879217908,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 102390,
+        "uncachedInput": 11416,
+        "cacheRead": 89600,
+        "cacheWrite": 0,
+        "output": 1374
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 42.00818604091182,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 157391,
+        "uncachedInput": 20229,
+        "cacheRead": 135808,
+        "cacheWrite": 0,
+        "output": 1354
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 29.093225667253137,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 117193,
+        "uncachedInput": 19574,
+        "cacheRead": 96640,
+        "cacheWrite": 0,
+        "output": 979
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 34.72391504095867,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 43062,
+        "uncachedInput": 9722,
+        "cacheRead": 32512,
+        "cacheWrite": 0,
+        "output": 828
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 40.92779358383268,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 62948,
+        "uncachedInput": 13469,
+        "cacheRead": 48640,
+        "cacheWrite": 0,
+        "output": 839
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 41.75887308316305,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 38582,
+        "uncachedInput": 22455,
+        "cacheRead": 15360,
+        "cacheWrite": 0,
+        "output": 767
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.811034165788442,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 21315,
+        "uncachedInput": 6,
+        "cacheRead": 18011,
+        "cacheWrite": 2600,
+        "output": 698
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 10.188158083241433,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 21302,
+        "uncachedInput": 6,
+        "cacheRead": 18014,
+        "cacheWrite": 2583,
+        "output": 699
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "astro-file-extension",
+      "repository": "astro",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 11.735407833009958,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 23585,
+        "uncachedInput": 8,
+        "cacheRead": 20557,
+        "cacheWrite": 2155,
+        "output": 865
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 19.94667866686359,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18804,
+        "uncachedInput": 10373,
+        "cacheRead": 7936,
+        "cacheWrite": 0,
+        "output": 495
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 34.487189082894474,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18757,
+        "uncachedInput": 10325,
+        "cacheRead": 7936,
+        "cacheWrite": 0,
+        "output": 496
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 22.85971337510273,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 22381,
+        "uncachedInput": 10330,
+        "cacheRead": 11520,
+        "cacheWrite": 0,
+        "output": 531
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.150249290745705,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18833,
+        "uncachedInput": 6,
+        "cacheRead": 15341,
+        "cacheWrite": 2746,
+        "output": 740
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.279396041762084,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 21966,
+        "uncachedInput": 6,
+        "cacheRead": 18222,
+        "cacheWrite": 3074,
+        "output": 664
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.420266833622009,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 21975,
+        "uncachedInput": 6,
+        "cacheRead": 18218,
+        "cacheWrite": 3071,
+        "output": 680
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 22.329685665667057,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 56801,
+        "uncachedInput": 5132,
+        "cacheRead": 51072,
+        "cacheWrite": 0,
+        "output": 597
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 27.793538582976907,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 56144,
+        "uncachedInput": 9414,
+        "cacheRead": 46080,
+        "cacheWrite": 0,
+        "output": 650
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "httpx-closed-stream",
+      "repository": "httpx",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 36.19524599984288,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 55263,
+        "uncachedInput": 12687,
+        "cacheRead": 41856,
+        "cacheWrite": 0,
+        "output": 720
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "native",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 9.909578541759402,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 25243,
+        "uncachedInput": 8,
+        "cacheRead": 21898,
+        "cacheWrite": 2700,
+        "output": 637
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "warm",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 8.516521791927516,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20863,
+        "uncachedInput": 6,
+        "cacheRead": 17963,
+        "cacheWrite": 2435,
+        "output": 459
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "claude",
+      "condition": "cold",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "seconds": 7.733153541106731,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 20849,
+        "uncachedInput": 6,
+        "cacheRead": 17961,
+        "cacheWrite": 2434,
+        "output": 448
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "warm",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 27.98344795918092,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 67733,
+        "uncachedInput": 16858,
+        "cacheRead": 50176,
+        "cacheWrite": 0,
+        "output": 699
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "cold",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 31.907741874922067,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 54871,
+        "uncachedInput": 7591,
+        "cacheRead": 46464,
+        "cacheWrite": 0,
+        "output": 816
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "codex",
+      "condition": "native",
+      "requestedModel": "gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 26.770160583779216,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 67127,
+        "uncachedInput": 15601,
+        "cacheRead": 50816,
+        "cacheWrite": 0,
+        "output": 710
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "native",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 24.908932375255972,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 52286,
+        "uncachedInput": 24182,
+        "cacheRead": 27520,
+        "cacheWrite": 0,
+        "output": 584
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "cold",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 20.15183504112065,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 19028,
+        "uncachedInput": 10223,
+        "cacheRead": 8320,
+        "cacheWrite": 0,
+        "output": 485
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    },
+    {
+      "id": "ripgrep-size-error-kind",
+      "repository": "ripgrep",
+      "kind": "edit",
+      "client": "opencode",
+      "condition": "warm",
+      "requestedModel": "openai/gpt-5.6-sol",
+      "requestedEffort": "low",
+      "seconds": 20.038139207754284,
+      "complete": true,
+      "tokenBreakdown": {
+        "total": 18088,
+        "uncachedInput": 5486,
+        "cacheRead": 12160,
+        "cacheWrite": 0,
+        "output": 442
+      },
+      "cacheConditionVerified": true,
+      "automatedPassed": true
+    }
+  ]
+}
