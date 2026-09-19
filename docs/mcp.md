@@ -1,0 +1,195 @@
+# MCP reference
+
+[← Back to Oko](../README.md)
+
+## Set up Codex for a project
+
+From the project you want to search, run your Oko executable with `setup`:
+
+```sh
+oko setup
+# Or select a project explicitly:
+oko setup --root /absolute/path/to/project
+```
+
+Setup installs stable per-user copies of Oko and your available ripgrep binary,
+so deleting the original download does not break the connection. On macOS they
+live under `~/Library/Application Support/Oko/bin`; other Unix systems use
+`~/.local/share/oko/bin`. Setup requires ripgrep either beside the downloaded
+Oko binary or on PATH. It does not download dependencies yet.
+
+For Jev, setup reuses the project's `.env` key or your saved OS credential. If a
+key is provided through the invoking shell, it saves that key in the OS credential
+store so GUI clients can access it. Otherwise it prompts for a key with hidden
+input. An explicitly empty key override must be removed first. Setup does not
+validate the key with TypeSafe or make paid API requests.
+
+Setup writes a project-local `.codex/config.toml` MCP entry and a managed search
+guidance section in `AGENTS.md` (or `AGENTS.override.md` when present). Existing
+unrelated settings, comments, and instructions are preserved. Re-running setup
+updates its own entry without duplicating instructions. An existing Oko entry
+not created by setup is left untouched and reported as a conflict.
+
+Configuration is written atomically, with private backups of changed existing
+files under the installation's `setup-backups` directory. Setup prints backup
+paths. It adds the machine-local configuration and `.env` to `.gitignore`; this
+does not untrack files already committed to Git. Credentials are never embedded
+in the generated MCP configuration. The pinned ripgrep path works even when the
+GUI has a different PATH than your terminal.
+
+Setup launches the installed server and verifies MCP initialization and discovery
+of the search tool. **This verifies the connection, not Codex's actual selection
+of Oko or Jev accuracy.** Open the project in Codex, trust it if prompted, and
+start a new session. Check `/mcp`, then ask a code-location question.
+
+This first setup flow is **per project and for Codex**. Run setup again for another
+project. Codex desktop and CLI share project MCP configuration for trusted
+projects; setup does not require a separate Codex CLI installation. OpenCode and
+Claude Code still require manual MCP configuration. For downloads, see the [installation guide](installation.md); see [release maintenance](releasing.md).
+
+For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
+agent instruction files untouched, and `--install-dir DIRECTORY` to choose the
+stable binary location. These options also support isolated setup tests.
+
+## Local MCP server (experimental)
+
+The same Rust binary can expose one `search` tool to MCP clients over stdio:
+
+```sh
+oko auth login
+oko mcp --root /absolute/path/to/project
+```
+
+Your coding tool normally starts this process; it is not an interactive terminal
+command. Configure a local/stdio MCP connection with the absolute path to the
+Oko executable as its command and `mcp`, `--root`, and the absolute project path
+as its arguments. No HTTP listener or extra runtime is needed. The current
+working directory is used when `--root` is omitted. Set the root explicitly in
+GUI clients; their working directory may not be your project.
+
+The server exposes `search` with these inputs:
+
+- `question`: required, nonblank, at most 4096 bytes.
+- `directory`: optional subdirectory inside the configured root.
+- `intent`: `implementation` (default), `explanation`, or `general`.
+- `deep`: optional, defaults to `false`.
+- `max_steps`: deep mode only, 1–5, defaults to 5.
+
+Results include an automatic context packet: up to three ranked matches with
+source excerpts and up to two supporting definitions or callers. Paths are relative
+to the returned search directory, with inclusive line ranges. Context is drawn
+from the same file snapshot as the search, deduplicated, and bounded. Detected
+function headers remain lexical hints; JavaScript/TypeScript additionally use
+cached Tree-sitter function boundaries. Shortened excerpts are marked.
+Related lookup preserves call qualification, excludes
+unresolved receiver calls, and omits ambiguous definitions instead of filling
+the packet with namesakes. It supports simple local Rust module paths and
+imports; unsupported syntax falls back to the primary source excerpts. This
+is not compiler-level name or type resolution. Related code is found locally;
+context expansion adds no model call.
+
+For JavaScript, TypeScript, and TSX, the cached syntax index can attach directly
+referenced constants, validators, types, and verified callers. It follows local
+bindings, explicit relative imports and aliases, and unambiguous extension
+substitution such as `.js` to `.ts`. Explicit `tsconfig.json` path mappings are
+supported when their base can be established. Unknown inherited configuration,
+re-exports, namespace imports, ambiguous modules, and methods requiring runtime
+type information are omitted. Other languages retain conservative lexical
+lookup. Parser errors or limits abstain from syntax relationships and retain the
+existing lexical fallback. Supporting snippets prioritize explicitly named
+symbols, then direct runtime dependencies, callers, and static types. Name and
+path relevance break ties within those groups. This does not change the search
+ranking sent to Jev.
+
+`definitionComplete` means the returned excerpt contains a proven full definition;
+it does not mean every dependency or caller is included. A `resolved_caller`
+includes the actual call location in `referencedFrom` and its primary definition
+in `target`. Supporting evidence is removed if its primary anchor is trimmed away.
+
+When a top-ranked function has a known boundary and is at most 256 lines,
+Oko considers its full implementation instead of the usual 60-line source window.
+If the primary source match lacks a complete function boundary, Oko retains its
+winning chunk when it fits within 256 lines and known declaration boundaries.
+It still marks that excerpt as incomplete; retaining a chunk does not prove a
+complete function. This avoids discarding late evidence after Jev selected it.
+Under the response cap, lower-ranked matches are dropped first, followed by
+related definitions, before shortening the primary excerpt. Helpers whose
+references disappear are omitted too. Alternatives remain when they fit; a
+complete primary excerpt can accompany a packet-level `truncated` flag because
+other evidence was omitted. Larger or uncertain functions retain focused,
+bounded excerpts. This policy adds no provider requests.
+
+Multiline signatures are scanned within a fixed limit. When a declaration's
+extent cannot be established, Oko returns bounded source context marked
+`truncated` rather than treating a header as a complete implementation.
+The cached TypeScript parser establishes function boundaries for union and
+structural return annotations; uncertain lexical-only boundaries use the fallback.
+
+Normal searches rank compact, line-labelled previews instead of full chunks.
+Preview size adapts to the existing 32,000-byte Jev request budget. Winner IDs
+map back to original source, so preview markers are never mistaken for source.
+Previews prioritize declaration names, attached source annotations or comments,
+and implementation statements. Adjacent decorator context can be recovered from
+the already loaded corpus; this adds no file reads or provider requests. These
+are lexical hints, not parser-verified classifications of tests or functions.
+The CLI's `ask` also uses these ranking previews, while retaining its existing
+up-to-five-result output. Generic `rank` input is unchanged.
+See [source evidence validation](../benchmarks/source-evidence.md) for the snippet
+repair checks and the limits of the ranking evidence changes.
+
+MCP results include both structured JSON and equivalent text JSON for client
+compatibility. The **16,000-byte response cap includes both copies and JSON
+escaping**, excluding the small JSON-RPC envelope. Context is trimmed to fit
+and `truncated` is set; repeated question text and deep action labels are
+separately shortened and marked. Deep results retain investigation counters
+and stop reasons. Tool failures return an error without stopping the server.
+
+The response includes `timings` for preparation (including credential lookup),
+scan, shortlist, context building, and total server work. Normal `retrieval`
+metadata reports candidate counts, budgeted request bytes (before the transport
+adds its model field), preview building, and client-side reranking time
+(HTTP preparation, provider wait, and parsing).
+Deep mode reports investigation time instead. These times exclude Codex's
+reasoning, answer generation, and client transport overhead. No request bodies
+or credentials are logged. Timing and context metadata are automatic.
+`timings.cache` reports cache status, reused/rebuilt file counts, and the time
+spent scanning, loading, validating/rebuilding file data, building corpus statistics,
+and saving. A disk hit reconstructs source from cached boundaries and validates
+saved features; zero rebuilt files means no file tokenization, stemming, or
+syntax parsing was repeated. `aggregateReused` indicates whether corpus statistics were reused;
+additions, edits, removals, and scope changes rebuild the affected statistics.
+`navigationMs` measures rebuilding the syntax lookup indexes from cached facts.
+`scanLoadOverlapped` reports concurrent disk loading and scanning. Individual
+phase durations can overlap and must not be added to estimate total time.
+`shortlistMs` measures query ranking after preparation. CLI `ask --json` exposes
+the same cache metadata in its `cache` field.
+
+See [context packet validation](../benchmarks/context-packet.md) for offline
+coverage checks, local overhead measurements, and validation limits.
+
+Normal mode uses one Jev ranking request for a nonempty shortlist, with an
+independent relevance judgment for each candidate. Deep mode is
+bounded to five local actions in MCP, unlike the CLI's optional unbounded mode.
+Each provider call retains its ten-second timeout. Configure a client tool timeout
+of 120 seconds when using deep mode; large repository scans can take longer.
+One search runs at a time; concurrent calls receive a busy error. Cancellation
+stops before the next search phase or provider call; it does not interrupt a
+filesystem scan or an already-running synchronous HTTP request.
+
+Credentials are resolved on each call from the server environment, the configured
+root's `.env`, or the OS credential store. Model-selected subdirectories do not
+change the credential source. Discovery and startup do not require a key. For
+local-only testing, launch `oko mcp --root /path/to/project --no-jev`; this skips
+credential loading and rejects deep searches.
+
+Searches rescan current files on each call and cannot select a directory outside
+the configured root. File discovery ignores user ripgrep configuration and skips
+files resolving outside the searched directory. This is an application boundary,
+not an operating-system sandbox. Existing ignored-file and file-size rules apply.
+Normal/deep searches send selected snippets to TypeSafe, as described in the [privacy overview](../README.md#privacy).
+
+The server advertises when to use Oko, but connecting it does not force the agent
+to choose it over native search. Codex project setup is available above. Release
+packages are tested with the CLI and stdio MCP protocol on each CI target.
+Automated Rust tests cover actual stdio messages and mock Jev
+requests without real credentials.
