@@ -158,7 +158,8 @@ shutil.copyfile(p,args[args.index('--output')+1])
     def test_shasum_fallback_and_existing_ripgrep(self):
         if not shutil.which("shasum"):
             self.skipTest("shasum not installed")
-        for name in ["tar", "awk", "grep", "mktemp", "readlink", "mkdir", "rm", "ln", "mv", "sed", "shasum"]:
+        # GNU tar invokes gzip through PATH when reading .tar.gz archives.
+        for name in ["tar", "gzip", "awk", "grep", "mktemp", "readlink", "mkdir", "rm", "ln", "mv", "sed", "shasum"]:
             (self.mock / name).symlink_to(shutil.which(name))
         self.env["PATH"] = str(self.mock)
         self.bin.mkdir(parents=True)
