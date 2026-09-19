@@ -18,7 +18,7 @@ API key for Jev ranking; local keyword search also works without a key.
 
 ## Install
 
-> **Release status:** `v0.2.0` is a draft prerelease. Public downloads will be
+> **Release status:** `v0.2.1` is a draft prerelease. Public downloads will be
 > available once it is published. Until then, use [build from source](docs/installation.md#build-from-source).
 
 Run this on macOS or Linux once the release is public:
