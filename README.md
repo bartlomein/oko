@@ -18,10 +18,7 @@ API key for Jev ranking; local keyword search also works without a key.
 
 ## Install
 
-> **Release status:** `v0.2.1` is a draft prerelease. Public downloads will be
-> available once it is published. Until then, use [build from source](docs/installation.md#build-from-source).
-
-Run this on macOS or Linux once the release is public:
+Run this on macOS or Linux to install the current prerelease:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh | sh
@@ -63,13 +60,71 @@ prompted, and start a new session. Repeat setup for each project.
 
 For a key-free connection, use `oko setup --no-jev`.
 
-### Claude Code or OpenCode
+### Claude Code
 
-Follow the short [Claude Code](docs/clients.md#claude-code) or
-[OpenCode](docs/clients.md#opencode) setup instructions. These clients need a manual
-MCP entry; `oko setup` currently configures Codex only.
+From the project you want to search:
 
-Then ask your agent:
+```sh
+cd /path/to/your/project
+oko auth login
+claude mcp add --transport stdio --scope local oko -- "$(command -v oko)" mcp --root "$PWD"
+claude mcp list
+```
+
+Start a new Claude Code session and check `/mcp` for Oko. This connection is
+private to you and scoped to this project; repeat the command for other projects.
+Skip `oko auth login` if you already saved your key.
+
+### OpenCode
+
+Save your key once with `oko auth login`. For **OpenCode 1.x**, add this to
+`opencode.json` in your project root. If the file already exists, merge the `oko`
+entry into its existing `mcp` section and preserve your other settings.
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "oko": {
+      "type": "local",
+      "command": ["oko", "mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Oko searches the current project. If OpenCode cannot find the executable, replace
+`oko` in `command` with the full path printed by `command -v oko`.
+
+<details>
+<summary>OpenCode 2.x configuration</summary>
+
+Version 2 places servers under `mcp.servers` and connects them automatically:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "oko": {
+        "type": "local",
+        "command": ["oko", "mcp"]
+      }
+    }
+  }
+}
+```
+
+</details>
+
+Run `opencode mcp list` from your project to check the connection, then start a
+new OpenCode session. Use `opencode --version` if you are unsure which format to use.
+See the [OpenCode MCP docs](https://opencode.ai/docs/mcp-servers/) for more options.
+
+### Try it
+
+Ask your agent:
 
 > Use Oko to find where authentication is handled in this project.
 
