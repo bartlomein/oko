@@ -31,7 +31,9 @@ ranking using a project `.env`. It never touches the user's installed Oko or key
 
 ## Prepare a draft release
 
-1. Commit the reviewed code and version in `Cargo.toml`/`Cargo.lock`; ensure CI passes.
+1. Commit the reviewed code and version in `Cargo.toml`/`Cargo.lock`; set the default
+   `OKO_VERSION` in `install.sh` and update installation examples for that release.
+   Ensure CI passes.
 2. Push a version tag matching Cargo exactly, for example `v0.2.0`.
 3. Wait for **Draft release** to finish all four native checks and package tests.
 4. Review the draft's four archives, `SHA256SUMS`, and generated release notes.
@@ -75,3 +77,17 @@ dependencies change. Dependency identifiers and SPDX expressions are listed in
 and ripgrep version. Checksums detect corruption; they are not a substitute for
 an independently authenticated signature. No signing keys are required by these
 workflows, and they do not change repository visibility.
+
+## Installer verification
+
+`python3 scripts/test-install.py` runs offline transport-fixture tests for all
+four targets, failed upgrades, unsupported systems, checksum failures, unsafe
+archives, and installation paths containing spaces and quotes. CI also sets
+`OKO_TEST_ARCHIVE` to each native package and runs the native installer test.
+Only the download transport is substituted; the script verifies and extracts
+the actual package and exercises installed local search. These tests do not
+prove anonymous GitHub download access: verify that separately after publishing.
+
+The installer is served from `main/install.sh`. It downloads the exact configured
+release (including a published prerelease), so it works without a latest stable
+release. Leave draft releases inaccessible until explicitly published.

@@ -33,6 +33,10 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Test installer offline
+        run: |
+          sh -n install.sh
+          python3 scripts/test-install.py
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Verify release tag
@@ -60,6 +64,9 @@ jobs:
         run: |
           python3 scripts/release.py package --target "$TARGET" --output target/release-bundles
           python3 scripts/smoke-release.py target/release-bundles/*.tar.gz
+          for archive in target/release-bundles/*.tar.gz; do
+            OKO_TEST_ARCHIVE="$archive" python3 scripts/test-install.py InstallerTests.test_native_archive
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: oko-${{ matrix.target }}

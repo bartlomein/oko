@@ -21,58 +21,30 @@ API key for Jev ranking; local keyword search also works without a key.
 > **Release status:** `v0.2.0` is a draft prerelease. Public downloads will be
 > available once it is published. Until then, use [build from source](docs/installation.md#build-from-source).
 
-### 1. Download Oko
-
-Get your archive and `SHA256SUMS` from [GitHub Releases](https://github.com/bartlomein/oko/releases).
-
-| Your computer | Archive |
-| --- | --- |
-| Mac — Apple Silicon (M1 or newer) | `oko-v0.2.0-aarch64-apple-darwin.tar.gz` |
-| Mac — Intel | `oko-v0.2.0-x86_64-apple-darwin.tar.gz` |
-| Linux — x64 | `oko-v0.2.0-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux — ARM64 | `oko-v0.2.0-aarch64-unknown-linux-gnu.tar.gz` |
-
-macOS builds are tested on macOS 14 (Apple Silicon) and 15 (Intel). Linux needs
-glibc 2.35+ (Ubuntu 22.04 or newer); Alpine and Windows downloads are not available.
-
-### 2. Extract and install
-
-Open a terminal in the folder containing both downloads. Set `archive` to the
-filename you chose above, then paste:
+Run this on macOS or Linux once the release is public:
 
 ```sh
-archive=oko-v0.2.0-aarch64-apple-darwin.tar.gz
-
-grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
-tar -xzf "$archive" &&
-mkdir -p "$HOME/.local/bin" &&
-cp "${archive%.tar.gz}/oko" "${archive%.tar.gz}/rg" "$HOME/.local/bin/" &&
-export PATH="$HOME/.local/bin:$PATH" &&
-oko --version
+curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-This installs Oko and its bundled search helper, `rg`, into `~/.local/bin`
-(replacing existing copies there). Add `export PATH="$HOME/.local/bin:$PATH"`
-to your shell configuration (`~/.zshrc` or `~/.bashrc`) to keep the command available
-in new terminals. On Linux without `shasum`, use `sha256sum -c -` instead.
+The installer detects your processor, downloads Oko and its bundled ripgrep,
+verifies the checksum, and installs them without administrator access. Add the
+`export PATH` line to `~/.zshrc` or `~/.bashrc` to keep `oko` available in new
+terminals. Existing installations from other sources are left untouched.
 
-If macOS blocks the download, follow [Apple’s instructions to allow the app](https://support.apple.com/en-us/102445).
-The binaries are not yet signed or notarized.
+Supported downloads: macOS Apple Silicon and Intel; Linux ARM64 and x64 with
+glibc 2.35+ (Ubuntu 22.04 or newer). Alpine and Windows are not supported by the
+installer. macOS binaries are not yet signed or notarized.
 
-### 3. Add your key
+Prefer to inspect the script, install manually, or select a version?
+See [installation options](docs/installation.md).
 
-Get an API key from [TypeSafe AI](https://typesafe.ai/), then run:
-
-```sh
-oko auth login
-```
-
-Paste your key at the hidden prompt. Oko saves it in your operating system’s
-credential store. Oko itself does not need an OpenAI or Anthropic key; your coding
-tool keeps its own model connection. For headless Linux, use an environment
-variable or ignored `.env` instead: [key configuration](docs/configuration.md).
-
-To try Oko without a key, skip login and use `--no-jev` in the examples below.
+For Codex, continue with `oko setup` below—it prompts for your
+[TypeSafe AI](https://typesafe.ai/) key. For terminal use or other coding tools,
+save the key with `oko auth login`. Oko uses your operating system’s credential
+store; headless Linux can use an environment variable or ignored `.env` instead.
+See [key configuration](docs/configuration.md).
 
 ## Connect your coding tool
 
