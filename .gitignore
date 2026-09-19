@@ -7,3 +7,4 @@ npm-debug.log*
 !.env.example
 benchmarks/results/
 target/
+__pycache__/

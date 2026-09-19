@@ -1,0 +1,40 @@
+name: Draft release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/build.yml
+  draft:
+    needs: checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: oko-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify assets and create draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        working-directory: release-assets
+        run: |
+          test "$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 4
+          test "$(find . -maxdepth 1 -name '*.sha256' | wc -l)" -eq 4
+          cat ./*.sha256 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" ./*.tar.gz SHA256SUMS \
+            --verify-tag --draft --prerelease --generate-notes --title "Oko $GITHUB_REF_NAME"

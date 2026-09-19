@@ -16,6 +16,49 @@ budget. Use `--no-jev` for local-only operation.
 
 ## Quickstart
 
+### Download a binary
+
+The release workflow builds self-contained archives for these platforms:
+
+| Platform | Archive suffix | CI target baseline |
+|---|---|---|
+| macOS, Apple Silicon | `aarch64-apple-darwin` | macOS 14 |
+| macOS, Intel | `x86_64-apple-darwin` | macOS 15 |
+| Linux, x64 | `x86_64-unknown-linux-gnu` | Ubuntu 22.04, glibc 2.35+ |
+| Linux, ARM64 | `aarch64-unknown-linux-gnu` | Ubuntu 22.04, glibc 2.35+ |
+
+Once a version is published, download its matching archive and `SHA256SUMS` from
+[GitHub Releases](https://github.com/bartlomein/oko/releases). The first release
+is still being prepared; use the source installation below until it is published.
+Archives contain both `oko` and `rg`, plus license notices. Rust, Node.js, and
+a separate ripgrep installation are not needed to run them. Linux archives
+require glibc; they are not Alpine/musl builds. Windows binaries are not provided
+by this first release workflow.
+
+For example, on Apple Silicon, with both downloads in the current directory:
+
+```sh
+# Substitute the downloaded version in the archive name.
+grep '  oko-v0.2.0-aarch64-apple-darwin.tar.gz$' SHA256SUMS | shasum -a 256 -c - &&
+tar -xzf oko-v0.2.0-aarch64-apple-darwin.tar.gz &&
+./oko-v0.2.0-aarch64-apple-darwin/oko setup --root /absolute/path/to/project
+```
+
+Continue only if checksum verification reports `OK`. Setup prompts for a
+TypeSafe key when needed, installs stable copies, and connects Codex for that
+project. Start a new Codex session afterward. Keep `oko` and `rg` together when
+running directly from the download. For standalone CLI use, run `oko auth login`
+once and invoke the binary from the project directory; adding its directory to
+PATH is optional. Setup does not add a global shell command to PATH.
+
+macOS archives are not yet Developer ID signed or notarized. macOS may require
+approval in Privacy & Security for a downloaded executable. See
+[Apple's instructions](https://support.apple.com/en-us/102445); don't disable
+Gatekeeper globally. Linux headless use can supply `TYPESAFE_API_KEY` through the
+environment instead of a desktop credential store.
+
+### Build from source
+
 Install a current stable [Rust toolchain](https://rustup.rs/) and
 [ripgrep](https://github.com/BurntSushi/ripgrep), then clone and install Oko:
 
@@ -121,7 +164,8 @@ ranking or remove Jev requests.
 For a local release build instead of installation, run
 `cargo build --release --locked --bin oko`. The executable is
 `target/release/oko` (`oko.exe` on Windows). Build separately for each operating
-system and architecture. Code search requires `rg` on PATH; supplied-item
+system and architecture. Code search uses `OKO_RIPGREP`, then an `rg` binary
+beside Oko, then `rg` on PATH; supplied-item
 ranking does not. Node.js is only needed for optional developer benchmark runners.
 
 ## Set up Codex for a project
@@ -167,7 +211,8 @@ start a new session. Check `/mcp`, then ask a code-location question.
 This first setup flow is **per project and for Codex**. Run setup again for another
 project. Codex desktop and CLI share project MCP configuration for trusted
 projects; setup does not require a separate Codex CLI installation. OpenCode and
-Claude Code setup, downloadable releases, and packaging are subsequent work.
+Claude Code still require manual MCP configuration. Downloadable release
+packaging is described above; see [release maintenance](docs/releasing.md).
 
 For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
 agent instruction files untouched, and `--install-dir DIRECTORY` to choose the
@@ -311,8 +356,9 @@ not an operating-system sandbox. Existing ignored-file and file-size rules apply
 Normal/deep searches send selected snippets to TypeSafe, as described above.
 
 The server advertises when to use Oko, but connecting it does not force the agent
-to choose it over native search. Codex project setup is available above. Published binaries and real-client
-adoption tests are separate next steps. Automated Rust tests cover actual stdio messages and mock Jev
+to choose it over native search. Codex project setup is available above. Release
+packages are tested with the CLI and stdio MCP protocol on each CI target.
+Automated Rust tests cover actual stdio messages and mock Jev
 requests without real credentials.
 
 ## Code search

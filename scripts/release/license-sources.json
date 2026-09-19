@@ -1,0 +1,18 @@
+{
+  "rmcp-3.4.0": {
+    "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/fd7811fdaa9fefa1c8034534b4d7a31c97204f89/LICENSE",
+    "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a"
+  },
+  "tree-sitter-0.25.10": {
+    "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/da6fe9beb4f7f67beb75914ca8e0d48ae48d6406/LICENSE",
+    "sha256": "5f9cf9fb6acb1972b35ae29119ce563bb60ec097656bc4b69b9bac2d04c7a147"
+  },
+  "tree-sitter-typescript-0.23.2": {
+    "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/LICENSE",
+    "sha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559"
+  },
+  "rmcp-macros-3.4.0": {
+    "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/fd7811fdaa9fefa1c8034534b4d7a31c97204f89/LICENSE",
+    "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a"
+  }
+}

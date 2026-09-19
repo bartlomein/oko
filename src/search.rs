@@ -871,7 +871,19 @@ pub(crate) fn workspace_files(cwd: &Path) -> Result<Vec<WorkspaceFile>> {
     let root = cwd
         .canonicalize()
         .context("Cannot resolve workspace root")?;
-    let output = Command::new(std::env::var_os("OKO_RIPGREP").unwrap_or_else(|| "rg".into()))
+    // Release archives keep rg beside oko, including when neither is on PATH.
+    // An explicit override remains authoritative for embedders and MCP setup.
+    let rg = std::env::var_os("OKO_RIPGREP").unwrap_or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| {
+                exe.parent()
+                    .map(|dir| dir.join(if cfg!(windows) { "rg.exe" } else { "rg" }))
+            })
+            .filter(|path| path.is_file())
+            .map_or_else(|| "rg".into(), |path| path.into_os_string())
+    });
+    let output = Command::new(rg)
         .args(["--no-config", "--files", "--null"])
         .current_dir(cwd)
         .output()
