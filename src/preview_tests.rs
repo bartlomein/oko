@@ -697,3 +697,54 @@ fn decision_context_stays_bounded_and_does_not_promote_prose() {
         BLOCK_LINES,
     );
 }
+
+#[test]
+fn recovery_previews_add_evidence_without_exceeding_wire_budget() {
+    let chunks: Vec<_> = (0..16)
+        .map(|index| {
+            chunk(
+                &format!("module{index}.rs"),
+                1,
+                (0..80)
+                    .map(|line| {
+                        format!("let parcel_{line} = dispatch(\"{}\");", "🦀\\\"".repeat(8))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        })
+        .collect();
+    let normal = ranking_previews_with_context(
+        "parcel dispatch",
+        &chunks,
+        &chunks,
+        RankingIntent::Explanation,
+    )
+    .unwrap();
+    let recovery = recovery_previews_with_context(
+        "parcel dispatch",
+        &chunks,
+        &chunks,
+        RankingIntent::Explanation,
+    )
+    .unwrap();
+    assert_eq!(normal.len(), recovery.len());
+    assert!(
+        normal
+            .iter()
+            .zip(&recovery)
+            .any(|(a, b)| b.text.len() > a.text.len())
+    );
+    let (request, kept) = ranking::prepare_request_with_intent(
+        "parcel dispatch",
+        &recovery,
+        RankingIntent::Explanation,
+    )
+    .unwrap();
+    assert_eq!(kept.len(), 16);
+    assert!(serde_json::to_vec(&request).unwrap().len() <= ranking::MAX_JEV_REQUEST_BYTES);
+    for (a, b) in normal.iter().zip(&recovery) {
+        assert_eq!(a.source, b.source);
+        assert_eq!(a.id, b.id);
+    }
+}

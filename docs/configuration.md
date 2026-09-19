@@ -42,29 +42,48 @@ These two settings are not read from `.env`.
 Code search automatically caches prepared search data in the operating system's
 user-cache directory, outside the repository. The first search builds the cache;
 later CLI invocations and MCP searches reuse it. MCP also retains the latest
-search scope in memory. Every search still discovers files and checks their
-contents, so edits, deletions, ignored files, and branch changes refresh the
-results. Different search directories have separate cache identities.
+search scope in memory. Every search still discovers eligible files, so deletions,
+renames, ignore-rule changes, and branch changes are reconciled with the current
+workspace. Different search directories have separate cache identities.
 Larger scopes use up to four file readers. Unchanged files reuse cached chunk
 boundaries, and an unchanged workspace also reuses corpus ranking statistics.
 File preparation also uses up to four workers for larger scopes. JavaScript and
 TypeScript syntax facts are cached per file; edits invalidate those facts, while
 relationships are resolved against the current snapshot. Fresh-process
 disk loading runs alongside the source scan; memory reuse skips disk loading.
-Returned source is reconstructed from freshly read bytes, with content hashes
-and cache validation checked before reuse. Cache format upgrades rebuild once.
+The first request in a process reads and hashes current files, even when a disk
+cache exists. Repeated searches in the same MCP process can reuse captured source
+for unchanged files on supported local macOS/Linux filesystems: filesystem events
+flag changes, while file identity, size, modification time, and Unix change time
+are checked on every request. Changed or
+uncertain files are read again. Watcher failures and periodic verification trigger
+full content checks (at least every 30 seconds when queried); unsupported metadata
+uses full checks as well. Remote or unrecognized filesystems and other platforms
+retain full reads. Watcher events alone are never proof that a file is unchanged.
+Each request uses one captured
+snapshot for ranking and returned snippets. Cache format upgrades rebuild once.
 The default location is `~/Library/Caches/oko/search` on macOS,
 `$XDG_CACHE_HOME/oko/search` (or `~/.cache/oko/search`) on Linux, and
 `%LOCALAPPDATA%\oko\search` on Windows.
 
 Set `OKO_CACHE_DIR` in the process environment to choose the cache directory, or
 `OKO_NO_CACHE=1` to bypass memory and disk reuse. These settings are not read from
-`.env`. An override inside the searched directory uses memory reuse only, so Oko
+`.env`. Set `OKO_NO_WATCH=1` to retain preparation caching but read and hash all
+files on every request, for example on an unusual or remote filesystem. One-shot
+CLI searches already use this full-verification path without starting a watcher.
+A cache directory override inside the searched directory uses memory reuse only, so Oko
 does not add cache files to the repository it is searching. Cache files contain
 source-derived search features and identifiers; keep the directory private.
 They are disposable: missing, incompatible, damaged, or
 unwritable caches fall back to preparing current files. Caching does not change
 ranking or remove Jev requests.
+
+JSON cache timings distinguish preparation reuse (`reusedFiles`, `rebuiltFiles`)
+from source I/O (`readFiles`, `reusedContents`). `readFiles` counts paths attempted,
+including files rejected by the text/size checks. `validation` and
+`validationReason` explain whether a request checked all contents or reused
+unchanged captures. These fields help distinguish cold-start cost from repeated
+MCP searches.
 
 For a local release build instead of installation, run
 `cargo build --release --locked --bin oko`. The executable is

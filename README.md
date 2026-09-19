@@ -1,11 +1,11 @@
 # Oko
 
-**Find the code you need by asking a question.**
+**Help your coding agent find the right code with fewer searches.**
 
-Oko searches your project and returns relevant files, line numbers, and source
-snippets. Use it in your terminal or connect it to Codex, Claude Code, or OpenCode
-through MCP. It runs locally as a Rust binary and uses [TypeSafe AI’s Jev](https://typesafe.ai/)
-to rank the results.
+Oko gives Codex, Claude Code, and OpenCode relevant source snippets through MCP,
+helping reduce repeated searches, file reads, and tokens spent exploring your
+codebase. It runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to
+rank results. You can also use it directly from your terminal.
 
 [Install](#install) · [Connect your coding tool](#connect-your-coding-tool) · [CLI examples](#use-in-your-terminal) · [Documentation](#documentation)
 

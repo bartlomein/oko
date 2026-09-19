@@ -1,7 +1,8 @@
 //! Disposable, content-validated preparation shared by CLI and MCP searches.
 //!
-//! Discovery and byte hashing remain authoritative on every request. The cache
-//! only avoids repeating analysis; it never substitutes old source for a read.
+//! Discovery remains authoritative. Persistent queries reconcile metadata and
+//! native invalidation hints, with full content checks on uncertainty.
+mod watch;
 use crate::{
     navigation::{FileFacts, NavigationIndex, NavigationPreparer},
     ranking::RankingIntent,
@@ -40,6 +41,10 @@ pub struct CacheTimings {
     pub total_ms: u64,
     pub reused_files: usize,
     pub rebuilt_files: usize,
+    pub read_files: usize,
+    pub reused_contents: usize,
+    pub validation: String,
+    pub validation_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,
 }
@@ -62,6 +67,25 @@ impl WorkspaceSnapshot {
     }
     pub fn rank_with_intent(&self, question: &str, intent: RankingIntent) -> Vec<Chunk> {
         self.prepared.rank_with_intent(question, |_| true, intent)
+    }
+    /// Rank unseen candidates using the existing index and corpus statistics.
+    pub fn rank_excluding(
+        &self,
+        question: &str,
+        intent: RankingIntent,
+        seen: &[Chunk],
+    ) -> Vec<Chunk> {
+        self.prepared.rank_with_intent(
+            question,
+            |candidate| {
+                !seen.iter().any(|old| {
+                    old.path == candidate.path
+                        && old.start_line == candidate.start_line
+                        && old.end_line == candidate.end_line
+                })
+            },
+            intent,
+        )
     }
     pub(crate) fn prepared(&self) -> &PreparedCorpus {
         &self.prepared
@@ -98,6 +122,8 @@ pub struct WorkspaceCache {
     directory: Option<PathBuf>,
     enabled: bool,
     previous: Option<MemorySnapshot>,
+    watching: Option<watch::WorkspaceWatch>,
+    watch_enabled: bool,
 }
 impl Default for WorkspaceCache {
     fn default() -> Self {
@@ -105,7 +131,8 @@ impl Default for WorkspaceCache {
     }
 }
 impl WorkspaceCache {
-    /// Honor OKO_CACHE_DIR and OKO_NO_CACHE. No setup is needed by default.
+    /// Honor OKO_CACHE_DIR, OKO_NO_CACHE and OKO_NO_WATCH.
+    /// No setup is needed by default.
     pub fn new() -> Self {
         let disabled = std::env::var("OKO_NO_CACHE").is_ok_and(|value| {
             matches!(
@@ -121,6 +148,13 @@ impl WorkspaceCache {
             directory,
             enabled: !disabled,
             previous: None,
+            watching: None,
+            watch_enabled: !std::env::var("OKO_NO_WATCH").is_ok_and(|value| {
+                matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            }),
         }
     }
 
@@ -131,6 +165,8 @@ impl WorkspaceCache {
             directory: Some(directory),
             enabled: true,
             previous: None,
+            watching: None,
+            watch_enabled: true,
         }
     }
 
@@ -139,7 +175,17 @@ impl WorkspaceCache {
             directory: None,
             enabled: false,
             previous: None,
+            watching: None,
+            watch_enabled: false,
         }
+    }
+
+    /// Keep disk caching, but fully read contents on each load. One-shot
+    /// callers avoid starting a watcher that cannot benefit later requests.
+    pub fn without_watching(mut self) -> Self {
+        self.watch_enabled = false;
+        self.watching = None;
+        self
     }
 
     pub fn load(&mut self, root: &Path) -> Result<CachedWorkspace> {
@@ -167,6 +213,17 @@ impl WorkspaceCache {
                 .previous
                 .as_ref()
                 .is_some_and(|previous| previous.record.root == root);
+        if self.enabled
+            && self.watch_enabled
+            && self
+                .watching
+                .as_ref()
+                .is_none_or(|watcher| watcher.root() != root)
+        {
+            // Register before the initial full scan so edits during startup
+            // remain pending instead of falling into a watch-registration gap.
+            self.watching = Some(watch::WorkspaceWatch::new(&root));
+        }
         // Deserialization can overlap fresh reads, but no disk data is used
         // until discovery succeeds and its content manifest has been compared.
         // Same-root memory snapshots never trigger a redundant disk load.
@@ -177,8 +234,16 @@ impl WorkspaceCache {
             } else {
                 cache_path.as_deref()
             },
+            self.watching.as_mut(),
         )?;
-        let sources = captured.sources;
+        let sources = captured.capture.sources;
+        timings.read_files = captured.capture.read_files;
+        timings.reused_contents = captured.capture.reused_contents;
+        timings.validation = captured.capture.validation.into();
+        timings.validation_reason = captured.capture.validation_reason.into();
+        if let Some(reason) = captured.capture.reason {
+            timings.fallback_reason = Some(reason);
+        }
         timings.scan_ms = captured.scan_ms;
         timings.load_ms = captured.load_ms;
         timings.scan_load_overlapped = captured.overlapped;
@@ -367,18 +432,26 @@ impl WorkspaceCache {
 }
 
 struct CapturedWorkspace {
-    sources: Vec<search::WorkspaceFile>,
+    capture: watch::CapturedSources,
     disk: Option<Result<DiskSnapshot>>,
     scan_ms: u64,
     load_ms: u64,
     overlapped: bool,
 }
 
-fn scan_and_load_snapshot(root: &Path, path: Option<&Path>) -> Result<CapturedWorkspace> {
+fn scan_and_load_snapshot(
+    root: &Path,
+    path: Option<&Path>,
+    watcher: Option<&mut watch::WorkspaceWatch>,
+) -> Result<CapturedWorkspace> {
+    let capture = || match watcher {
+        Some(watcher) => watcher.capture(),
+        None => watch::capture_full(root),
+    };
     let Some(path) = path else {
         let started = Instant::now();
         return Ok(CapturedWorkspace {
-            sources: search::workspace_files(root)?,
+            capture: capture()?,
             disk: None,
             scan_ms: elapsed_ms(started),
             load_ms: 0,
@@ -392,7 +465,7 @@ fn scan_and_load_snapshot(root: &Path, path: Option<&Path>) -> Result<CapturedWo
         };
         let loader = thread::Builder::new().spawn_scoped(scope, load);
         let started = Instant::now();
-        let sources = search::workspace_files(root);
+        let sources = capture();
         let scan_ms = elapsed_ms(started);
         // Always join, even if discovery failed. Disk errors remain cache misses
         // while the original discovery error remains authoritative.
@@ -409,7 +482,7 @@ fn scan_and_load_snapshot(root: &Path, path: Option<&Path>) -> Result<CapturedWo
             }
         };
         Ok(CapturedWorkspace {
-            sources: sources?,
+            capture: sources?,
             disk: Some(disk),
             scan_ms,
             load_ms,

@@ -12,6 +12,7 @@ use std::{
     process::Command,
     sync::{Arc, OnceLock},
     thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 pub const MAX_FILE_BYTES: usize = 256 * 1024;
@@ -858,19 +859,32 @@ pub fn workspace_chunks(cwd: &Path) -> Result<Vec<Chunk>> {
         .collect())
 }
 
+#[derive(Clone)]
 pub(crate) struct WorkspaceFile {
     pub path: String,
-    pub text: String,
+    pub text: Arc<str>,
     /// Digest includes the original bytes, including any leading BOM.
     pub digest: String,
     /// Digest of the captured, BOM-normalized text, reused by syntax facts.
     pub text_digest: [u8; 32],
+    pub stamp: Option<SourceStamp>,
 }
 
 pub(crate) fn workspace_files(cwd: &Path) -> Result<Vec<WorkspaceFile>> {
     let root = cwd
         .canonicalize()
         .context("Cannot resolve workspace root")?;
+    let files = workspace_paths(cwd)?;
+    let workers = if files.len() < 64 {
+        1
+    } else {
+        thread::available_parallelism().map_or(1, |count| count.get().min(4))
+    };
+    read_workspace_paths(&root, &files, workers)
+}
+
+/// Discovery remains authoritative even when native filesystem events lag.
+pub(crate) fn workspace_paths(cwd: &Path) -> Result<Vec<String>> {
     // Release archives keep rg beside oko, including when neither is on PATH.
     // An explicit override remains authoritative for embedders and MCP setup.
     let rg = std::env::var_os("OKO_RIPGREP").unwrap_or_else(|| {
@@ -919,17 +933,87 @@ pub(crate) fn workspace_files(cwd: &Path) -> Result<Vec<WorkspaceFile>> {
         .collect();
     files.sort_by(|a, b| compare_text(a, b));
     files.dedup();
-    // Bound concurrency independently of repository size. Small scopes avoid
-    // thread startup overhead; every accepted file is still read and hashed.
-    let workers = if files.len() < 64 {
-        1
-    } else {
-        thread::available_parallelism().map_or(1, |count| count.get().min(4))
-    };
-    read_workspace_paths(&root, &files, workers)
+    Ok(files)
 }
 
-fn read_workspace_file(root: &Path, file: &str) -> Result<Option<WorkspaceFile>> {
+/// Metadata reuse is enabled only for Unix stamps with subsecond change time.
+/// Other platforms and coarse timestamps continue reading contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SourceStamp {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl SourceStamp {
+    pub(crate) fn device(&self) -> u64 {
+        self.device
+    }
+    fn from_metadata(metadata: &fs::Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some(Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+                size: metadata.len(),
+                modified: (metadata.mtime(), metadata.mtime_nsec()),
+                changed: (metadata.ctime(), metadata.ctime_nsec()),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            None
+        }
+    }
+
+    pub(crate) fn can_reuse(&self, now: SystemTime) -> bool {
+        // Like Git's racy-index protection, recently changed timestamps need
+        // a content check. A two-second window also covers coarse clocks.
+        let Some(cutoff) = now.checked_sub(Duration::from_secs(2)) else {
+            return false;
+        };
+        self.changed.1 > 0
+            && [self.modified, self.changed]
+                .into_iter()
+                .all(|(seconds, nanos)| {
+                    let Ok(seconds) = u64::try_from(seconds) else {
+                        return false;
+                    };
+                    let Ok(nanos) = u32::try_from(nanos) else {
+                        return false;
+                    };
+                    nanos < 1_000_000_000
+                        && UNIX_EPOCH
+                            .checked_add(Duration::new(seconds, nanos))
+                            .is_some_and(|time| time < cutoff)
+                })
+    }
+}
+
+pub(crate) fn workspace_file_stamp(root: &Path, file: &str) -> Result<Option<SourceStamp>> {
+    let path = root.join(file).canonicalize()?;
+    if !path.starts_with(root) {
+        return Ok(None);
+    }
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+        return Ok(None);
+    }
+    Ok(SourceStamp::from_metadata(&metadata))
+}
+
+fn read_workspace_file(
+    root: &Path,
+    file: &str,
+    capture_stamp: bool,
+) -> Result<Option<WorkspaceFile>> {
+    let capture_started = SystemTime::now();
     let path = root.join(file).canonicalize()?;
     if !path.starts_with(root) {
         return Ok(None);
@@ -941,10 +1025,26 @@ fn read_workspace_file(root: &Path, file: &str) -> Result<Option<WorkspaceFile>>
     }
     // A file growing after the metadata check cannot cause an unbounded read.
     let mut bytes = Vec::with_capacity(metadata.len() as usize + 1);
-    handle
+    (&handle)
         .take(MAX_FILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .context("reading search file")?;
+    let stamp = if capture_stamp {
+        let before = SourceStamp::from_metadata(&metadata);
+        let after = handle
+            .metadata()
+            .ok()
+            .as_ref()
+            .and_then(SourceStamp::from_metadata);
+        // Never associate old captured bytes with a newer post-write stamp.
+        before.filter(|before| {
+            after.as_ref() == Some(before)
+                && before.can_reuse(capture_started)
+                && workspace_file_stamp(root, file).ok().flatten().as_ref() == Some(before)
+        })
+    } else {
+        None
+    };
     if bytes.len() > MAX_FILE_BYTES || bytes.contains(&0) {
         return Ok(None);
     }
@@ -958,22 +1058,44 @@ fn read_workspace_file(root: &Path, file: &str) -> Result<Option<WorkspaceFile>>
     Ok(std::str::from_utf8(bytes).ok().and_then(|text| {
         (!text.trim_matches(js_whitespace).is_empty()).then(|| WorkspaceFile {
             path: file.to_owned(),
-            text: text.to_owned(),
+            text: Arc::from(text),
             digest,
             text_digest,
+            stamp,
         })
     }))
 }
 
-fn read_workspace_paths(
+pub(crate) fn read_workspace_paths(
     root: &Path,
     files: &[String],
     workers: usize,
 ) -> Result<Vec<WorkspaceFile>> {
+    read_workspace_paths_inner(root, files, workers, false)
+}
+
+pub(crate) fn read_workspace_paths_watched(
+    root: &Path,
+    files: &[String],
+    workers: usize,
+) -> Result<Vec<WorkspaceFile>> {
+    read_workspace_paths_inner(root, files, workers, true)
+}
+
+fn read_workspace_paths_inner(
+    root: &Path,
+    files: &[String],
+    workers: usize,
+    capture_stamp: bool,
+) -> Result<Vec<WorkspaceFile>> {
     let read_batch = |batch: &[String]| {
         batch
             .iter()
-            .filter_map(|file| read_workspace_file(root, file).ok().flatten())
+            .filter_map(|file| {
+                read_workspace_file(root, file, capture_stamp)
+                    .ok()
+                    .flatten()
+            })
             .collect::<Vec<_>>()
     };
     if workers <= 1 || files.is_empty() {

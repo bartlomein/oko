@@ -1,0 +1,63 @@
+{
+  "repository": "https://github.com/documenso/documenso",
+  "commit": "e658cc581878f52c03b3e6a8f7ffd613aead4e69",
+  "tasks": [
+    {
+      "id": "pdf-page-count",
+      "kind": "search",
+      "question": "Where does the frontend read the PDF page count from the viewer DOM and return zero when the count is missing, non-integer, or below one?",
+      "expected": [
+        {
+          "path": "packages/lib/constants/pdf-viewer.ts",
+          "startLine": 7,
+          "endLine": 17,
+          "sha256": "ec9612098d95b387429fbcb151ba586f72747d4f05542e6ee676fcd7902ae50d"
+        }
+      ]
+    },
+    {
+      "id": "next-recipient",
+      "kind": "search",
+      "question": "Where does the backend choose the recipient immediately after the current one in signing order, excluding CC recipients and clearing the returned signing token?",
+      "expected": [
+        {
+          "path": "packages/lib/server-only/recipient/get-next-pending-recipient.ts",
+          "startLine": 6,
+          "endLine": 48,
+          "sha256": "55a7718b1cd22ccf74c1f29d431dfc4d2a94c65995f4af1339e97f3b960f6f0e"
+        }
+      ]
+    },
+    {
+      "id": "recipient-initials",
+      "kind": "search",
+      "question": "Where does shared code produce up to two uppercase initials for a recipient and fall back to the first email character when the name produces no initials?",
+      "expected": [
+        {
+          "path": "packages/lib/utils/recipient-formatter.ts",
+          "startLine": 3,
+          "endLine": 12,
+          "sha256": "1b21818e3e90a0e41cbb2e91ee093c98ec8b0a93a78742cf9064055139c7e3ea"
+        }
+      ]
+    },
+    {
+      "id": "document-search-delay",
+      "kind": "edit",
+      "question": "In the frontend document-list search input, reduce the debounce delay from 500 ms to 300 ms. Keep template search, URL updates, and pagination-reset behavior unchanged.",
+      "path": "apps/remix/app/components/general/document/document-search.tsx",
+      "old": "useDebouncedValue(searchTerm, 500)",
+      "new": "useDebouncedValue(searchTerm, 300)",
+      "sha256": "d95ab513adbd5b8df4c8c7c7fa90d65e1771e0b4aa0c0dbf6f8b62d2d998ec40"
+    },
+    {
+      "id": "first-reminder-delay",
+      "kind": "edit",
+      "question": "Change the default envelope reminder settings so the first reminder is sent after 3 days instead of 5 days. Keep the default repeat interval, reminder limits, and explicitly configured schedules unchanged.",
+      "path": "packages/lib/constants/envelope-reminder.ts",
+      "old": "sendAfter: { unit: 'day', amount: 5 }",
+      "new": "sendAfter: { unit: 'day', amount: 3 }",
+      "sha256": "7c38dd7ce66c8ae8b436962b03b5b827bbd84597fc301b2f6786114031deb722"
+    }
+  ]
+}

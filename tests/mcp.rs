@@ -842,6 +842,51 @@ fn independent_scores_keep_multiple_implementations_in_one_provider_call() {
 }
 
 #[test]
+fn edit_requests_keep_existing_source_and_scope_in_one_ranking_call() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("login.tsx"),
+        "export function Login() { return <h1>Sign in</h1>; }",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("signup.tsx"),
+        "export function Signup() { return <h1>Create account</h1>; }",
+    )
+    .unwrap();
+    let question = "Change the login heading to Welcome aboard. Leave signup unchanged.";
+    // The provider is mocked: this verifies retrieval and transport, not Jev accuracy.
+    let (response, requests) =
+        search_with_counted_provider(root.path(), json!({"question": question}), move |request| {
+            assert_eq!(request["state"]["question"], question);
+            let candidates = request["state"]["candidates"].as_array().unwrap();
+            let target = candidates
+                .iter()
+                .find(|c| c["source"].as_str().unwrap().starts_with("login.tsx:"))
+                .expect("existing source must reach the provider despite absent replacement text");
+            assert!(target["text"].as_str().unwrap().contains("Sign in"));
+            assert!(!target["text"].as_str().unwrap().contains("Welcome aboard"));
+            relevance_response(request, |candidate| {
+                if candidate["source"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("login.tsx:")
+                {
+                    0.95
+                } else {
+                    0.2
+                }
+            })
+        });
+    assert_eq!(requests.len(), 1);
+    let packet = assert_packet_envelope(&response);
+    let results = packet["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["path"], "login.tsx");
+    assert!(results[0]["text"].as_str().unwrap().contains("Sign in"));
+}
+
+#[test]
 fn independent_scores_can_return_no_match_without_a_none_choice() {
     let root = fixture();
     let (response, requests) = search_with_counted_provider(
@@ -1222,4 +1267,90 @@ fn cached_syntax_supports_validators_with_one_provider_call_and_bounded_wire_out
             .iter()
             .any(|value| value["text"].as_str().unwrap().contains("finite"))
     );
+}
+
+#[test]
+fn empty_search_recovers_unseen_candidates_once_and_preserves_constraints() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..40 {
+        fs::write(
+            root.path().join(format!("parcel{index:02}.rs")),
+            "fn parcel_dispatch() { deliver_parcel(); }\n",
+        )
+        .unwrap();
+    }
+    let calls = AtomicUsize::new(0);
+    let question = "parcel dispatch excluding canceled deliveries";
+    let (response, requests) =
+        search_with_counted_provider(root.path(), json!({"question":question}), move |request| {
+            let attempt = calls.fetch_add(1, Ordering::SeqCst);
+            relevance_response(request, |candidate| {
+                if attempt == 1 && candidate["id"] == "8" {
+                    0.95
+                } else {
+                    0.1
+                }
+            })
+        });
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request["state"]["question"], question);
+        assert!(request["state"].get("implementationCriteria").is_some());
+        assert!(serde_json::to_vec(request).unwrap().len() <= 32_100);
+    }
+    let initial = requests[0]["state"]["candidates"].as_array().unwrap();
+    let recovered = &requests[1]["state"]["candidates"][8];
+    assert!(
+        !initial
+            .iter()
+            .any(|item| item["source"] == recovered["source"])
+    );
+    let packet = &response["result"]["structuredContent"];
+    assert_eq!(packet["retrieval"]["attempts"], 2);
+    assert_eq!(packet["retrieval"]["recovered"], true);
+    assert_eq!(packet["results"].as_array().unwrap().len(), 1);
+    assert!(
+        recovered["source"]
+            .as_str()
+            .unwrap()
+            .starts_with(packet["results"][0]["path"].as_str().unwrap())
+    );
+}
+
+#[test]
+fn persistent_miss_stops_after_two_requests_without_lowering_threshold() {
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..40 {
+        fs::write(
+            root.path().join(format!("parcel{index:02}.rs")),
+            "fn parcel_dispatch() {}\n",
+        )
+        .unwrap();
+    }
+    let (response, requests) = search_with_counted_provider(
+        root.path(),
+        json!({"question":"parcel dispatch"}),
+        |request| relevance_response(request, |_| 0.5),
+    );
+    assert_eq!(requests.len(), 2);
+    let packet = &response["result"]["structuredContent"];
+    assert_eq!(packet["retrieval"]["attempts"], 2);
+    assert_eq!(packet["retrieval"]["recovered"], false);
+    assert!(packet["results"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn empty_search_skips_identical_recovery_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("parcel.rs"), "fn parcel_dispatch() {}\n").unwrap();
+    let (response, requests) = search_with_counted_provider(
+        root.path(),
+        json!({"question":"parcel dispatch"}),
+        |request| relevance_response(request, |_| 0.1),
+    );
+    assert_eq!(requests.len(), 1);
+    let packet = &response["result"]["structuredContent"];
+    assert_eq!(packet["retrieval"]["attempts"], 1);
+    assert!(packet["results"].as_array().unwrap().is_empty());
 }

@@ -329,15 +329,11 @@ fn intent_defaults_and_overrides_use_one_ranking_request() {
     input(temp.path());
     fs::write(temp.path().join("auth.rs"), "fn refund() {}\n").unwrap();
     for (mode, intent, expected) in [
-        ("ask", None, "implement all or part of the behavior"),
+        ("ask", None, "implementationCriteria"),
         ("rank", None, "answer"),
         ("ask", Some("general"), "answer"),
         ("ask", Some("explanation"), "explain"),
-        (
-            "rank",
-            Some("implementation"),
-            "implement all or part of the behavior",
-        ),
+        ("rank", Some("implementation"), "implementationCriteria"),
         ("rank", Some("explanation"), "explain"),
     ] {
         let mut cmd = command(temp.path());
@@ -353,6 +349,25 @@ fn intent_defaults_and_overrides_use_one_ranking_request() {
         assert!(!success(output)["results"].as_array().unwrap().is_empty());
         let instructions = body["questions"].to_string();
         assert!(instructions.contains(expected), "{instructions}");
+        if expected == "implementationCriteria" {
+            assert!(
+                body["state"]["implementationCriteria"]
+                    .as_str()
+                    .unwrap()
+                    .contains("requested new values or behavior need not exist yet")
+            );
+        } else {
+            assert!(body["state"].get("implementationCriteria").is_none());
+        }
+        if intent == Some("explanation") {
+            let criteria = body["state"]["explanationCriteria"].as_str().unwrap();
+            assert!(criteria.contains("even without explanatory prose"));
+            assert!(criteria.contains("documentation or comments"));
+            assert!(criteria.contains("Exclude mere mentions"));
+            assert!(criteria.contains("Do not infer design rationale"));
+        } else {
+            assert!(body["state"].get("explanationCriteria").is_none());
+        }
         assert_eq!(body["state"]["question"], "refund");
     }
 }

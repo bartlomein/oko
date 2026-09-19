@@ -43,8 +43,8 @@ They also prioritize up to 12 contiguous lines of a query-matching control-flow
 block, so nearby predicates and outcomes can survive the preview budget.
 This is an indentation-based context hint, not a language parser; multiline
 conditions and unsupported syntax use the existing preview selection.
-This adds no model requests: normal search still uses one Jev call with the
-existing 30-item, 32,000-byte request budget. See the
+Preview selection itself adds no model requests. Normal search uses one Jev call
+on a hit, with the existing 30-item, 32,000-byte request budget. See the
 [rank-fusion audit](../benchmarks/rank-fusion.md) for offline results and limits;
 the [earlier shortlist audit](../benchmarks/shortlist.md) documents the prior design.
 
@@ -60,9 +60,21 @@ other syntax uses 40-line windows. Results preserve source text, relative paths,
 and inclusive 1-based line ranges.
 
 Normal `ask` sends the question and up to 30 shortlisted code chunks to TypeSafe
-AI for one Jev request. It never sends the full repository. A 32,000-byte request
-budget drops trailing candidates while retaining complete chunks. This is a
-byte budget, not a token count. Requests have a 10-second timeout and no retries.
+AI for an initial Jev request. If all candidates are rejected, ordinary `ask` and
+MCP search make at most one recovery request: up to eight leading candidates with
+fuller previews plus up to eight previously unconsidered candidates. The original
+question, intent, directory scope, and relevance threshold stay unchanged. MCP
+reuses the captured snapshot and prepared index; recovery does not rescan files.
+An identical-evidence retry is skipped. Genuine misses can still return nothing.
+Deep mode retains its existing investigation budget; generic `rank` is unchanged.
+
+It never sends the full repository. Each request is limited to 32,000 bytes before
+the model field is added. This is a byte budget, not a token count. Requests have
+a 10-second timeout; HTTP errors are not retried. MCP retrieval metadata includes
+`attempts`, `recoveryCandidates`, and `recovered`. `requestBytes`, `previewMs`, and
+`rerankMs` sum both attempts; `rankedCandidates` and `omittedCandidates` describe
+the initial attempt. Recovery can therefore add one provider request and up to
+another request timeout only on an empty first result.
 Missing credentials or provider failures exit nonzero.
 
 `--no-jev` skips the API and returns lexical ranking. JSON goes to stdout;
@@ -136,18 +148,23 @@ Deep mode remains experimental; this optimization targets speed, not accuracy.
 
 Both `ask` and `rank` accept `--intent implementation|explanation|general`:
 
+For editing requests, implementation relevance means the existing code that needs
+to change. A requested new heading, value, or behavior does not need to exist in
+the source yet. Code mentioned only as something to leave unchanged is not the
+edit target. This uses the same ranking call and preserves no-match results.
+
 | Intent | Prefers | Default for |
 |---|---|---|
-| `implementation` | Code that performs the behavior, ahead of docs, examples, tests, or callers | `ask` |
-| `explanation` | Content explaining how or why something works, including docs and comments | Explicit selection |
+| `implementation` | Code that performs the behavior or owns the requested edit, ahead of docs, examples, tests, or callers | `ask` |
+| `explanation` | Evidence explaining or demonstrating how or why something works: code, configuration, docs, or comments; explanatory prose is not required | Explicit selection |
 | `general` | Items that directly help answer all or part of the question | `rank` and the Rust library |
 
 The command chooses the default; Oko does not ask AI to guess the intent.
 Intent changes the instructions within the existing Jev request. For normal
 code search, implementation intent also reserves source candidates as described
-in [code search](search.md#code-search); supplied-item `rank` does not apply this source selection. A normal
-nonempty ranking still makes one call, with the same 32,000-byte budget and no
-retries. Instructions and candidate text share that budget. No
+in [code search](search.md#code-search); supplied-item `rank` does not apply this source selection. Supplied-item ranking makes one call. Normal code search adds at most one
+changed-evidence recovery call on an empty result, with the same per-request
+32,000-byte budget. HTTP errors are not retried. Instructions and candidate text share that budget. No
 file types are excluded from discovery. `--no-jev` makes
 zero calls and bypasses intent-based ranking, preserving its existing results.
 

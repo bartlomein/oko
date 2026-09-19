@@ -1,4 +1,4 @@
-//! Bounded, query-focused source previews for the single Jev ranking request.
+//! Bounded, query-focused source previews for bounded Jev ranking requests.
 //!
 //! Previews are ranking input only. Their IDs refer to the original chunks, so
 //! callers can return unabridged source after ranking without inventing lines.
@@ -31,6 +31,26 @@ pub fn ranking_previews_with_context(
     chunks: &[Chunk],
     corpus: &[Chunk],
     intent: RankingIntent,
+) -> Result<Vec<RankItem>> {
+    contextual_previews(question, chunks, corpus, intent, DESIRED_TEXT_BYTES)
+}
+
+/// A smaller recovery batch gets fuller evidence within the same wire budget.
+pub fn recovery_previews_with_context(
+    question: &str,
+    chunks: &[Chunk],
+    corpus: &[Chunk],
+    intent: RankingIntent,
+) -> Result<Vec<RankItem>> {
+    contextual_previews(question, chunks, corpus, intent, 3_000)
+}
+
+fn contextual_previews(
+    question: &str,
+    chunks: &[Chunk],
+    corpus: &[Chunk],
+    intent: RankingIntent,
+    desired_bytes: usize,
 ) -> Result<Vec<RankItem>> {
     for chunk in chunks.iter().take(ranking::MAX_ITEMS) {
         validate_chunk(chunk)?;
@@ -95,7 +115,7 @@ pub fn ranking_previews_with_context(
             result
         })
         .collect();
-    ranking_previews(question, &enriched, intent)
+    previews_with_budget(question, &enriched, intent, desired_bytes)
 }
 
 /// Build previews without changing candidate order, IDs, or original chunks.
@@ -107,6 +127,15 @@ pub fn ranking_previews(
     question: &str,
     chunks: &[Chunk],
     intent: RankingIntent,
+) -> Result<Vec<RankItem>> {
+    previews_with_budget(question, chunks, intent, DESIRED_TEXT_BYTES)
+}
+
+fn previews_with_budget(
+    question: &str,
+    chunks: &[Chunk],
+    intent: RankingIntent,
+    desired_bytes: usize,
 ) -> Result<Vec<RankItem>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
@@ -143,7 +172,7 @@ pub fn ranking_previews(
             })
             .collect::<Vec<_>>()
     };
-    let desired = items_at(DESIRED_TEXT_BYTES);
+    let desired = items_at(desired_bytes);
     if let Ok((_, retained)) = ranking::prepare_request_with_intent(question, &desired, intent)
         && retained.len() == desired.len()
     {
@@ -157,7 +186,7 @@ pub fn ranking_previews(
     }
     // Use the largest common text allowance that fits all candidates. A short
     // source does not waste its allowance, so long snippets can retain context.
-    let (mut low, mut high) = (MIN_TEXT_BYTES, DESIRED_TEXT_BYTES);
+    let (mut low, mut high) = (MIN_TEXT_BYTES, desired_bytes);
     while high - low > 16 {
         let middle = low + (high - low) / 2;
         let items = items_at(middle);

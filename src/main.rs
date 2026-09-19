@@ -153,17 +153,9 @@ pub(crate) struct CodeRankingStats {
     pub preview_ms: u64,
     /// Client-side reranking, including HTTP, provider wait, and response parsing.
     pub rerank_ms: u64,
-}
-
-pub(crate) fn rank_code(
-    question: &str,
-    chunks: &[search::Chunk],
-    corpus: &[search::Chunk],
-    key: Option<String>,
-    no_jev: bool,
-    intent: RankingIntent,
-) -> Result<Vec<CodeResult>> {
-    Ok(rank_code_with_stats(question, chunks, corpus, key, no_jev, intent)?.0)
+    pub attempts: usize,
+    pub recovery_candidates: usize,
+    pub recovered: bool,
 }
 
 pub(crate) fn rank_code_with_stats(
@@ -173,6 +165,7 @@ pub(crate) fn rank_code_with_stats(
     key: Option<String>,
     no_jev: bool,
     intent: RankingIntent,
+    recovery_candidates: impl FnOnce() -> Result<Vec<search::Chunk>>,
 ) -> Result<(Vec<CodeResult>, CodeRankingStats)> {
     if !no_jev
         && key
@@ -206,7 +199,7 @@ pub(crate) fn rank_code_with_stats(
             question,
             &items,
             &RankOptions {
-                api_key: key,
+                api_key: key.clone(),
                 limit: 30,
                 no_jev: false,
                 intent,
@@ -215,12 +208,50 @@ pub(crate) fn rank_code_with_stats(
         stats.rerank_ms = rerank_started.elapsed().as_millis() as u64;
         stats.ranked_candidates = items.len().saturating_sub(ranking.omitted_count);
         stats.omitted_candidates = chunks.len().saturating_sub(stats.ranked_candidates);
+        stats.attempts = usize::from(!items.is_empty());
+        let mut selected = chunks.to_vec();
+        let mut ranking = ranking;
+        if ranking.results.is_empty() && !items.is_empty() {
+            let recovery_started = Instant::now();
+            let mut recovery: Vec<_> = chunks.iter().take(8).cloned().collect();
+            recovery.extend(recovery_candidates()?.into_iter().take(8));
+            let recovery_items =
+                oko::preview::recovery_previews_with_context(question, &recovery, corpus, intent)?;
+            // Do not spend a second call on the same evidence with different IDs.
+            let changed = recovery_items.iter().any(|candidate| {
+                !items
+                    .iter()
+                    .any(|old| old.source == candidate.source && old.text == candidate.text)
+            });
+            stats.preview_ms += recovery_started.elapsed().as_millis() as u64;
+            if changed {
+                let (request, kept) =
+                    oko::ranking::prepare_request_with_intent(question, &recovery_items, intent)?;
+                stats.request_bytes += serde_json::to_vec(&request)?.len();
+                stats.recovery_candidates = kept.len();
+                let started = Instant::now();
+                ranking = rank_items(
+                    question,
+                    &recovery_items,
+                    &RankOptions {
+                        api_key: key,
+                        limit: 30,
+                        no_jev: false,
+                        intent,
+                    },
+                )?;
+                stats.rerank_ms += started.elapsed().as_millis() as u64;
+                stats.attempts += 1;
+                stats.recovered = !ranking.results.is_empty();
+                selected = recovery;
+            }
+        }
         let mut scored: Vec<_> = ranking
             .results
             .into_iter()
             .map(|item| {
                 let index: usize = item.id.parse().expect("IDs generated locally");
-                (chunks[index].clone(), item.score)
+                (selected[index].clone(), item.score)
             })
             .collect();
         scored.sort_by(|(a, a_score), (b, b_score)| {
@@ -343,7 +374,9 @@ fn run() -> Result<()> {
         if parsed.deep && key.is_none() {
             bail!("TYPESAFE_API_KEY is required for --deep investigation.");
         }
-        let workspace = oko::search_cache::WorkspaceCache::new().load(&cwd)?;
+        let workspace = oko::search_cache::WorkspaceCache::new()
+            .without_watching()
+            .load(&cwd)?;
         let snapshot = workspace.snapshot;
         let mut investigation = None;
         let results = if parsed.deep {
@@ -382,14 +415,16 @@ fn run() -> Result<()> {
             } else {
                 snapshot.rank_with_intent(&parsed.question, parsed.intent)
             };
-            rank_code(
+            rank_code_with_stats(
                 &parsed.question,
                 &shortlist,
                 snapshot.chunks(),
                 key,
                 parsed.no_jev,
                 parsed.intent,
+                || Ok(snapshot.rank_excluding(&parsed.question, parsed.intent, &shortlist)),
             )?
+            .0
         };
         let notice = "Lexical-only ranking requested via --no-jev.";
         if parsed.no_jev {

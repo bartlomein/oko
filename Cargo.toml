@@ -14,6 +14,8 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 keyring = "4.2"
+libc = "0.2"
+notify = "8.2"
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

@@ -112,6 +112,56 @@ fn unchanged_memory_and_restarted_caches_reuse_all_preparation() {
     assert_eq!(fs::read_dir(fixture.root.path()).unwrap().count(), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn aged_unchanged_sources_skip_content_reads_but_restart_validates_again() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    // Age before capture: a recently captured source must not become reusable
+    // merely because its timestamp later passes the racy-write cutoff.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    let mut cache = fixture.cache();
+    let cold = assert_fresh(&mut cache, fixture.root.path());
+    assert_eq!(cold.timings.read_files, 3);
+    assert_eq!(cold.timings.reused_contents, 0);
+    assert_eq!(cold.timings.validation, "full");
+    let warm = assert_fresh(&mut cache, fixture.root.path());
+    if warm.timings.fallback_reason.is_some()
+        || warm.timings.validation_reason == "unsupported-filesystem"
+    {
+        // Unsupported filesystems/backends must remain correct through full reads.
+        assert_eq!(warm.timings.validation, "full");
+        assert_eq!(warm.timings.read_files, 3);
+        assert_eq!(warm.timings.reused_contents, 0);
+    } else {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(warm.timings.validation, "incremental");
+        let precise_timestamps = ["src/archive.rs", "src/store.ts", "docs/storage.md"]
+            .iter()
+            .all(|path| {
+                fs::metadata(fixture.root.path().join(path))
+                    .unwrap()
+                    .ctime_nsec()
+                    > 0
+            });
+        if precise_timestamps {
+            assert_eq!(warm.timings.read_files, 0);
+            assert_eq!(warm.timings.reused_contents, 3);
+        } else {
+            // Zero subsecond change times cannot authorize metadata-only reuse.
+            assert!(warm.timings.read_files > 0);
+            assert_eq!(warm.timings.read_files + warm.timings.reused_contents, 3);
+        }
+    }
+    assert!(Arc::ptr_eq(&cold.snapshot, &warm.snapshot));
+
+    let restarted = assert_fresh(&mut fixture.cache(), fixture.root.path());
+    assert_eq!(restarted.timings.read_files, 3);
+    assert_eq!(restarted.timings.reused_contents, 0);
+    assert_eq!(restarted.timings.validation, "full");
+    assert_eq!(restarted.timings.rebuilt_files, 0);
+}
+
 #[test]
 fn large_workspace_preserves_all_intents_across_parallel_refresh_and_restart() {
     let fixture = Fixture::new();
@@ -311,6 +361,83 @@ fn directories_and_search_scopes_have_independent_paths_and_statistics() {
     assert_fresh(&mut fixture.cache(), another_root.path());
 }
 
+#[test]
+fn parent_ignore_changes_apply_to_a_warmed_subdirectory_scope() {
+    let fixture = Fixture::new();
+    fixture.write("src/visible.rs", "fn verify_archive_checksum() {}\n");
+    fixture.write("src/hidden.rs", "fn recover_archive() {}\n");
+    let scope = fixture.root.path().join("src");
+    let mut cache = fixture.cache();
+    let original = assert_fresh(&mut cache, &scope);
+    assert!(paths(original.snapshot.chunks()).contains(&"hidden.rs"));
+
+    // The ignore file is outside the selected scope and its watcher root.
+    fixture.write(".ignore", "hidden.rs\n");
+    let excluded = assert_fresh(&mut cache, &scope);
+    assert_eq!(paths(excluded.snapshot.chunks()), ["visible.rs"]);
+    assert!(paths(original.snapshot.chunks()).contains(&"hidden.rs"));
+
+    fs::remove_file(fixture.root.path().join(".ignore")).unwrap();
+    let restored = assert_fresh(&mut cache, &scope);
+    assert_eq!(restored.snapshot.chunks(), original.snapshot.chunks());
+}
+
+#[test]
+fn returning_to_an_edited_root_does_not_reuse_another_roots_freshness() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    let other = tempfile::tempdir().unwrap();
+    fs::write(
+        other.path().join("archive.rs"),
+        "fn unrelated_archive() {}\n",
+    )
+    .unwrap();
+    let mut cache = fixture.cache();
+    let original = assert_fresh(&mut cache, fixture.root.path());
+    let original_chunks = original.snapshot.chunks().to_vec();
+    let other_snapshot = assert_fresh(&mut cache, other.path());
+
+    // This write happens while the cache's selected root is elsewhere.
+    fixture.write("src/archive.rs", "fn cancel_archive_transaction() {}\n");
+    let returned = assert_fresh(&mut cache, fixture.root.path());
+    assert_ne!(returned.snapshot.chunks(), original_chunks);
+    assert_eq!(original.snapshot.chunks(), original_chunks);
+    assert_eq!(paths(other_snapshot.snapshot.chunks()), ["archive.rs"]);
+    assert_fresh(&mut cache, other.path());
+}
+
+#[test]
+fn atomic_replacement_with_same_length_and_mtime_is_visible_immediately() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    let mut cache = fixture.cache();
+    let original = assert_fresh(&mut cache, fixture.root.path());
+    let path = fixture.root.path().join("src/archive.rs");
+    let metadata = fs::metadata(&path).unwrap();
+    let old_text = fs::read_to_string(&path).unwrap();
+    let new_text = old_text.replace("verify", "repair");
+    assert_eq!(new_text.len(), old_text.len());
+    let replacement = fixture.root.path().join("src/.replacement");
+    fs::write(&replacement, &new_text).unwrap();
+    File::options()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(metadata.modified().unwrap()))
+        .unwrap();
+    fs::rename(&replacement, &path).unwrap();
+
+    // No sleep to wait for native filesystem callbacks: the next load must see it.
+    let replaced = assert_fresh(&mut cache, fixture.root.path());
+    assert_eq!(replaced.timings.rebuilt_files, 1);
+    assert!(replaced.snapshot.chunks().iter().any(|chunk| {
+        chunk.path == "src/archive.rs" && chunk.text.contains("fn repair_archive_checksum")
+    }));
+    assert!(original.snapshot.chunks().iter().any(|chunk| {
+        chunk.path == "src/archive.rs" && chunk.text.contains("fn verify_archive_checksum")
+    }));
+}
+
 fn stored_files(directory: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in fs::read_dir(directory).unwrap() {
@@ -387,6 +514,32 @@ fn explicit_bypass_rebuilds_each_request_with_identical_results() {
         assert_eq!(result.timings.status, "disabled");
     }
     assert!(stored_files(fixture.disk.path()).is_empty());
+}
+
+#[test]
+fn disabling_watching_preserves_preparation_but_reads_every_source_again() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    let mut cache = fixture.cache().without_watching();
+    let cold = assert_fresh(&mut cache, fixture.root.path());
+    assert_eq!(cold.timings.rebuilt_files, 3);
+    for _ in 0..2 {
+        let warm = assert_fresh(&mut cache, fixture.root.path());
+        assert_eq!(warm.timings.status, "memory");
+        assert_eq!(warm.timings.validation, "full");
+        assert_eq!(warm.timings.validation_reason, "watching-disabled");
+        assert_eq!(warm.timings.read_files, 3);
+        assert_eq!(warm.timings.reused_contents, 0);
+        assert_eq!(warm.timings.rebuilt_files, 0);
+        assert_eq!(warm.timings.reused_files, 3);
+        assert!(Arc::ptr_eq(&cold.snapshot, &warm.snapshot));
+    }
+    assert!(!stored_files(fixture.disk.path()).is_empty());
+    let restarted = assert_fresh(&mut fixture.cache().without_watching(), fixture.root.path());
+    assert_eq!(restarted.timings.status, "disk");
+    assert_eq!(restarted.timings.read_files, 3);
+    assert_eq!(restarted.timings.reused_contents, 0);
+    assert_eq!(restarted.timings.rebuilt_files, 0);
 }
 
 fn git(root: &Path, arguments: &[&str]) {

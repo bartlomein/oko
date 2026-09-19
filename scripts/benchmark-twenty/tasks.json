@@ -1,0 +1,181 @@
+{
+  "repository": "https://github.com/twentyhq/twenty",
+  "commit": "a0a55e326b3963d10b7843f65ba90e558deed7da",
+  "tasks": [
+    {
+      "id": "search-normalization",
+      "kind": "search",
+      "question": "In the frontend, where is search text normalized to ignore accents and transliterate characters such as \u00f8, \u00e6, and \u00df?",
+      "expected": [
+        {
+          "path": "packages/twenty-front/src/utils/normalizeSearchText.ts",
+          "startLine": 1,
+          "endLine": 17,
+          "sha256": "bac34be4bd7eb779de352d5dcde9680caad7537944c516f80ee97eb1141b2d2a"
+        }
+      ]
+    },
+    {
+      "id": "search-filter",
+      "kind": "search",
+      "question": "In the frontend, where are items filtered by matching a normalized query against any of their searchable values, while preserving all items for an empty query?",
+      "expected": [
+        {
+          "path": "packages/twenty-front/src/utils/filterBySearchQuery.ts",
+          "startLine": 11,
+          "endLine": 28,
+          "sha256": "69c9b492e9239097d3fb7d4671f51df377a7a96b0abf44d53774c811e3f85805"
+        }
+      ]
+    },
+    {
+      "id": "rich-text-preview",
+      "kind": "search",
+      "question": "Where does the frontend extract the first nonempty text or link from rich-text blocks, skipping whitespace-only text?",
+      "expected": [
+        {
+          "path": "packages/twenty-front/src/modules/blocknote-editor/utils/getFirstNonEmptyLineOfRichText.ts",
+          "startLine": 4,
+          "endLine": 38,
+          "sha256": "323b1a86a303dee1f658ecb8925460734c06ea30b57e3cc6f22cee6f1514017e"
+        }
+      ]
+    },
+    {
+      "id": "webhook-empty-row",
+      "kind": "search",
+      "question": "In the webhook settings UI, where is the empty operation row removed when both record and metadata catch-all operations are selected, and otherwise kept at the end?",
+      "expected": [
+        {
+          "path": "packages/twenty-front/src/modules/settings/developers/utils/addEmptyOperationIfNecessary.ts",
+          "startLine": 4,
+          "endLine": 29,
+          "sha256": "84b61f03f84920bac42b6d844c1c5fa0698295245da1f468e8cc04b4f8d20ae9"
+        }
+      ]
+    },
+    {
+      "id": "metadata-pagination",
+      "kind": "search",
+      "question": "Where does the backend reject metadata REST pagination requests that combine forward and backward cursors, contain non-UUID cursors, or specify fractional limits?",
+      "expected": [
+        {
+          "path": "packages/twenty-server/src/engine/api/rest/metadata/utils/parse-metadata-rest-pagination.util.ts",
+          "startLine": 13,
+          "endLine": 50,
+          "sha256": "706be4624f039e1e71b650a1fcbb72adaf7790ac2e4838025e3766f55efaf026"
+        }
+      ]
+    },
+    {
+      "id": "gmail-retry-after",
+      "kind": "search",
+      "question": "Where does the backend extract a retry-after timestamp from a Gmail error message and reject invalid or already elapsed timestamps?",
+      "expected": [
+        {
+          "path": "packages/twenty-server/src/modules/messaging/message-import-manager/drivers/gmail/utils/parse-gmail-error-retry-after.util.ts",
+          "startLine": 4,
+          "endLine": 24,
+          "sha256": "a3c5c5d81bbea0ee2ea5c6d15249aee5b8219bb2b68aaaba1bb35ff232cf3f33"
+        }
+      ]
+    },
+    {
+      "id": "webhook-event-match",
+      "kind": "search",
+      "question": "Where does the backend select configured webhooks whose subscribed operations match an incoming object event name?",
+      "expected": [
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/webhook/utils/find-webhooks-matching-event-name.util.ts",
+          "startLine": 7,
+          "endLine": 28,
+          "sha256": "ee203f80b7cc9b3e4c2b05cd3b881c9cae7f4f92ecb65ff33a4e17c701fe5e8e"
+        }
+      ]
+    },
+    {
+      "id": "send-slot-backoff",
+      "kind": "search",
+      "question": "Where is the retry delay for acquiring an email send slot calculated using exponential backoff, a window-based ceiling, and jitter?",
+      "expected": [
+        {
+          "path": "packages/twenty-server/src/modules/emailing/utils/compute-send-slot-backoff-ms.util.ts",
+          "startLine": 3,
+          "endLine": 26,
+          "sha256": "068f74d0c80692cb95915e888f04d51053a732ebc3845a98c95940fdf94a2fc7"
+        }
+      ]
+    },
+    {
+      "id": "locale-direction",
+      "kind": "search",
+      "question": "Where does shared code determine right-to-left versus left-to-right text direction from a locale, including locales with region subtags?",
+      "expected": [
+        {
+          "path": "packages/twenty-shared/src/translations/utils/getLocaleTextDirection.ts",
+          "startLine": 6,
+          "endLine": 19,
+          "sha256": "80b6ea0148475bea61f4106081a90e13072abff3883e42358bff352169817f93"
+        }
+      ]
+    },
+    {
+      "id": "short-number",
+      "kind": "search",
+      "question": "Where does shared code format signed numbers with k, m, or b suffixes, remove trailing decimal zeros, and round across magnitude boundaries?",
+      "expected": [
+        {
+          "path": "packages/twenty-shared/src/utils/format/formatToShortNumber.ts",
+          "startLine": 1,
+          "endLine": 18,
+          "sha256": "9416066e4b355e9f4342986adf2cc814899514a735aa345057e3b33b11cc0ae3"
+        }
+      ]
+    },
+    {
+      "id": "preview-debounce",
+      "kind": "edit",
+      "question": "In the frontend side-panel record search preview, increase the preview debounce from 200 ms to 300 ms. Preserve the rest of the preview behavior.",
+      "path": "packages/twenty-front/src/modules/side-panel/pages/search/constants/SearchRecordPreviewDebounceMs.ts",
+      "old": "SEARCH_RECORD_PREVIEW_DEBOUNCE_MS = 200",
+      "new": "SEARCH_RECORD_PREVIEW_DEBOUNCE_MS = 300",
+      "sha256": "13350cf99f973bc47046744d9b10a7eadf249274b1d1c2c25d68d4251d047153"
+    },
+    {
+      "id": "chart-dimming",
+      "kind": "edit",
+      "question": "In frontend chart legend highlighting, increase the opacity of dimmed series from 0.2 to 0.35. Leave the highlighting logic unchanged.",
+      "path": "packages/twenty-front/src/modules/page-layout/widgets/graph/constants/LegendHighlightDimmedOpacity.constant.ts",
+      "old": "LEGEND_HIGHLIGHT_DIMMED_OPACITY = 0.2",
+      "new": "LEGEND_HIGHLIGHT_DIMMED_OPACITY = 0.35",
+      "sha256": "bbb46a6a334c56bbca803d17358a552dee54a0ea2005c2120c3a2cfa2157c7c9"
+    },
+    {
+      "id": "preview-fields",
+      "kind": "edit",
+      "question": "In the frontend side-panel search record preview, show at most five fields when collapsed instead of seven. Keep the expanded view unchanged.",
+      "path": "packages/twenty-front/src/modules/side-panel/pages/search/constants/SidePanelSearchRecordPreviewMaxCollapsedFields.ts",
+      "old": "SIDE_PANEL_SEARCH_RECORD_PREVIEW_MAX_COLLAPSED_FIELDS = 7",
+      "new": "SIDE_PANEL_SEARCH_RECORD_PREVIEW_MAX_COLLAPSED_FIELDS = 5",
+      "sha256": "c1c3e1fbbf5abcafea4215398b64281a03b7d5e34b0954201bd63fbc1ba16b0e"
+    },
+    {
+      "id": "email-retry-delay",
+      "kind": "edit",
+      "question": "In the backend email-send retry policy, increase the initial exponential backoff delay from 5 seconds to 10 seconds. Keep the strategy and jitter unchanged.",
+      "path": "packages/twenty-server/src/engine/core-modules/email/constants/email-send-retry-backoff.constant.ts",
+      "old": "initialDelayMilliseconds: 5_000",
+      "new": "initialDelayMilliseconds: 10_000",
+      "sha256": "06c93bb0a97e58acbda8249c65f1904e4289ec01f2b6c9ff3cebc9d3906dade4"
+    },
+    {
+      "id": "trash-batch",
+      "kind": "edit",
+      "question": "In backend trash cleanup, reduce the cleanup batch size from 1,000 records to 500. Preserve the cleanup selection and deletion behavior.",
+      "path": "packages/twenty-server/src/engine/trash-cleanup/constants/trash-cleanup-batch-size.constant.ts",
+      "old": "TRASH_CLEANUP_BATCH_SIZE = 1_000",
+      "new": "TRASH_CLEANUP_BATCH_SIZE = 500",
+      "sha256": "f0ffb335246ef421cdfd4c36dde84a9744ec33e7d1f522ab43b4747efb1138c9"
+    }
+  ]
+}

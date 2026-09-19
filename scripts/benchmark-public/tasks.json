@@ -1,0 +1,235 @@
+{
+  "repositories": [
+    {
+      "name": "astro",
+      "commit": "db2eaf17ce84a5f75c5eab30f4ae15af32de1a13",
+      "repository": "git@github.com:withastro/astro.git",
+      "tasks": [
+        {
+          "id": "astro-internal-path",
+          "kind": "search",
+          "question": "Where does Astro identify internal paths that should be excluded from normal URL handling, including backslash-prefixed host-like paths?",
+          "expected": [
+            {
+              "path": "packages/internal-helpers/src/path.ts",
+              "startLine": 91,
+              "endLine": 92,
+              "sha256": "cd5c71c72f057ffef43aa00ebfb5662ce605cf55015efd43b1a6c93f5d2b8282"
+            }
+          ]
+        },
+        {
+          "id": "astro-slash-redirect",
+          "kind": "search",
+          "question": "Trace incoming trailing-slash redirects: show where the main request handler invokes the redirect handler and where that handler chooses the HTTP status and preserves the query string. Return both implementation locations.",
+          "expected": [
+            {
+              "path": "packages/astro/src/core/routing/handler.ts",
+              "startLine": 73,
+              "endLine": 75,
+              "sha256": "d2a52c5beea8ded28200eaa64055e54fbb9c62b964aab215736ac08a6d7619f8"
+            },
+            {
+              "path": "packages/astro/src/core/routing/trailing-slash-handler.ts",
+              "startLine": 32,
+              "endLine": 36,
+              "sha256": "429aa820ee0cfb5b27e5c92497c4469b7a1dbc791252fe91da037e40bf6cdb63"
+            }
+          ]
+        },
+        {
+          "id": "astro-query-delimiter",
+          "kind": "edit",
+          "question": "Fix the shared path helper that removes query strings: remove everything from the FIRST question mark onward, including when the question mark is the first character. For example, /docs?q=a?b becomes /docs and ?q=a becomes an empty string. Preserve paths without a question mark and leave other helpers unchanged.",
+          "path": "packages/internal-helpers/src/path.ts",
+          "replacements": [
+            {
+              "old": "const index = path.lastIndexOf('?');\n\treturn index > 0 ? path.substring(0, index) : path;",
+              "new": "const index = path.indexOf('?');\n\treturn index >= 0 ? path.substring(0, index) : path;"
+            }
+          ],
+          "sha256": "cd5c71c72f057ffef43aa00ebfb5662ce605cf55015efd43b1a6c93f5d2b8282",
+          "allowedLines": [
+            115,
+            118
+          ]
+        },
+        {
+          "id": "astro-file-extension",
+          "kind": "edit",
+          "question": "Fix the shared helper that removes a file extension so a dot in a parent directory is not treated as the file extension. Preserve extensionless basenames and dotfiles such as .env and /a/.env; still remove the final extension from /a.b/file.txt, archive.tar.gz, and .env.local. Treat forward slash as the path separator. Leave other helpers unchanged.",
+          "path": "packages/internal-helpers/src/path.ts",
+          "replacements": [
+            {
+              "old": "return idx === -1 ? path : path.slice(0, idx);",
+              "new": "return idx <= path.lastIndexOf('/') + 1 ? path : path.slice(0, idx);"
+            }
+          ],
+          "sha256": "cd5c71c72f057ffef43aa00ebfb5662ce605cf55015efd43b1a6c93f5d2b8282",
+          "allowedLines": [
+            110,
+            113
+          ]
+        }
+      ]
+    },
+    {
+      "name": "httpx",
+      "commit": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+      "repository": "git@github.com:encode/httpx.git",
+      "tasks": [
+        {
+          "id": "httpx-proxy-priority",
+          "kind": "search",
+          "question": "Where does HTTPX order URL patterns from most specific to least specific, preferring explicit ports, then longer hostnames, then longer schemes?",
+          "expected": [
+            {
+              "path": "httpx/_utils.py",
+              "startLine": 206,
+              "endLine": 217,
+              "sha256": "fd355ea802afc4990a1ddcfb74579be2cd0b66a41781e1645d281f88704aff5a"
+            }
+          ]
+        },
+        {
+          "id": "httpx-multipart-length",
+          "kind": "search",
+          "question": "Trace how multipart request encoding decides between Content-Length and chunked Transfer-Encoding when a file length is unknown. Return the encoder entry point and the multipart stream implementation that calculates the length and selects headers.",
+          "expected": [
+            {
+              "path": "httpx/_content.py",
+              "startLine": 152,
+              "endLine": 157,
+              "sha256": "2c61b3ac94d1dcebcde0c6f519554d2d7917247fbaa0a97002db4ef69e70ff28"
+            },
+            {
+              "path": "httpx/_multipart.py",
+              "startLine": 265,
+              "endLine": 292,
+              "sha256": "28e1c465997aa28860f663da2b2caedf8e6aab5ac92e0df94d41b7600cd70776"
+            }
+          ]
+        },
+        {
+          "id": "httpx-empty-unquote",
+          "kind": "edit",
+          "question": "Make the utility that removes surrounding double quotes safe for empty strings and lone double quotes. Both must be returned unchanged. A pair of double quotes should still become an empty string, a double-quoted value should lose its outer quotes, and unquoted or single-quoted values must remain unchanged.",
+          "path": "httpx/_utils.py",
+          "replacements": [
+            {
+              "old": "return value[1:-1] if value[0] == value[-1] == '\"' else value",
+              "new": "return value[1:-1] if len(value) >= 2 and value[0] == value[-1] == '\"' else value"
+            }
+          ],
+          "sha256": "fd355ea802afc4990a1ddcfb74579be2cd0b66a41781e1645d281f88704aff5a",
+          "allowedLines": [
+            91,
+            92
+          ]
+        },
+        {
+          "id": "httpx-closed-stream",
+          "kind": "edit",
+          "question": "Make the utility that probes a file-like object length return None instead of raising when given a closed file or closed BytesIO. Handle ValueError from either probing strategy. Preserve the reported total length and current position for open seekable streams; do not read their contents.",
+          "path": "httpx/_utils.py",
+          "replacements": [
+            {
+              "old": "except (AttributeError, OSError):",
+              "new": "except (AttributeError, OSError, ValueError):"
+            }
+          ],
+          "sha256": "fd355ea802afc4990a1ddcfb74579be2cd0b66a41781e1645d281f88704aff5a",
+          "allowedLines": [
+            95,
+            117
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ripgrep",
+      "commit": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "repository": "git@github.com:BurntSushi/ripgrep.git",
+      "tasks": [
+        {
+          "id": "ripgrep-size-overflow",
+          "kind": "search",
+          "question": "Where are human-readable byte sizes parsed with binary K, M, and G suffixes, and multiplication overflow rejected? Return the parser implementation.",
+          "expected": [
+            {
+              "path": "crates/cli/src/human.rs",
+              "startLine": 80,
+              "endLine": 99,
+              "sha256": "b85f1391a01ccdfed20951cdf07bd641bf190256c48caccfe83f8ec14e2b1636"
+            }
+          ]
+        },
+        {
+          "id": "ripgrep-hidden-walk",
+          "kind": "search",
+          "question": "Trace how the CLI hidden-file setting reaches the directory traversal builder and then the ignore matcher that rejects hidden directory entries. Return the CLI wiring and the matcher decision.",
+          "expected": [
+            {
+              "path": "crates/core/flags/hiargs.rs",
+              "startLine": 900,
+              "endLine": 921,
+              "sha256": "4269c0129575a379a725d4023382d33277e73bc9928e6c81f5e8fa4824019169"
+            },
+            {
+              "path": "crates/ignore/src/dir.rs",
+              "startLine": 485,
+              "endLine": 494,
+              "sha256": "e2ad00e37e22433feb6f06795e4a7aea6af2a4e06f44f6f56e171377e42f56f3"
+            }
+          ]
+        },
+        {
+          "id": "ripgrep-lowercase-size",
+          "kind": "edit",
+          "question": "Extend the CLI human-readable byte-size parser to accept lowercase k, m, and g suffixes as aliases of K, M, and G using the same binary multipliers. Preserve plain byte counts, checked overflow, and rejection of unsupported suffixes such as T, KB, and whitespace. Update the parser documentation to mention lowercase aliases.",
+          "path": "crates/cli/src/human.rs",
+          "replacements": [
+            {
+              "old": "\"K\" => value.checked_mul",
+              "new": "\"K\" | \"k\" => value.checked_mul"
+            },
+            {
+              "old": "\"M\" => value.checked_mul",
+              "new": "\"M\" | \"m\" => value.checked_mul"
+            },
+            {
+              "old": "\"G\" => value.checked_mul",
+              "new": "\"G\" | \"g\" => value.checked_mul"
+            },
+            {
+              "old": "/// (for gigabyte). If a size suffix is missing, then the size is interpreted",
+              "new": "/// (for gigabyte), including lowercase aliases. If a size suffix is missing, then the size is interpreted"
+            }
+          ],
+          "sha256": "b85f1391a01ccdfed20951cdf07bd641bf190256c48caccfe83f8ec14e2b1636",
+          "allowedLines": [
+            71,
+            100
+          ]
+        },
+        {
+          "id": "ripgrep-size-error-kind",
+          "kind": "edit",
+          "question": "When a human-readable size parsing error is converted into std::io::Error, classify it as InvalidInput instead of Other. Preserve the original parse error as the source and preserve its display message. Do not change which sizes the parser accepts.",
+          "path": "crates/cli/src/human.rs",
+          "replacements": [
+            {
+              "old": "std::io::ErrorKind::Other, size_err",
+              "new": "std::io::ErrorKind::InvalidInput, size_err"
+            }
+          ],
+          "sha256": "b85f1391a01ccdfed20951cdf07bd641bf190256c48caccfe83f8ec14e2b1636",
+          "allowedLines": [
+            65,
+            69
+          ]
+        }
+      ]
+    }
+  ]
+}

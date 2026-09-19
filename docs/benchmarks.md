@@ -2,6 +2,83 @@
 
 [← Back to Oko](../README.md)
 
+## Public repository comparison
+
+The [public repository runner](../scripts/benchmark-public/README.md) compares
+Codex, OpenCode, and Claude Code on pinned Astro, HTTPX, and ripgrep checkouts.
+Each repository has two search tasks and two small edits, tested without Oko,
+with a cold cache, and with a prebuilt disk cache (108 sessions). It reports
+elapsed time, agent token usage, and task checks separately. The default command
+prints the plan; model sessions require `--execute`. Read the methodology and
+grading limits before interpreting results or making performance claims.
+
+## Documenso fast comparison
+
+The [Documenso runner](../scripts/benchmark-documenso/README.md) uses 3 read-only
+searches and 2 small edits across Codex, OpenCode, and Claude Code, each with Oko
+off/on (30 sessions). It reuses the Twenty runner's adapters and grading, with
+separate frozen source and results. Run `python3 scripts/benchmark-documenso/runner.py`
+to preview the plan; add `--execute` to launch sessions.
+
+## Twenty read/edit comparison
+
+The [Twenty runner](../scripts/benchmark-twenty/README.md) runs 10 read-only
+questions and 5 small edits across Codex, OpenCode, and Claude Code, each with
+Oko off and on (90 sessions). It uses a frozen public checkout and a disposable
+copy per session. Add `--fast` for 3 read-only searches and 2 edits (30 sessions).
+The default command only prints the plan; `--execute` launches
+model sessions. See the [questions](../scripts/benchmark-twenty/tasks.md), setup,
+grading limits, and pilot instructions before running.
+
+## Measure cache latency without model calls
+
+For a quick correctness smoke test (about a few seconds after building):
+
+```sh
+python3 scripts/test-cache.py
+```
+
+It creates an 81-file temporary fixture and checks cold/warm searches, an
+immediate same-length edit with restored modification time, deletion, and server
+restart. It reports reads, reused contents, and rebuilt files. No real repository
+is edited and no model calls are made. Unsupported filesystems may use the safe
+full-read fallback; the output says when content reuse was not exercised.
+Timings on this tiny fixture are diagnostic, not a project performance benchmark.
+
+To include real Jev ranking, explicitly opt in:
+
+```sh
+python3 scripts/test-cache.py --live --report /tmp/oko-live-cache.json
+```
+
+This makes three normal Jev requests in one MCP session: cold, warm, and after
+an immediate edit. It sends only generated synthetic source, stops on failure,
+and never retries. It checks the returned source and reports cache time separately
+from client-side ranking time (HTTP, provider wait, and response parsing).
+The environment's `TYPESAFE_API_KEY` takes priority over a single-line key in
+Oko's `.env` (`--env-file` overrides the path), then Oko's saved OS credential.
+Keys are not included in output or reports. The model defaults to `jev-1.13.0`;
+`--jev-model` overrides it. Offline mode remains the default.
+
+```sh
+cargo build --release --locked --bin oko
+python3 scripts/profile-cache.py --root /path/to/project > /tmp/oko-cache-profile.json
+```
+
+This read-only measurement uses MCP with `--no-jev` and a temporary cache outside
+the searched project. It measures an empty-cache request, five repeated requests
+in the same server, then a restarted server using the disk cache and five more
+repeats. The report separates these states and checks that returned results stay
+identical. It includes cache timings and source-read/reuse counters when the
+binary supports them. `--binary`, `--question`, and `--repeats` are configurable.
+Keep the workspace unchanged during measurement. No credentials are required.
+
+These are local retrieval timings, not complete coding-agent timings. “Cold”
+means an empty Oko cache, not an empty operating-system file cache. MCP startup
+is reported separately. Fresh-cache agent trials measure first-use cost;
+repeat searches in a long-lived MCP server measure ongoing development use.
+Report both separately rather than silently warming every trial.
+
 ## Accuracy benchmarks
 
 Benchmarks are optional. Normal use does not require Telemetry Studio or another
