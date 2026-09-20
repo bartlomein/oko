@@ -185,7 +185,7 @@ def packet_of(client, response):
     return client.last_metrics()
 
 
-def replay_build(label, binary, workspaces, questions, tasks, live, timeout, progress):
+def replay_build(label, binary, workspaces, questions, tasks, live, timeout, progress, extra_env=None):
     module = profiler()
     rows = []
     for repo, workspace in workspaces.items():
@@ -196,7 +196,7 @@ def replay_build(label, binary, workspaces, questions, tasks, live, timeout, pro
         with tempfile.TemporaryDirectory(prefix='oko-replay-cache-') as cache:
             client = module.Client(Path(binary), workspace, Path(cache), timeout, live=live,
                                    api_key=api_key() if live else None,
-                                   model=JEV_MODEL if live else None)
+                                   model=JEV_MODEL if live else None, extra_env=extra_env)
             try:
                 client.initialize()
                 for index, (task, query) in enumerate(selected):
@@ -348,8 +348,9 @@ def default_builds():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--build', action='append', metavar='LABEL=PATH',
+    parser.add_argument('--build', action='append', metavar='LABEL=PATH[,KEY=VALUE...]',
                         help='Oko binary to replay; repeat to compare. The first is the baseline. '
+                             'KEY=VALUE pairs set environment switches for that build only. '
                              'Default: the builds frozen by the last branch/smoke --prepare.')
     parser.add_argument('--report', action='append', type=Path,
                         help='report.json to take questions from; default: every branch-suite run')
@@ -361,7 +362,17 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float, default=60)
     args = parser.parse_args(argv)
 
-    builds = [tuple(item.split('=', 1)) for item in args.build] if args.build else default_builds()
+    # LABEL=PATH, optionally followed by ,KEY=VALUE switches for that build only.
+    build_env = {}
+    if args.build:
+        builds = []
+        for item in args.build:
+            label, _, rest = item.partition('=')
+            path, *switches = rest.split(',')
+            builds.append((label, path))
+            build_env[label] = dict(switch.split('=', 1) for switch in switches)
+    else:
+        builds = default_builds()
     if not builds or any(len(b) != 2 or not Path(b[1]).is_file() for b in builds):
         parser.error('No usable builds; pass --build LABEL=PATH or prepare the branch/smoke suite')
     if len({label for label, _ in builds}) != len(builds):
@@ -409,7 +420,7 @@ def main(argv=None):
             print(f"[{done[0]}/{total * len(builds)}] {row['build']} {row['task']}: {state}", flush=True)
         for label, binary in builds:
             rows += replay_build(label, binary, workspaces, questions, tasks, not args.no_jev,
-                                 args.timeout, progress)
+                                 args.timeout, progress, build_env.get(label))
     labels = [label for label, _ in builds]
     summary = summarize(rows, labels)
     note = (f"{total} real agent questions, replayed against each build"

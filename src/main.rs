@@ -213,6 +213,110 @@ fn provider_unavailable(calls: &[JevCallStats]) -> Option<&'static str> {
     }
 }
 
+/// EXPERIMENT: one Jev request per candidate group and intent, all at once.
+/// Candidate ids are offset per group so they index the combined selection;
+/// a candidate judged more than once keeps its highest relevance.
+fn judge_in_parallel(
+    question: &str,
+    groups: &[(&[search::Chunk], usize)],
+    corpus: &[search::Chunk],
+    key: Option<&str>,
+    intents: Vec<RankingIntent>,
+    timeout: std::time::Duration,
+    // Candidates below this index outrank accepted ones at or above it.
+    first_pool: Option<usize>,
+    stats: &mut CodeRankingStats,
+) -> Result<ranking::ItemRanking> {
+    let jobs: Vec<_> = groups
+        .iter()
+        .filter(|(group, _)| !group.is_empty())
+        .flat_map(|(group, offset)| intents.iter().map(move |intent| (*group, *offset, *intent)))
+        .collect();
+    let outcomes: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .iter()
+            .map(|&(group, offset, intent)| {
+                scope.spawn(move || -> Result<_> {
+                    let items =
+                        oko::preview::ranking_previews_with_context(question, group, corpus, intent)?;
+                    let mut calls = Vec::new();
+                    let ranking = ranking::rank_items_with_stats(
+                        question,
+                        &items,
+                        &RankOptions {
+                            api_key: key.map(str::to_owned),
+                            limit: 30,
+                            no_jev: false,
+                            intent,
+                            timeout,
+                        },
+                        "normal",
+                        &mut calls,
+                    );
+                    Ok((offset, ranking, calls))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("ranking thread"))
+            .collect()
+    });
+    let mut best: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+    let mut failure = None;
+    for outcome in outcomes {
+        let (offset, ranking, calls) = outcome?;
+        stats.jev_calls.extend(calls);
+        match ranking {
+            Ok(ranking) => {
+                for (id, score) in ranking.judged {
+                    let index = offset + id.parse::<usize>().expect("IDs generated locally");
+                    let kept = best.entry(index).or_insert(score);
+                    *kept = kept.max(score);
+                }
+            }
+            Err(error) => failure = Some(error),
+        }
+    }
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    let mut judged: Vec<(String, f64)> = best
+        .into_iter()
+        .map(|(index, score)| (index.to_string(), score))
+        .collect();
+    judged.sort_by(|a, b| {
+        b.1.total_cmp(&a.1).then_with(|| {
+            a.0.parse::<usize>()
+                .unwrap_or(0)
+                .cmp(&b.0.parse::<usize>().unwrap_or(0))
+        })
+    });
+    let mut accepted: Vec<_> = judged
+        .iter()
+        .filter(|(_, score)| *score > ranking::RELEVANCE_THRESHOLD)
+        .collect();
+    if let Some(boundary) = first_pool {
+        // Stable: relevance order is kept within each pool.
+        accepted.sort_by_key(|(id, _)| id.parse::<usize>().unwrap_or(0) >= boundary);
+    }
+    Ok(ranking::ItemRanking {
+        method: "jev".into(),
+        results: accepted
+            .into_iter()
+            .take(30)
+            .map(|(id, score)| ranking::RankedItem {
+                id: id.clone(),
+                text: String::new(),
+                source: None,
+                score: *score,
+            })
+            .collect(),
+        omitted_count: 0,
+        judged,
+    })
+}
+
 fn lexical_results(chunks: &[search::Chunk]) -> Vec<CodeResult> {
     chunks
         .iter()
@@ -282,19 +386,54 @@ pub(crate) fn rank_code_with_stats(
         stats.preview_ms = preview_started.elapsed().as_millis() as u64;
         let rerank_started = Instant::now();
         let timeout = patience.unwrap_or(ranking::JEV_TIMEOUT);
-        let ranking = match ranking::rank_items_with_stats(
-            question,
-            &items,
-            &RankOptions {
-                api_key: key.clone(),
-                limit: 30,
-                no_jev: false,
-                intent,
+        // EXPERIMENT (replay only): judge more per search with parallel Jev
+        // requests, which add no wall time. OKO_EXPERIMENT_POOL=60 also judges
+        // the next 30 keyword candidates; OKO_EXPERIMENT_INTENTS=1 judges under
+        // both the implementation and explanation criteria and keeps the higher
+        // relevance, because scores swing with the intent an agent happens to pass.
+        // "60first": as 60, but matches among the first 30 keep their rank ahead
+        // of any from the next 30, which then only fill slots left free.
+        let pool = std::env::var("OKO_EXPERIMENT_POOL").unwrap_or_default();
+        let wider = pool == "60" || pool == "60first";
+        let first_pool = (pool == "60first").then_some(chunks.len());
+        let both_intents = std::env::var("OKO_EXPERIMENT_INTENTS").is_ok_and(|v| v == "1");
+        let experiment = wider || both_intents;
+        let mut recovery_candidates = Some(recovery_candidates);
+        let mut extra = Vec::new();
+        if wider {
+            extra = (recovery_candidates.take().expect("unused"))()?;
+        }
+        let first = if experiment {
+            judge_in_parallel(
+                question,
+                &[(chunks, 0), (&extra, chunks.len())],
+                corpus,
+                key.as_deref(),
+                if both_intents {
+                    vec![RankingIntent::Implementation, RankingIntent::Explanation]
+                } else {
+                    vec![intent]
+                },
                 timeout,
-            },
-            "normal",
-            &mut stats.jev_calls,
-        ) {
+                first_pool,
+                &mut stats,
+            )
+        } else {
+            ranking::rank_items_with_stats(
+                question,
+                &items,
+                &RankOptions {
+                    api_key: key.clone(),
+                    limit: 30,
+                    no_jev: false,
+                    intent,
+                    timeout,
+                },
+                "normal",
+                &mut stats.jev_calls,
+            )
+        };
+        let ranking = match first {
             Ok(ranking) => ranking,
             Err(error) => {
                 stats.rerank_ms = rerank_started.elapsed().as_millis() as u64;
@@ -312,11 +451,16 @@ pub(crate) fn rank_code_with_stats(
         stats.omitted_candidates = chunks.len().saturating_sub(stats.ranked_candidates);
         stats.attempts = usize::from(!items.is_empty());
         let mut selected = chunks.to_vec();
+        selected.extend(extra);
         let mut ranking = ranking;
-        if ranking.results.is_empty() && !items.is_empty() {
+        if ranking.results.is_empty() && !items.is_empty() && !experiment {
             let recovery_started = Instant::now();
             let mut recovery: Vec<_> = chunks.iter().take(8).cloned().collect();
-            recovery.extend(recovery_candidates()?.into_iter().take(8));
+            recovery.extend(
+                (recovery_candidates.take().expect("experiments skip recovery"))()?
+                    .into_iter()
+                    .take(8),
+            );
             let recovery_items =
                 oko::preview::recovery_previews_with_context(question, &recovery, corpus, intent)?;
             // Do not spend a second call on the same evidence with different IDs.
@@ -406,11 +550,14 @@ pub(crate) fn rank_code_with_stats(
                 (selected[index].clone(), item.score)
             })
             .collect();
-        scored.sort_by(|(a, a_score), (b, b_score)| {
-            b_score
-                .total_cmp(a_score)
-                .then_with(|| search::compare_chunks(a, b))
-        });
+        // EXPERIMENT: "60first" has already put the first pool's matches ahead.
+        if first_pool.is_none() {
+            scored.sort_by(|(a, a_score), (b, b_score)| {
+                b_score
+                    .total_cmp(a_score)
+                    .then_with(|| search::compare_chunks(a, b))
+            });
+        }
         scored.truncate(search::RESULT_LIMIT);
         scored
     };

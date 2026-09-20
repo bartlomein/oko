@@ -11,7 +11,7 @@ pub const MAX_ITEMS: usize = 30;
 pub const MAX_JEV_REQUEST_BYTES: usize = 32_000;
 // Provisional yes/no decision boundary, not a calibrated relevance cutoff.
 // Independent Noul scores do not share Choice's former `none` probability.
-const RELEVANCE_THRESHOLD: f64 = 0.5;
+pub const RELEVANCE_THRESHOLD: f64 = 0.5;
 // Shared once per request: repeating these distinctions for every candidate
 // would displace source evidence from the bounded ranking payload.
 const IMPLEMENTATION_CRITERIA: &str = "Relevant source implements the behavior being located or directly owns the code to change, including declarative UI or configuration. For edits, requested new values or behavior need not exist yet. Exclude code mentioned only to stay unchanged. Exclude mere mentions, docs, tests, examples, and callers that only delegate the requested behavior.";

@@ -21,7 +21,7 @@ import time
 
 class Client:
     def __init__(self, binary, root, cache, timeout, *, live=False, api_key=None, model=None,
-                 command=None, metrics=None, prewarm=False):
+                 command=None, metrics=None, prewarm=False, extra_env=None):
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("TYPESAFE_", "OKO_"))}
         # Oko's tool result is agent-facing text. Timings, retrieval metadata and
@@ -30,6 +30,8 @@ class Client:
         self.metrics = Path(metrics or Path(cache) / "oko-metrics.jsonl")
         env.update(OKO_CACHE_DIR=str(cache), OKO_NO_CACHE="0", TYPESAFE_API_KEY="",
                    OKO_METRICS_FILE=str(self.metrics))
+        # Experiment switches for one build under test, e.g. from the replay tool.
+        env.update(extra_env or {})
         if not prewarm:
             # Cache measurements attribute cold and disk preparation to the first
             # search; startup preparation would turn that search into a memory hit.
