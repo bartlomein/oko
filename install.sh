@@ -7,7 +7,7 @@ fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
 main() {
     [ "$#" -eq 0 ] || fail "Use OKO_VERSION, OKO_INSTALL_DIR, or OKO_BIN_DIR environment variables; no arguments are accepted."
-    version=${OKO_VERSION:-v0.2.1}
+    version=${OKO_VERSION:-v0.3.0}
     case "$version" in v*) ;; *) version=v$version ;; esac
     printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$' || fail 'Invalid OKO_VERSION.'
     [ -n "${HOME:-}" ] || fail 'HOME must be set.'
