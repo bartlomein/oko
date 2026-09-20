@@ -15,7 +15,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::Semaphore;
 
@@ -26,6 +26,20 @@ const MAX_MCP_RESULT_BYTES: usize = 16_000;
 // Serving metadata costs the calling agent tokens on every search without
 // informing its next step, so it goes to this operator-selected file instead.
 const METRICS_FILE: &str = "OKO_METRICS_FILE";
+// Jev usually answers in about half a second. An agent waiting on a rare slow
+// response is better served by keyword-ranked matches, labelled as such, than by
+// ten seconds of silence followed by an error.
+const JEV_PATIENCE: Duration = Duration::from_secs(4);
+
+/// OKO_JEV_TIMEOUT_MS, between half a second and the provider's own timeout.
+fn jev_patience() -> Duration {
+    std::env::var("OKO_JEV_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(JEV_PATIENCE, |ms| {
+            Duration::from_millis(ms.clamp(500, oko::ranking::JEV_TIMEOUT.as_millis() as u64))
+        })
+}
 
 #[derive(Clone, Copy, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -134,6 +148,7 @@ impl OkoServer {
         }
         let mut shortlist_ms = None;
         let mut investigate_ms = None;
+        let mut lexical_fallback = None;
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -180,8 +195,14 @@ impl OkoServer {
                 &input.question,
                 &shortlist,
                 corpus,
-                key,
-                self.no_jev,
+                if self.no_jev {
+                    super::Reranker::Lexical
+                } else {
+                    super::Reranker::Jev {
+                        key,
+                        patience: Some(jev_patience()),
+                    }
+                },
                 input.intent.into(),
                 || {
                     if cancelled() {
@@ -190,6 +211,7 @@ impl OkoServer {
                     Ok(snapshot.rank_excluding(&input.question, input.intent.into(), &shortlist))
                 },
             )?;
+            lexical_fallback = stats.lexical_fallback;
             let retrieval = Some(serde_json::to_value(stats)?);
             let winners = results
                 .into_iter()
@@ -245,9 +267,14 @@ impl OkoServer {
                 run["stopReason"].as_str().unwrap_or("unknown")
             ));
         }
+        if lexical_fallback.is_some() {
+            notes.push_str(
+                "The relevance ranker did not respond, so these are keyword matches in keyword order; treat them as leads and verify them.\n",
+            );
+        }
         let question = prefix(&input.question, 512);
         let metadata = json!({"question":question, "questionTruncated":question.len() < input.question.len(), "directory":directory,
-            "ranking":if self.no_jev {"lexical"} else {"jev"},
+            "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
             "investigation":investigation, "retrieval":retrieval,
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,

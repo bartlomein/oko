@@ -521,6 +521,21 @@ impl<'a> Snapshot<'a> {
                 .last_key_value()
                 .is_some_and(|(last, _)| *last == end && self.lines.len() == end)
     }
+    /// A doc comment often repeats the question better than the code it
+    /// documents, and chunks begin at that comment. Only comments and blank
+    /// lines may separate the line from the declaration it introduces.
+    fn documented_declaration(&self, line: usize, last: usize) -> Option<usize> {
+        if self.containing(line).is_some() {
+            return None;
+        }
+        let declaration = self
+            .declarations
+            .iter()
+            .find(|d| d.line > line && d.line <= last)?;
+        (line..declaration.line)
+            .all(|n| self.code.get(&n).is_some_and(|code| code.trim().is_empty()))
+            .then_some(declaration.line)
+    }
     fn containing(&self, number: usize) -> Option<&Declaration> {
         self.declarations
             .iter()
@@ -896,6 +911,9 @@ fn build_packet_inner(
             continue;
         }
         let focus = focus_line(chunk, &terms, snapshot);
+        let focus = snapshot
+            .documented_declaration(focus, chunk.end_line)
+            .unwrap_or(focus);
         let primary = packet.results.is_empty();
         let proven = snapshot.containing(focus).is_some_and(|declaration| {
             declaration.complete
@@ -1383,6 +1401,52 @@ mod tests {
         assert_eq!(fitted.results.len(), 1);
         assert_eq!(fitted.results[0].excerpt.text, first);
         assert!(fitted.omitted);
+    }
+    #[test]
+    fn a_match_in_the_doc_comment_returns_the_function_it_documents() {
+        let mut lines = vec![
+            "import { isRemoteAllowed } from './remote';".to_owned(),
+            "".into(),
+            "/**".into(),
+            " * Infers the dimensions of a remote image after URL authorization.".into(),
+            " */".into(),
+            "export function inferRemoteSize(url: string): number {".into(),
+        ];
+        lines.extend((0..90).map(|line| format!("    step_{line}();")));
+        lines.push("    if (!isRemoteAllowed(finalUrl)) throw new Error('blocked');".into());
+        lines.push("}".into());
+        let source = lines.join("\n");
+        let mut corpus = chunk_text(
+            "first.ts",
+            "export function first(): number {\n    return 1;\n}",
+        );
+        corpus.extend(chunk_text("probe.ts", &source));
+        let documented = corpus
+            .iter()
+            .find(|chunk| chunk.path == "probe.ts" && chunk.text.contains("Infers the dimensions"))
+            .unwrap()
+            .clone();
+        assert!(documented.start_line < 6, "the chunk begins at the comment");
+        let winners = [(corpus[0].clone(), 0.9), (documented, 0.8)];
+        let packet = build_packet(
+            &corpus,
+            &winners,
+            "infers dimensions of a remote image URL authorization",
+        );
+        let excerpt = &packet.results[1].excerpt;
+        assert_eq!((excerpt.start_line, excerpt.end_line), (6, 98));
+        assert!(excerpt.definition_complete && !excerpt.truncated);
+        assert!(excerpt.text.contains("isRemoteAllowed(finalUrl)"));
+
+        // Code between the matching line and a later declaration is its own evidence.
+        let unrelated = "const remoteImageDimensions = 1;\nconsole.log(remoteImageDimensions);\nexport function other(): number {\n    return 2;\n}";
+        let corpus = chunk_text("plain.ts", unrelated);
+        let packet = build_packet(
+            &corpus,
+            &[(corpus[0].clone(), 0.9)],
+            "remote image dimensions",
+        );
+        assert_eq!(packet.results[0].excerpt.start_line, 1);
     }
     #[test]
     fn bounded_signature_fallback_preserves_source_without_inventing_a_span() {

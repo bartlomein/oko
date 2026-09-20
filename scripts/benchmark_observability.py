@@ -109,6 +109,8 @@ _RETRIEVAL_FIELDS = (
     "shortlistedCandidates", "rankedCandidates", "omittedCandidates", "requestBytes",
     "previewMs", "rerankMs", "attempts", "recoveryCandidates", "recovered",
     "candidateCount", "omittedCount",
+    # Set when Jev was slow or unavailable and results are in keyword order.
+    "lexicalFallback",
 )
 _INVESTIGATION_FIELDS = ("steps", "jevCalls", "stopReason", "complete")
 _USAGE_FIELDS = (

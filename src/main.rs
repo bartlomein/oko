@@ -158,18 +158,64 @@ pub(crate) struct CodeRankingStats {
     pub attempts: usize,
     pub recovery_candidates: usize,
     pub recovered: bool,
+    /// Why results are in keyword order although Jev was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_fallback: Option<&'static str>,
     pub jev_calls: Vec<JevCallStats>,
+}
+
+/// A provider that is slow, unreachable, or overloaded says nothing about the
+/// request, so keyword order can stand in. Rejections such as a bad key or a
+/// malformed request must still reach the operator.
+fn provider_unavailable(calls: &[JevCallStats]) -> Option<&'static str> {
+    let last = calls.last().filter(|call| !call.success)?;
+    match (last.error_class.as_deref()?, last.http_status) {
+        ("timeout", _) => Some("timeout"),
+        ("transport" | "response_read", _) => Some("unreachable"),
+        ("http_status", Some(429 | 500..)) => Some("unavailable"),
+        _ => None,
+    }
+}
+
+fn lexical_results(chunks: &[search::Chunk]) -> Vec<CodeResult> {
+    chunks
+        .iter()
+        .take(search::RESULT_LIMIT)
+        .map(|chunk| CodeResult {
+            path: chunk.path.clone(),
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            score: chunk.lexical_score,
+            text: chunk.text.clone(),
+        })
+        .collect()
+}
+
+/// How the shortlist is ordered.
+pub(crate) enum Reranker {
+    /// Keyword order only (`--no-jev`).
+    Lexical,
+    Jev {
+        key: Option<String>,
+        /// How long to wait for each request before ranking by keywords
+        /// instead. `None` waits the default timeout and reports provider
+        /// failures, so measurements never mistake keyword order for Jev's.
+        patience: Option<std::time::Duration>,
+    },
 }
 
 pub(crate) fn rank_code_with_stats(
     question: &str,
     chunks: &[search::Chunk],
     corpus: &[search::Chunk],
-    key: Option<String>,
-    no_jev: bool,
+    reranker: Reranker,
     intent: RankingIntent,
     recovery_candidates: impl FnOnce() -> Result<Vec<search::Chunk>>,
 ) -> Result<(Vec<CodeResult>, CodeRankingStats)> {
+    let (no_jev, key, patience) = match reranker {
+        Reranker::Lexical => (true, None, None),
+        Reranker::Jev { key, patience } => (false, key, patience),
+    };
     if !no_jev
         && key
             .as_deref()
@@ -198,7 +244,8 @@ pub(crate) fn rank_code_with_stats(
         }
         stats.preview_ms = preview_started.elapsed().as_millis() as u64;
         let rerank_started = Instant::now();
-        let ranking = ranking::rank_items_with_stats(
+        let timeout = patience.unwrap_or(ranking::JEV_TIMEOUT);
+        let ranking = match ranking::rank_items_with_stats(
             question,
             &items,
             &RankOptions {
@@ -206,10 +253,22 @@ pub(crate) fn rank_code_with_stats(
                 limit: 30,
                 no_jev: false,
                 intent,
+                timeout,
             },
             "normal",
             &mut stats.jev_calls,
-        )?;
+        ) {
+            Ok(ranking) => ranking,
+            Err(error) => {
+                stats.rerank_ms = rerank_started.elapsed().as_millis() as u64;
+                stats.attempts = 1;
+                let Some(reason) = patience.and(provider_unavailable(&stats.jev_calls)) else {
+                    return Err(error);
+                };
+                stats.lexical_fallback = Some(reason);
+                return Ok((lexical_results(chunks), stats));
+            }
+        };
         stats.rerank_ms = rerank_started.elapsed().as_millis() as u64;
         stats.ranked_candidates = items.len().saturating_sub(ranking.omitted_count);
         stats.omitted_candidates = chunks.len().saturating_sub(stats.ranked_candidates);
@@ -235,7 +294,7 @@ pub(crate) fn rank_code_with_stats(
                 stats.request_bytes += serde_json::to_vec(&request)?.len();
                 stats.recovery_candidates = kept.len();
                 let started = Instant::now();
-                ranking = ranking::rank_items_with_stats(
+                let recovered = ranking::rank_items_with_stats(
                     question,
                     &recovery_items,
                     &RankOptions {
@@ -243,12 +302,26 @@ pub(crate) fn rank_code_with_stats(
                         limit: 30,
                         no_jev: false,
                         intent,
+                        timeout,
                     },
                     "recovery",
                     &mut stats.jev_calls,
-                )?;
+                );
                 stats.rerank_ms += started.elapsed().as_millis() as u64;
                 stats.attempts += 1;
+                ranking = match recovered {
+                    Ok(ranking) => ranking,
+                    // Jev already judged the first shortlist irrelevant; keyword
+                    // order must not overrule that, so the miss stands.
+                    Err(_)
+                        if patience
+                            .and(provider_unavailable(&stats.jev_calls))
+                            .is_some() =>
+                    {
+                        return Ok((Vec::new(), stats));
+                    }
+                    Err(error) => return Err(error),
+                };
                 stats.recovered = !ranking.results.is_empty();
                 selected = recovery;
             }
@@ -435,8 +508,14 @@ fn run() -> Result<()> {
                 &parsed.question,
                 &shortlist,
                 snapshot.chunks(),
-                key,
-                parsed.no_jev,
+                if parsed.no_jev {
+                    Reranker::Lexical
+                } else {
+                    Reranker::Jev {
+                        key,
+                        patience: None,
+                    }
+                },
                 parsed.intent,
                 || Ok(snapshot.rank_excluding(&parsed.question, parsed.intent, &shortlist)),
             )?;

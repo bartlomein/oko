@@ -461,6 +461,65 @@ fn normal_and_deep_search_use_mock_jev_and_survive_provider_errors() {
 }
 
 #[test]
+fn a_slow_overloaded_or_unreachable_ranker_yields_labelled_keyword_matches() {
+    use std::{io::Read, net::TcpListener};
+    for (behavior, reason, class) in [
+        ("slow", "timeout", "timeout"),
+        ("overloaded", "unavailable", "http_status"),
+        ("unreachable", "unreachable", "transport"),
+    ] {
+        let root = fixture();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = (behavior != "unreachable").then(|| {
+            thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0; 65536];
+                let _ = stream.read(&mut buffer).unwrap();
+                if behavior == "slow" {
+                    // Longer than the configured patience, far below the default timeout.
+                    thread::sleep(Duration::from_millis(1500));
+                } else {
+                    write!(stream, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                }
+            })
+        });
+        let cache = tempfile::tempdir().unwrap();
+        let mut client = Client::start_with_env(
+            root.path(),
+            false,
+            Some(&endpoint),
+            cache.path(),
+            &[("OKO_JEV_TIMEOUT_MS", "500")],
+        );
+        client.initialize();
+        let started = std::time::Instant::now();
+        let response = client.search(json!({"question":"authentication token"}));
+        assert!(
+            started.elapsed() < Duration::from_millis(1400),
+            "{behavior}: the search must not wait for the provider"
+        );
+        let packet = assert_packet_envelope(&response);
+        assert_eq!(packet["ranking"], "lexical-fallback", "{behavior}");
+        assert_eq!(packet["retrieval"]["lexicalFallback"], reason);
+        assert_eq!(packet["retrieval"]["jevCalls"][0]["errorClass"], class);
+        assert_eq!(packet["retrieval"]["jevCalls"][0]["success"], false);
+        assert_eq!(packet["results"][0]["path"], "auth.rs");
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.starts_with("The relevance ranker did not respond, so these are keyword matches"),
+            "{text}"
+        );
+        assert!(text.contains("auth.rs:1-1 (whole file)"));
+        assert!(!response.to_string().contains("fake-mcp-key"));
+        drop(client);
+        if let Some(server) = server {
+            server.join().unwrap();
+        }
+    }
+}
+
+#[test]
 fn closing_client_input_exits_server() {
     let root = fixture();
     let mut client = Client::start(root.path(), true, None);

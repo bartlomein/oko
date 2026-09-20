@@ -149,6 +149,10 @@ excerpt `wholeFile`, `definitionComplete`, `truncated`, `symbol`, `score`) is
 available to operators through [`OKO_METRICS_FILE`](#timings-and-retrieval-metadata),
 never to the agent.
 
+When the line that best matches the question is in a comment directly above a
+declaration in the winning chunk, the declaration is treated as the match: doc
+comments often repeat the question better than the code they document.
+
 When a ranked match lies in a function with a known boundary of at most 256
 lines, Oko returns the full implementation instead of the usual 60-line source
 window, for every match and not only the first: a window that stops a few lines
@@ -251,7 +255,18 @@ coverage checks, local overhead measurements, and validation limits.
 Normal mode uses one Jev ranking request for a nonempty shortlist, with an
 independent relevance judgment for each candidate. Deep mode is
 bounded to five local actions in MCP, unlike the CLI's optional unbounded mode.
-Each provider call retains its ten-second timeout. Configure a client tool timeout
+A normal MCP search waits four seconds for each Jev request (`OKO_JEV_TIMEOUT_MS`,
+500–10000). Jev usually answers in about half a second; when it is slow,
+unreachable, rate-limited, or returns a server error, the search returns the
+keyword-ranked shortlist instead of an error. The result then begins with a
+line saying that the matches are in keyword order and should be verified, and
+the metrics line reports `ranking: "lexical-fallback"` and
+`retrieval.lexicalFallback` (`timeout`, `unreachable`, or `unavailable`).
+Rejections that need an operator, such as an invalid key, are still errors. If
+Jev judged the first shortlist irrelevant and the recovery request then fails,
+the result stays empty: keyword order does not overrule that judgment. The CLI
+and deep mode keep the ten-second timeout and report provider failures, so
+measurements never mistake keyword order for Jev's. Configure a client tool timeout
 of 120 seconds when using deep mode; large repository scans can take longer.
 One search runs at a time; concurrent calls receive a busy error. Cancellation
 stops before the next search phase or provider call; it does not interrupt a

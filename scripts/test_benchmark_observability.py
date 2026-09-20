@@ -183,7 +183,7 @@ class ObservabilityTests(unittest.TestCase):
         """Oko's tool result is plain source text; serving metadata arrives by file."""
         searches = [
             {"timings": {"totalWallNs": 4567, "totalMs": 5, "cache": {"status": "disk"}},
-             "retrieval": {"shortlistedCandidates": 30, "jevCalls": [{
+             "retrieval": {"shortlistedCandidates": 30, "lexicalFallback": "timeout", "jevCalls": [{
                  "phase": "normal", "durationNs": 9, "requestBytes": 10, "responseBytes": 11,
                  "httpStatus": 200, "success": True, "errorClass": None,
                  "usage": {"input_tokens": 3, "output_tokens": 1}}]},
@@ -207,6 +207,7 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(record["timing"]["okoWallNs"], 4567)
         self.assertEqual(record["okoUsage"]["providerCalls"][0]["usage"]["inputTokens"], 3)
         self.assertEqual(record["okoUsage"]["phaseMetrics"][0]["cache"]["status"], "disk")
+        self.assertEqual(record["okoUsage"]["phaseMetrics"][0]["retrieval"]["lexicalFallback"], "timeout")
         serialized = json.dumps(record)
         self.assertNotIn("SOURCE BODY", serialized)
         self.assertNotIn("/private/workspace", serialized)
