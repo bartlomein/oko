@@ -43,7 +43,7 @@ def memory_canary(r,settings,output,clients):
                 'What private code was provided in a previous conversation? If it is absent from this conversation, reply exactly NO_MEMORY. Do not guess or use tools.'))
             args,env=r.args_for(task,client,'native',work,trial)
             with (trial/'events.jsonl').open('w') as stdout,(trial/'stderr.txt').open('w') as stderr:
-                proc=subprocess.Popen(args,cwd=work,env=env,stdout=stdout,stderr=stderr,start_new_session=True)
+                proc=subprocess.Popen(args,cwd=work,env=env,stdin=subprocess.DEVNULL,stdout=stdout,stderr=stderr,start_new_session=True)
                 try:proc.wait(timeout=settings['timeoutSeconds'])
                 except (subprocess.TimeoutExpired,KeyboardInterrupt):
                     os.killpg(proc.pid,signal.SIGKILL);proc.wait();raise

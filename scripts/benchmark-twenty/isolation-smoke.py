@@ -38,7 +38,8 @@ with tempfile.TemporaryDirectory(prefix='oko-isolation-') as tmp:
    args[-1:-1]=['-c','model_provider="probe"','-c','model_providers.probe='+ '{name="probe",base_url="'+url+'/v1",wire_api="responses",requires_openai_auth=false}', '-c','model_providers.probe.request_max_retries=0']
   else:
    env['ANTHROPIC_BASE_URL']=url;env['ANTHROPIC_API_KEY']='offline-test';env.pop('CLAUDE_CODE_OAUTH_TOKEN',None)
-  try:out=subprocess.run(args,cwd=work,env=env,capture_output=True,text=True,timeout=35)
+  # `codex exec` reads additional input from stdin; an inherited open pipe stalls it.
+  try:out=subprocess.run(args,cwd=work,env=env,capture_output=True,text=True,timeout=35,stdin=subprocess.DEVNULL)
   except subprocess.TimeoutExpired:out=None
   server.shutdown()
   texts=[]

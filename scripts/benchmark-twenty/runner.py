@@ -497,7 +497,9 @@ def run_one(task, client, condition, output, index):
         args, env = args_for(task, client, condition, work, trial)
         started_ns = observability.perf_counter_ns()
         with (trial / 'events.jsonl').open('w') as stdout, (trial / 'stderr.txt').open('w') as stderr:
-            proc = subprocess.Popen(args, cwd=work, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+            # `codex exec` reads additional input from stdin; an inherited open
+            # pipe would stall the timed session until it closes.
+            proc = subprocess.Popen(args, cwd=work, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
             try:
                 proc.wait(timeout=SETTINGS['timeoutSeconds'])
             except (subprocess.TimeoutExpired, KeyboardInterrupt):
