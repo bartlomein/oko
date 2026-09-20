@@ -26,6 +26,18 @@ const EXCERPT_LINES: usize = 60;
 // without claiming a complete function. Larger spans use a focused source window.
 const PRIMARY_IMPLEMENTATION_LINES: usize = 256;
 const RELATED_LINES: usize = 32;
+// On replayed agent questions, over a quarter of the expected code missing from
+// a response began one or two lines after a shown definition, in the next short
+// one: the predicate a parser calls, the sibling method the question names.
+// Agents read on regardless, at a model turn each. A neighbour must be tied to
+// the match, by a reference or by the question; larger ones are left to ranking.
+const SIBLING_LINES: usize = 20;
+const SIBLING_BUDGET: usize = 30;
+// Candidates the ranker rated just below its cutoff held as much of the missing
+// code again, while most responses used a fraction of the budget and one or two
+// of three slots. They are shown only in a spare slot of a small response, as a
+// focused window, and labelled, because most of them are not what was asked for.
+const RUNNER_UP_BELOW_BYTES: usize = 6_000;
 // Bound lexical signature scanning; uncertain spans fall back to source context.
 const SIGNATURE_LINES: usize = 128;
 const MIN_TEXT_BYTES: usize = 180;
@@ -48,6 +60,9 @@ pub struct ContextMatch {
     #[serde(flatten)]
     pub excerpt: SourceExcerpt,
     pub score: f64,
+    /// Rated below the relevance cutoff; shown because the response had room.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lower_confidence: bool,
     /// The focused window that replaces a lower-ranked complete definition
     /// before any match is dropped to fit the budget.
     #[serde(skip)]
@@ -90,6 +105,9 @@ pub struct SourceExcerpt {
     /// True only when the complete enclosing definition is proven and included.
     /// This says nothing about whether all surrounding dependencies were returned.
     pub definition_complete: bool,
+    /// Proven complete definitions in the excerpt: the matched one and any short
+    /// definitions that directly follow it. Zero unless `definition_complete`.
+    pub definitions: usize,
     #[serde(skip)]
     focus_line: usize,
 }
@@ -551,6 +569,42 @@ impl<'a> Snapshot<'a> {
         }
         start
     }
+    /// The end of a short, proven definition that directly follows line `end`:
+    /// only blank lines may separate them, and everything attached above the
+    /// sibling comes with it.
+    fn following_sibling(
+        &self,
+        (start, end): (usize, usize),
+        terms: &HashSet<String>,
+    ) -> Option<usize> {
+        let next = self.declarations.iter().find(|d| d.line > end)?;
+        // The shown code uses it, or the question asks about it by name.
+        let referenced = (start..=end).any(|n| {
+            self.code.get(&n).is_some_and(|code| {
+                code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                    .any(|word| word == next.name)
+            })
+        });
+        let asked = tokenize(&next.name).iter().any(|part| {
+            part.len() >= 4
+                && terms.iter().any(|term| {
+                    term.len() >= 4
+                        && (term.starts_with(part.as_str()) || part.starts_with(term.as_str()))
+                })
+        });
+        if !referenced && !asked {
+            return None;
+        }
+        let header = self.attached_header_start(next.line);
+        let adjoins = (end + 1..header).all(|n| {
+            self.lines
+                .get(&n)
+                .is_some_and(|line| line.trim().is_empty())
+        });
+        let present = (header..=next.end).all(|n| self.lines.contains_key(&n));
+        (next.complete && adjoins && present && header > end && next.end - header < SIBLING_LINES)
+            .then_some(next.end)
+    }
     /// A doc comment often repeats the question better than the code it
     /// documents, and chunks begin at that comment. Only comments and blank
     /// lines may separate the line from the declaration it introduces.
@@ -598,6 +652,8 @@ fn excerpt(
     range: (usize, usize),
     limit: usize,
     preserve_range: bool,
+    // The question's words, for choosing which following definitions belong.
+    terms: &HashSet<String>,
 ) -> Option<SourceExcerpt> {
     snapshot.lines.get(&focus)?;
     let parent = snapshot.containing(focus);
@@ -639,14 +695,6 @@ fn excerpt(
             end += 1;
         }
     }
-    // A definition begins with what is attached to it, not with its keyword.
-    if parent.is_some_and(|d| d.line == start) {
-        start = snapshot.attached_header_start(start);
-    }
-    let text = (start..=end)
-        .map(|n| snapshot.lines[&n])
-        .collect::<Vec<_>>()
-        .join("\n");
     let symbol = parent.map(|d| symbol_header(snapshot, d));
     // Without a proven declaration boundary, source context must not
     // advertise a complete implementation (even when it reaches EOF).
@@ -654,6 +702,27 @@ fn excerpt(
         || end < high
         || (bounded_parent.is_none() && language(path) != Language::Other)
         || symbol.as_ref().is_some_and(|s| s.truncated);
+    // A definition begins with what is attached to it, not with its keyword.
+    if parent.is_some_and(|d| d.line == start) {
+        start = snapshot.attached_header_start(start);
+    }
+    let mut definitions = usize::from(!unproven && bounded_parent.is_some());
+    if definitions == 1 {
+        let mut added = 0;
+        while let Some(sibling_end) = snapshot.following_sibling((start, end), terms) {
+            let size = sibling_end - end;
+            if added + size > SIBLING_BUDGET || end - start + 1 + size > limit {
+                break;
+            }
+            end = sibling_end;
+            added += size;
+            definitions += 1;
+        }
+    }
+    let text = (start..=end)
+        .map(|n| snapshot.lines[&n])
+        .collect::<Vec<_>>()
+        .join("\n");
     // Nothing is missing from a whole file, so it is not an incomplete
     // excerpt; that still proves no declaration boundary.
     let whole_file = snapshot.covers_whole_file(start, end);
@@ -665,7 +734,8 @@ fn excerpt(
         symbol,
         truncated: unproven && !whole_file,
         whole_file,
-        definition_complete: !unproven && bounded_parent.is_some(),
+        definition_complete: definitions > 0,
+        definitions,
         focus_line: focus,
     })
 }
@@ -741,6 +811,7 @@ impl SourceExcerpt {
         self.truncated = true;
         self.whole_file = false;
         self.definition_complete = false;
+        self.definitions = 0;
         true
     }
 }
@@ -749,14 +820,19 @@ impl SourceExcerpt {
     /// the source itself cannot close. Every line carries its file line number
     /// and a tab: models count lines unreliably, so an agent asked for a
     /// location would otherwise cite a line or two off.
-    fn render(&self, out: &mut String) {
-        let label = if self.whole_file {
-            "whole file"
+    fn render(&self, lower_confidence: bool, out: &mut String) {
+        let mut label = if self.whole_file {
+            "whole file".to_owned()
+        } else if self.definitions > 1 {
+            format!("{} complete definitions", self.definitions)
         } else if self.definition_complete {
-            "complete definition"
+            "complete definition".to_owned()
         } else {
-            "partial excerpt"
+            "partial excerpt".to_owned()
         };
+        if lower_confidence {
+            label.push_str(", lower confidence");
+        }
         let longest_run = self
             .text
             .split(|c| c != '`')
@@ -784,7 +860,7 @@ impl ContextPacket {
             if !out.is_empty() {
                 out.push('\n');
             }
-            result.excerpt.render(&mut out);
+            result.excerpt.render(result.lower_confidence, &mut out);
         }
         for related in &self.related {
             let relation = match related.relation {
@@ -809,7 +885,7 @@ impl ContextPacket {
                 "referenced from"
             };
             out.push_str(&format!("\n{relation} {verb} {anchor}:\n"));
-            related.excerpt.render(&mut out);
+            related.excerpt.render(false, &mut out);
         }
         if self.omitted {
             out.push_str("\nLower-ranked evidence was omitted to fit the response limit.\n");
@@ -891,7 +967,7 @@ impl ContextPacket {
 /// Expand up to three ranked winners and attach at most two lexical definition
 /// candidates. All evidence comes from `corpus`; no reads or model calls occur.
 pub fn build_packet(corpus: &[Chunk], winners: &[(Chunk, f64)], question: &str) -> ContextPacket {
-    build_packet_inner(corpus, winners, question, None)
+    build_packet_inner(corpus, winners, &[], question, None)
 }
 
 /// Use syntax facts from the same captured workspace snapshot as `corpus`.
@@ -902,12 +978,26 @@ pub fn build_packet_with_navigation(
     question: &str,
     navigation: &NavigationIndex,
 ) -> ContextPacket {
-    build_packet_inner(corpus, winners, question, Some(navigation))
+    build_packet_inner(corpus, winners, &[], question, Some(navigation))
+}
+
+/// As `build_packet_with_navigation`, offering candidates rated just below the
+/// relevance cutoff for slots the accepted winners leave free. They appear only
+/// while the packet is small, and are labelled lower confidence.
+pub fn build_packet_with_runners_up(
+    corpus: &[Chunk],
+    winners: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
+    question: &str,
+    navigation: &NavigationIndex,
+) -> ContextPacket {
+    build_packet_inner(corpus, winners, runners_up, question, Some(navigation))
 }
 
 fn build_packet_inner(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
     question: &str,
     navigation: Option<&NavigationIndex>,
 ) -> ContextPacket {
@@ -917,6 +1007,7 @@ fn build_packet_inner(
         truncated: false,
         omitted: false,
     };
+    // Nothing accepted is an answer in itself; runners-up only accompany a match.
     if winners.is_empty() {
         return packet;
     }
@@ -926,13 +1017,26 @@ fn build_packet_inner(
     }
     let terms = query_terms(question);
     let mut snapshots = HashMap::new();
-    for (chunk, score) in winners {
+    let ranked = winners
+        .iter()
+        .map(|winner| (winner, false))
+        .chain(runners_up.iter().map(|runner_up| (runner_up, true)));
+    for ((chunk, score), lower_confidence) in ranked {
         if packet.results.len() == RESULT_LIMIT {
-            packet.truncated = true;
+            // Further accepted matches are named by path after the excerpts;
+            // nothing was cut for size.
+            packet.truncated |= !lower_confidence;
+            break;
+        }
+        if lower_confidence
+            && serde_json::to_vec(&packet)
+                .map_or(true, |bytes| bytes.len() >= RUNNER_UP_BELOW_BYTES)
+        {
             break;
         }
         let Some(chunks) = by_path.get(chunk.path.as_str()) else {
             packet.truncated = true;
+            packet.omitted = true;
             continue;
         };
         let snapshot = snapshots
@@ -949,6 +1053,7 @@ fn build_packet_inner(
                 .any(|(i, text)| snapshot.lines.get(&(chunk.start_line + i)) != Some(&text))
         {
             packet.truncated = true;
+            packet.omitted = true;
             continue;
         }
         let focus = focus_line(chunk, &terms, snapshot);
@@ -956,13 +1061,19 @@ fn build_packet_inner(
             .documented_declaration(focus, chunk.end_line)
             .unwrap_or(focus);
         let primary = packet.results.is_empty();
+        // A runner-up earns a focused window, not a long implementation.
+        let whole = if lower_confidence {
+            EXCERPT_LINES
+        } else {
+            PRIMARY_IMPLEMENTATION_LINES
+        };
         let proven = snapshot.containing(focus).is_some_and(|declaration| {
-            declaration.complete
-                && declaration.end - declaration.line < PRIMARY_IMPLEMENTATION_LINES
+            declaration.complete && declaration.end - declaration.line < whole
         });
         let (limit, preserve_range) = if proven {
-            (PRIMARY_IMPLEMENTATION_LINES, false)
+            (whole, false)
         } else if primary
+            && !lower_confidence
             && language(&chunk.path) != Language::Other
             && chunk.end_line - chunk.start_line < PRIMARY_IMPLEMENTATION_LINES
         {
@@ -980,6 +1091,7 @@ fn build_packet_inner(
             (chunk.start_line, chunk.end_line),
             limit,
             preserve_range,
+            &terms,
         ) else {
             continue;
         };
@@ -999,6 +1111,7 @@ fn build_packet_inner(
                     (chunk.start_line, chunk.end_line),
                     EXCERPT_LINES,
                     false,
+                    &terms,
                 )
             })
             .flatten()
@@ -1008,6 +1121,7 @@ fn build_packet_inner(
         packet.results.push(ContextMatch {
             excerpt: context,
             score: if score.is_finite() { *score } else { 0.0 },
+            lower_confidence,
             compact,
         });
     }
@@ -1127,6 +1241,8 @@ fn build_packet_inner(
                 (declaration.line, declaration.end),
                 RELATED_LINES,
                 false,
+                // A supporting definition stays as small as it is.
+                &HashSet::new(),
             ) else {
                 continue;
             };
@@ -1154,8 +1270,6 @@ fn build_packet_inner(
             break;
         }
     }
-    // Until here only dropped winners set the flag.
-    packet.omitted = packet.truncated;
     packet.truncated |= packet.results.iter().any(|r| r.excerpt.truncated)
         || packet.related.iter().any(|r| r.excerpt.truncated);
     packet.fit_to_budget(PACKET_MAX_BYTES);
@@ -1227,6 +1341,7 @@ fn attach_navigation(
                 truncated: !complete && !whole_file,
                 whole_file,
                 definition_complete: complete,
+                definitions: usize::from(complete),
                 focus_line: focus,
             };
             if packet
@@ -1497,6 +1612,187 @@ mod tests {
             "// Section heading\n\nfn first_forwarded_value() -> u32 {\n    1\n}\nfn after() {}";
         let result = packet("plain.rs", detached, "first_forwarded_value");
         assert_eq!(result.results[0].excerpt.start_line, 3);
+    }
+    #[test]
+    fn a_short_following_definition_comes_along_only_when_tied_to_the_match() {
+        let pick = |source: &str, needle: &str, question: &str| {
+            let corpus = chunk_text("src/interpolate.rs", source);
+            let winner = corpus
+                .iter()
+                .find(|chunk| chunk.text.contains(needle))
+                .unwrap()
+                .clone();
+            build_packet(&corpus, &[(winner, 0.9)], question)
+        };
+        // The shown function calls it.
+        let called = "fn find_cap_ref(bytes: &[u8]) -> usize {\n    bytes.iter().take_while(|b| is_valid_cap_letter(b)).count()\n}\n\n/// Whether the byte may appear in a capture name.\n#[inline]\nfn is_valid_cap_letter(b: &u8) -> bool {\n    b.is_ascii_alphanumeric()\n}\n\nfn unrelated() {}";
+        let packet = pick(called, "fn find_cap_ref", "find capture reference");
+        let excerpt = &packet.results[0].excerpt;
+        assert_eq!((excerpt.start_line, excerpt.end_line), (1, 9));
+        assert_eq!(excerpt.definitions, 2);
+        assert!(excerpt.definition_complete && !excerpt.truncated);
+        assert!(
+            packet
+                .render_text()
+                .starts_with("src/interpolate.rs:1-9 (2 complete definitions)\n")
+        );
+        assert!(
+            !excerpt.text.contains("fn unrelated"),
+            "nothing ties it to the match"
+        );
+
+        // The question asks about it by name.
+        let asked = "class MultiDecoder:\n    def __init__(self, children):\n        self.children = list(reversed(children))\n\n    def decode(self, data):\n        return data\n\n    def flush(self):\n        return b\"\"";
+        let corpus = chunk_text("httpx/_decoders.py", asked);
+        let winner = corpus
+            .iter()
+            .find(|chunk| chunk.text.contains("def __init__"))
+            .unwrap()
+            .clone();
+        let packet = build_packet(
+            &corpus,
+            &[(winner, 0.9)],
+            "how the decoder chain is applied",
+        );
+        let excerpt = &packet.results[0].excerpt;
+        assert!(
+            excerpt.text.contains("def decode(self, data):"),
+            "{}",
+            excerpt.text
+        );
+        assert!(!excerpt.text.contains("def flush"), "{}", excerpt.text);
+
+        // Neither: the match stays as small as it is.
+        let alone = "fn find_cap_ref() -> usize {\n    1\n}\n\nfn unrelated() -> usize {\n    2\n}";
+        let excerpt = &pick(alone, "fn find_cap_ref", "find capture reference").results[0].excerpt;
+        assert_eq!(
+            (excerpt.start_line, excerpt.end_line, excerpt.definitions),
+            (1, 3, 1)
+        );
+
+        // Code between them, or a long neighbour, is left to ranking.
+        let apart = "fn find_cap_ref() -> bool {\n    is_valid()\n}\nconst LIMIT: usize = 3;\nfn is_valid() -> bool {\n    true\n}";
+        assert_eq!(
+            pick(apart, "fn find_cap_ref", "find").results[0]
+                .excerpt
+                .end_line,
+            3
+        );
+        let long = format!(
+            "fn find_cap_ref() -> bool {{\n    is_valid()\n}}\n\nfn is_valid() -> bool {{\n{}    true\n}}",
+            "    step();\n".repeat(SIBLING_LINES)
+        );
+        assert_eq!(
+            pick(&long, "fn find_cap_ref", "find").results[0]
+                .excerpt
+                .end_line,
+            3
+        );
+    }
+    #[test]
+    fn runners_up_fill_spare_slots_of_a_small_packet_and_are_labelled() {
+        let mut corpus = chunk_text(
+            "accepted.rs",
+            "pub fn parcel_dispatch() {\n    deliver();\n}",
+        );
+        corpus.extend(chunk_text(
+            "close.rs",
+            "pub fn parcel_route() {\n    plan();\n}",
+        ));
+        corpus.extend(chunk_text(
+            "second.rs",
+            "pub fn parcel_label() {\n    print();\n}",
+        ));
+        corpus.extend(chunk_text(
+            "third.rs",
+            "pub fn parcel_weigh() {\n    scale();\n}",
+        ));
+        let chunk = |path: &str| corpus.iter().find(|c| c.path == path).unwrap().clone();
+        let navigation = NavigationIndex::new_shared(std::iter::empty());
+        let packet = build_packet_with_runners_up(
+            &corpus,
+            &[(chunk("accepted.rs"), 0.9)],
+            &[
+                (chunk("close.rs"), 0.45),
+                (chunk("second.rs"), 0.4),
+                (chunk("third.rs"), 0.36),
+            ],
+            "parcel dispatch",
+            &navigation,
+        );
+        let shown: Vec<_> = packet
+            .results
+            .iter()
+            .map(|r| (r.excerpt.path.as_str(), r.lower_confidence))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("accepted.rs", false),
+                ("close.rs", true),
+                ("second.rs", true)
+            ]
+        );
+        assert!(!packet.omitted, "nothing was cut for size");
+        let text = packet.render_text();
+        assert!(text.contains("accepted.rs:1-3 (whole file)\n"), "{text}");
+        assert!(
+            text.contains("close.rs:1-3 (whole file, lower confidence)\n"),
+            "{text}"
+        );
+        assert!(!text.contains("omitted"), "{text}");
+
+        // Accepted matches always come first and are never displaced.
+        let full = build_packet_with_runners_up(
+            &corpus,
+            &[
+                (chunk("accepted.rs"), 0.9),
+                (chunk("second.rs"), 0.8),
+                (chunk("third.rs"), 0.7),
+            ],
+            &[(chunk("close.rs"), 0.45)],
+            "parcel dispatch",
+            &navigation,
+        );
+        assert!(full.results.iter().all(|r| !r.lower_confidence));
+
+        // A response that is already large keeps to what was accepted.
+        let big = format!(
+            "pub fn parcel_dispatch() {{\n{}}}",
+            "    deliver_the_parcel_to_its_destination();\n".repeat(200)
+        );
+        let mut corpus = chunk_text("accepted.rs", &big);
+        corpus.extend(chunk_text("close.rs", "pub fn parcel_route() {}"));
+        let accepted = corpus[0].clone();
+        let close = corpus
+            .iter()
+            .find(|c| c.path == "close.rs")
+            .unwrap()
+            .clone();
+        let packet = build_packet_with_runners_up(
+            &corpus,
+            &[(accepted, 0.9)],
+            &[(close, 0.45)],
+            "parcel dispatch",
+            &navigation,
+        );
+        assert_eq!(packet.results.len(), 1);
+    }
+    #[test]
+    fn more_accepted_matches_than_slots_is_not_reported_as_cut_for_size() {
+        let mut corpus = Vec::new();
+        for index in 0..5 {
+            corpus.extend(chunk_text(
+                &format!("parcel{index}.rs"),
+                "pub fn parcel_dispatch() {\n    deliver();\n}",
+            ));
+        }
+        let winners: Vec<_> = corpus.iter().map(|chunk| (chunk.clone(), 0.9)).collect();
+        let packet = build_packet(&corpus, &winners, "parcel dispatch");
+        assert_eq!(packet.results.len(), RESULT_LIMIT);
+        assert!(packet.truncated, "more matches exist than are shown");
+        assert!(!packet.omitted);
+        assert!(!packet.render_text().contains("omitted"));
     }
     #[test]
     fn a_match_in_the_doc_comment_returns_the_function_it_documents() {
@@ -2165,20 +2461,14 @@ mod tests {
         ));
         corpus.extend(chunk_text("src/other.rs", "fn probe_source_video() {}\n"));
         let packet = build_packet(&corpus, &[(winner, 1.0)], "run_export_job");
-        assert_eq!(packet.related.len(), 2);
-        assert!(
-            packet
-                .related
-                .iter()
-                .any(|r| r.excerpt.path == "src/export/overlay.rs")
-        );
-        assert!(
-            packet
-                .related
-                .iter()
-                .any(|r| r.excerpt.path == "src/export/job.rs"
-                    && r.excerpt.symbol.as_ref().unwrap().name == "probe_source_video")
-        );
+        // The short same-file helper it calls directly follows it, so it comes
+        // with the match instead of taking a supporting slot.
+        let primary = &packet.results[0].excerpt;
+        assert_eq!((primary.start_line, primary.end_line), (2, 7));
+        assert_eq!(primary.definitions, 2);
+        assert!(primary.text.ends_with("fn probe_source_video() {}"));
+        assert_eq!(packet.related.len(), 1);
+        assert_eq!(packet.related[0].excerpt.path, "src/export/overlay.rs");
     }
     #[test]
     fn uncertain_imports_do_not_fall_back_to_unrelated_free_functions() {

@@ -166,8 +166,17 @@ pub(crate) struct CodeRankingStats {
     /// judged irrelevant, fell just below the threshold, or was never
     /// shortlisted, and supplies the runners-up offered to the agent.
     pub candidates: Vec<CandidateScore>,
+    /// The best candidates rated just below the relevance cutoff, with source,
+    /// for a caller that has room to show them as lower-confidence matches.
+    #[serde(skip)]
+    pub runners_up: Vec<CodeResult>,
     pub jev_calls: Vec<JevCallStats>,
 }
+
+// Measured on 169 replayed agent questions: at 0.35, 11 of 30 added excerpts held
+// expected code that was otherwise missing; at 0.2 it was 12 of 65.
+const RUNNER_UP_FLOOR: f64 = 0.35;
+const RUNNERS_UP: usize = 2;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -365,6 +374,27 @@ pub(crate) fn rank_code_with_stats(
                     start_line: chunk.start_line,
                     end_line: chunk.end_line,
                     score: Some(*score),
+                }
+            })
+            .collect();
+        let accepted: std::collections::HashSet<&str> = ranking
+            .results
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+        stats.runners_up = ranking
+            .judged
+            .iter()
+            .filter(|(id, score)| *score >= RUNNER_UP_FLOOR && !accepted.contains(id.as_str()))
+            .take(RUNNERS_UP)
+            .map(|(id, score)| {
+                let chunk = &selected[id.parse::<usize>().expect("IDs generated locally")];
+                CodeResult {
+                    path: chunk.path.clone(),
+                    start_line: chunk.start_line,
+                    end_line: chunk.end_line,
+                    score: *score,
+                    text: chunk.text.clone(),
                 }
             })
             .collect();

@@ -262,8 +262,8 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     let description = tools[0]["description"].as_str().unwrap();
     for guidance in [
         "prefixed with its file line number",
-        // Some agents re-read every returned range, which costs a model turn each.
-        "Do not re-read lines already shown",
+        // A runner-up must never be mistaken for a match the ranker accepted.
+        "`lower confidence` marks a match rated below the relevance cutoff",
         "Labels describe only that excerpt",
         "candidates, not a complete answer",
     ] {
@@ -552,8 +552,13 @@ fn runners_up_are_named_by_path_and_every_judgment_is_recorded() {
     );
     assert_eq!(requests.len(), 1, "runners-up come from the same judgment");
     let packet = assert_packet_envelope(&response);
-    assert_eq!(packet["results"].as_array().unwrap().len(), 1);
-    assert_eq!(packet["results"][0]["path"], "accepted.rs");
+    let shown: Vec<_> = packet["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["path"].as_str().unwrap(), r["lowerConfidence"] == true))
+        .collect();
+    // The close runner-up takes a spare slot; the weak one is only named.
     let judged: Vec<_> = packet["retrieval"]["candidates"]
         .as_array()
         .unwrap()
@@ -570,10 +575,13 @@ fn runners_up_are_named_by_path_and_every_judgment_is_recorded() {
         ]
     );
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(shown, [("accepted.rs", false), ("close.rs", true)]);
     assert!(
-        text.ends_with(
-            "\nOther candidates, judged less relevant and not shown:\nclose.rs:1-1\nweak.rs:1-1\n"
-        ),
+        text.contains("close.rs:1-1 (whole file, lower confidence)\n"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("\nOther candidates, not shown, best first:\nweak.rs:1-1\n"),
         "{text}"
     );
     assert!(!text.contains("irrelevant.rs"), "rated irrelevant: {text}");
@@ -770,14 +778,19 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         .iter()
         .chain(packet["related"].as_array().unwrap());
     for excerpt in excerpts {
-        let label = if excerpt["wholeFile"] == true {
-            "whole file"
+        let mut label = if excerpt["wholeFile"] == true {
+            "whole file".to_owned()
+        } else if excerpt["definitions"].as_u64().unwrap() > 1 {
+            format!("{} complete definitions", excerpt["definitions"])
         } else if excerpt["definitionComplete"] == true {
-            "complete definition"
+            "complete definition".to_owned()
         } else {
-            "partial excerpt"
+            "partial excerpt".to_owned()
         };
         assert_eq!(excerpt["truncated"] == true, label == "partial excerpt");
+        if excerpt["lowerConfidence"] == true {
+            label.push_str(", lower confidence");
+        }
         let header = format!(
             "{}:{}-{} ({label})\n",
             excerpt["path"].as_str().unwrap(),
@@ -1159,15 +1172,22 @@ fn independent_scores_keep_multiple_implementations_in_one_provider_call() {
     assert_eq!(requests[0]["questions"].as_object().unwrap().len(), 4);
     let packet = assert_packet_envelope(&response);
     let results = packet["results"].as_array().unwrap();
-    assert_eq!(
-        results.len(),
-        2,
-        "uncertain and irrelevant candidates are excluded"
-    );
+    assert_eq!(results.len(), 3, "irrelevant candidates are excluded");
     assert_eq!(results[0]["path"], "password.rs");
     assert_eq!(results[0]["score"], 0.97);
     assert_eq!(results[1]["path"], "token.rs");
     assert_eq!(results[1]["score"], 0.94);
+    // The uncertain candidate is not accepted. With a slot to spare in a small
+    // response it is shown, labelled so it cannot pass for a match.
+    assert_eq!(results[2]["path"], "test.rs");
+    assert_eq!(results[2]["lowerConfidence"], true);
+    assert!(results[0].get("lowerConfidence").is_none());
+    assert!(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("test.rs:1-2 (whole file, lower confidence)\n")
+    );
     assert!(
         results[0]["text"]
             .as_str()
