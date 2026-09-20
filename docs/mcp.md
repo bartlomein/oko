@@ -128,7 +128,10 @@ source in a fence longer than any backtick run it contains. Every source line is
 prefixed with its file line number and a tab. Models count lines unreliably: given
 only a starting line and a hundred lines of code, agents located the right
 statements but reported ranges one to six lines off. The tool description tells
-agents to cite these numbers and to drop the prefix when editing. The prefix costs
+agents to cite these numbers, to drop the prefix when editing, and not to
+re-read lines already shown. In a three-client run, Codex re-read the returned
+range in four of five sessions and OpenCode in all five even when the first
+response held everything the task needed, at four to six seconds per turn. The prefix costs
 about a tenth more response bytes; the structured packet in `OKO_METRICS_FILE`
 keeps unnumbered text. The label describes
 only that excerpt, never its relevance or whether the results answer the whole

@@ -254,7 +254,7 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert!(tools[0].get("outputSchema").is_none());
     let definition = serde_json::to_vec(&tools[0]).unwrap().len();
     assert!(
-        definition <= 1_800,
+        definition <= 1_950,
         "tool definition grew to {definition} bytes"
     );
     // Brevity must not cost correctness: agents that read a completeness label
@@ -262,6 +262,8 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     let description = tools[0]["description"].as_str().unwrap();
     for guidance in [
         "prefixed with its file line number",
+        // Some agents re-read every returned range, which costs a model turn each.
+        "Do not re-read lines already shown",
         "Labels describe only that excerpt",
         "candidates, not a complete answer",
     ] {
