@@ -440,6 +440,33 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn('| claude | native |',text)
         self.assertIn('supports no speed or quality claim',text)
 
+    def test_guided_condition_delivers_setup_guidance_through_each_clients_own_channel(self):
+        text=r.GUIDANCE.read_text()
+        self.assertIn('Treat each excerpt as a file read you have already done',text)
+        with tempfile.TemporaryDirectory() as tmp:
+            trial=Path(tmp); home=trial/'codex-home'; home.mkdir()
+            args,env=r.guide('codex',['codex','exec','PROMPT'],{'CODEX_HOME':str(home)},trial)
+            self.assertEqual((home/'AGENTS.md').read_text(),text)
+            self.assertEqual(args,['codex','exec','PROMPT'],'the checkout and the command stay untouched')
+            args,env=r.guide('opencode',['opencode','run','PROMPT'],{'OPENCODE_CONFIG_CONTENT':json.dumps({'mcp':{}})},trial)
+            config=json.loads(env['OPENCODE_CONFIG_CONTENT'])
+            self.assertEqual(Path(config['instructions'][0]).read_text(),text)
+            self.assertIn('mcp',config)
+            args,env=r.guide('claude',['claude','-p','PROMPT'],{},trial)
+            self.assertEqual(args,['claude','-p','--append-system-prompt',text,'PROMPT'])
+        task={'kind':'search','question':'Where is it?','cacheCondition':'guided'}
+        guided=r.prompt(task,True); plain=r.prompt({**task,'cacheCondition':'current'},True)
+        self.assertIn("The project's standing instructions about Oko search apply.",guided)
+        self.assertNotIn('AGENTS.md',guided)
+        self.assertIn('do not load skills, personal instructions, AGENTS.md, CLAUDE.md, or saved memory.',plain)
+        # Identical otherwise: the condition differs only in the guidance.
+        self.assertEqual(guided.replace("do not load skills, personal instructions, or saved memory. The project's standing instructions about Oko search apply.",''),
+                         plain.replace('do not load skills, personal instructions, AGENTS.md, CLAUDE.md, or saved memory.',''))
+        import subprocess, sys
+        listed=subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','smoke','--guided','--repeats','1'],capture_output=True,text=True)
+        self.assertIn("conditions=('previous', 'current', 'guided')",listed.stdout)
+        self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--guided'],capture_output=True).returncode,0)
+
     def test_report_includes_failed_attempts(self):
         with tempfile.TemporaryDirectory() as temp:
             data={'plan':[{},{}],'complete':True,'runs':[

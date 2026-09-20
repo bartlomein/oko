@@ -68,13 +68,11 @@ Ask your agent:
 Check that it calls Oko’s `search` tool. A connected status confirms tool discovery;
 it does not validate your TypeSafe key or guarantee the agent will choose Oko.
 
-For ongoing guidance, add this to your project’s agent instructions (`AGENTS.md`
-for OpenCode, `CLAUDE.md` for Claude Code). Codex setup already adds guidance:
-
-> Use Oko first to locate unfamiliar code. Start with the user’s wording and normal
-> search. Use the returned source context when sufficient; investigate further
-> when it is incomplete. Use native grep for exact known names or literal text.
-> Fall back to native search if Oko is unavailable.
+For ongoing guidance, add the contents of [`src/guidance.md`](../src/guidance.md)
+to your project’s agent instructions (`AGENTS.md` for OpenCode, `CLAUDE.md` for
+Claude Code). Codex setup already adds it. It says when to use Oko, that excerpts
+are exact file contents, and when to stop searching, with good and bad examples;
+project instructions are where agents look for this, not tool descriptions.
 
 For local-only operation, append `--no-jev` to the server arguments. This needs no
 TypeSafe key and disables deep mode. For server environments without a credential

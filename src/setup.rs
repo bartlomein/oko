@@ -14,7 +14,16 @@ const USAGE: &str = "Usage: oko setup [--root DIRECTORY] [--no-jev] [--no-instru
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
-const GUIDANCE: &str = "<!-- oko:search:start -->\n## Oko code search\nUse the Oko MCP search tool first when locating unfamiliar code or finding where a behavior is implemented in this project. Use the user's terms and scope; do not add guessed frameworks or pipeline stages. For edits, locate the existing code responsible for the requested change; replacement text or values need not exist yet. Preserve exclusions such as what must remain unchanged. Results include source context: use that evidence directly when sufficient. Follow up only for evidence needed to answer; each excerpt's label says whether it is complete. Excerpt lines carry file line numbers; drop that prefix when editing. Related definitions are lexical candidates, not a verified call graph. Use native grep for exact known identifiers or literal text. Start with normal search; use deep mode only if those results are insufficient. If Oko is unavailable or insufficient, fall back to native search.\n<!-- oko:search:end -->";
+// One file, so the benchmark measures the text users receive. It follows the
+// pattern OpenAI documents for its coding models: when to use the tool, what
+// its output is, a stop rule, and good and bad examples. A sentence in an MCP
+// tool description did not change their behaviour; project instructions are
+// where these agents look.
+const GUIDANCE: &str = concat!(
+    "<!-- oko:search:start -->\n",
+    include_str!("guidance.md"),
+    "<!-- oko:search:end -->"
+);
 
 struct Options {
     root: PathBuf,
