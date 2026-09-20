@@ -111,6 +111,10 @@ _RETRIEVAL_FIELDS = (
     "candidateCount", "omittedCount",
 )
 _INVESTIGATION_FIELDS = ("steps", "jevCalls", "stopReason", "complete")
+_USAGE_FIELDS = (
+    "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
+    "reasoningTokens",
+)
 
 
 class PrivacyError(ValueError):
@@ -232,15 +236,43 @@ def _agent_usage(row: Mapping[str, Any]) -> dict[str, int | None] | None:
     return None
 
 
+def _normalize_usage_step(step: Any) -> dict[str, int | None] | None:
+    if isinstance(step, Mapping) and isinstance(step.get("tokens"), Mapping):
+        normalized = normalize_usage(step["tokens"])
+        declared = normalize_usage(step.get("usage"))
+        if normalized is None:
+            normalized = declared
+        elif declared is not None:
+            for key, value in declared.items():
+                if value is not None:
+                    normalized[key] = value
+        return normalized
+    return normalize_usage(step)
+
+
 def _agent_usage_steps(row: Mapping[str, Any]) -> list[dict[str, int | None]] | None:
     steps = row.get("agentUsageSteps")
     if not isinstance(steps, list):
         usage = row.get("usage")
         steps = usage if isinstance(usage, list) else []
-    normalized = [normalize_usage(step.get("tokens") if isinstance(step, Mapping) else step)
-                  for step in steps]
+    normalized = [_normalize_usage_step(step) for step in steps]
     normalized = [step for step in normalized if step is not None]
     return normalized or None
+
+
+def _aggregate_usage_steps(steps: Sequence[Mapping[str, Any]] | None) -> dict[str, int | None] | None:
+    if not steps:
+        return None
+    result = {}
+    for field in _USAGE_FIELDS:
+        values = [
+            int(step[field])
+            for step in steps
+            if isinstance(step.get(field), int) and not isinstance(step[field], bool)
+        ]
+        result[field] = sum(values) if values else None
+    result["totalTokens"] = None
+    return result if any(value is not None for value in result.values()) else None
 
 
 def _safe_fields(value: Any, fields: Sequence[str]) -> dict[str, Any] | None:
@@ -384,6 +416,8 @@ def make_record(
     provider_calls = _provider_calls(row)
     usage = _agent_usage(row)
     usage_steps = _agent_usage_steps(row)
+    if usage is None:
+        usage = _aggregate_usage_steps(usage_steps)
     phase_metrics = _safe_phase_metrics(row.get("tools", []))
     oko_wall_ns = next(
         (

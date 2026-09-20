@@ -54,8 +54,12 @@ python3 scripts/benchmark-twenty/runner.py --repeats 3 --execute
 
 Omit `--execute` to inspect any preset without model calls. `--fast` and `--pilot`
 are mutually exclusive. Fast and full paid runs execute the pilot canary first
-and stop without starting the main run when a client, condition, metric, schema,
-or privacy check fails. Include `--fast` when resuming a fast run; resume also
+and stop without starting the main run when a client, condition, metric, provider
+evidence, schema, or privacy check fails. Non-native canary rows must record a
+positive Oko call count consistent with the agent tool count and at least one
+safe provider call; failed provider calls still count as instrumentation evidence,
+and provider-call count is not required to equal Oko MCP-call count. Include
+`--fast` when resuming a fast run; resume also
 requires a passed canary. Run timed benchmarks one at a time so competing
 sessions do not distort latency.
 

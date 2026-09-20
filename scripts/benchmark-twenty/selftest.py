@@ -193,6 +193,38 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(r.parse_events('codex', [dict(type='turn.failed')])['providerErrors'])
         self.assertTrue(r.parse_events('opencode', [dict(type='error')])['providerErrors'])
 
+    def test_opencode_step_tokens_are_preserved_across_record_and_summary(self):
+        events = [
+            dict(type='step_finish', part=dict(
+                reason='tool-calls', messageID='first',
+                tokens=dict(input=10, output=3, reasoning=2, cache=dict(read=4, write=1)),
+            )),
+            dict(type='step_finish', part=dict(
+                reason='stop', messageID='last',
+                tokens=dict(input=7, output=5, reasoning=1, cache=dict(read=6, write=2)),
+            )),
+        ]
+        parsed = r.parse_events('opencode', events)
+        record = r.observability.make_record(
+            run_id='test', record_id='multi-step', task_id='read', client='opencode',
+            client_version='test', model='test', effort='medium', enabled=False,
+            task=self.read, row=parsed, total_wall_ns=1,
+        )
+        self.assertEqual(len(record['agentUsageSteps']), 2)
+        self.assertEqual(record['agentUsage']['inputTokens'], 17)
+        self.assertEqual(record['agentUsage']['outputTokens'], 8)
+        self.assertEqual(record['agentUsage']['cacheReadTokens'], 10)
+        self.assertEqual(record['agentUsage']['cacheWriteTokens'], 3)
+        self.assertEqual(record['agentUsage']['reasoningTokens'], 3)
+        self.assertIsNone(record['agentUsage']['totalTokens'])
+        summary = r.observability.aggregate([record], run_id='test')
+        self.assertEqual(summary['groups'][0]['agentUsage']['inputTokens'], 17)
+        self.assertEqual(summary['groups'][0]['agentUsage']['outputTokens'], 8)
+        self.assertEqual(summary['groups'][0]['agentUsage']['cacheReadTokens'], 10)
+        self.assertEqual(summary['groups'][0]['agentUsage']['cacheWriteTokens'], 3)
+        self.assertEqual(summary['groups'][0]['agentUsage']['reasoningTokens'], 3)
+        self.assertIsNone(summary['groups'][0]['agentUsage']['totalTokens'])
+
     def test_claude_tool_results_reach_shareable_measurements(self):
         call = dict(phase='normal', durationNs=123, requestBytes=40, responseBytes=80,
                     httpStatus=200, success=True, errorClass=None, usage={'totalTokens': 7})
@@ -304,6 +336,38 @@ class BenchmarkTests(unittest.TestCase):
         result = r.canary_result([row], [self.read], ['codex'], {'codex': 'test'}, 'canary')
         self.assertEqual(result['status'], 'failed')
         self.assertFalse(result['checks']['completedClientRuns'])
+
+    def test_canary_requires_provider_evidence_for_non_native_rows(self):
+        row = dict(
+            id='read', kind='search', taskKind='search', client='codex', oko=True,
+            condition='oko-cold', complete=True, providerErrors=[],
+            durationNs=1, seconds=0.000000001, tokens=None, tools=[],
+            cacheObservations=[{'status': 'cold'}], okoCalls=1, toolCalls=1,
+            final=self.answer, grade={},
+        )
+        result = r.canary_result([row], [self.read], ['codex'], {'codex': 'test'}, 'canary')
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['checks']['okoMetrics'])
+
+    def test_failed_provider_call_counts_as_instrumentation_evidence(self):
+        failed_call = dict(
+            phase='normal', durationNs=123, requestBytes=40, responseBytes=0,
+            httpStatus=503, success=False, errorClass='provider_error', usage=None,
+        )
+        row = dict(
+            id='read', kind='search', taskKind='search', client='codex', oko=True,
+            condition='oko-cold', complete=True, providerErrors=[],
+            durationNs=1, seconds=0.000000001, tokens=None,
+            tools=[{'server': 'oko', 'result': {
+                'timings': {'totalMs': 1, 'cache': {'status': 'cold'}},
+                'providerCalls': [failed_call],
+            }}],
+            cacheObservations=[{'status': 'cold'}], okoCalls=1, toolCalls=1,
+            final=self.answer, grade={},
+        )
+        result = r.canary_result([row], [self.read], ['codex'], {'codex': 'test'}, 'canary')
+        self.assertEqual(result['status'], 'passed')
+        self.assertTrue(result['checks']['okoMetrics'])
 
     def test_process_run_saves_artifacts_and_rejects_wrong_condition(self):
         def minimal_checkout(work):

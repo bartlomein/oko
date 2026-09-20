@@ -45,6 +45,8 @@ class ObservabilityTests(unittest.TestCase):
 
     def test_checked_in_schemas_and_examples(self):
         envelope = json.loads((FORMAT_ROOT / "examples/benchmark.json").read_text())
+        benchmark_schema = json.loads((FORMAT_ROOT / "benchmark.schema.json").read_text())
+        obs.validate_schema(benchmark_schema, envelope)
         obs.validate_benchmark(envelope)
         manifest = json.loads((FORMAT_ROOT / "examples/run-manifest.json").read_text())
         summary = json.loads((FORMAT_ROOT / "examples/summary.json").read_text())
@@ -54,6 +56,20 @@ class ObservabilityTests(unittest.TestCase):
         record_schema = json.loads((FORMAT_ROOT / "record.schema.json").read_text())
         for value in records:
             obs.validate_schema(record_schema, value)
+
+    def test_benchmark_schema_rejects_malformed_nested_values_by_itself(self):
+        envelope = json.loads((FORMAT_ROOT / "examples/benchmark.json").read_text())
+        schema = json.loads((FORMAT_ROOT / "benchmark.schema.json").read_text())
+        cases = (
+            ("manifest", {**envelope["manifest"], "runner": {}}),
+            ("records", [{**envelope["records"][0], "client": {}}]),
+            ("summary", {**envelope["summary"], "records": {"attempted": "one"}}),
+        )
+        for field, malformed in cases:
+            with self.subTest(field=field):
+                candidate = dict(envelope, **{field: malformed})
+                with self.assertRaises(ValueError):
+                    obs.validate_schema(schema, candidate)
 
     def test_privacy_rejects_forbidden_fields_paths_and_secrets(self):
         for value in (
@@ -109,6 +125,45 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(explicit["agentUsage"]["totalTokens"], 14)
         no_total = self.record("no-total", duration=300, usage={"input_tokens": 10, "output_tokens": 4})
         self.assertIsNone(no_total["agentUsage"]["totalTokens"])
+
+    def test_normalized_multi_step_usage_is_retained_and_aggregated(self):
+        steps = [
+            {
+                "inputTokens": 10,
+                "outputTokens": 3,
+                "cacheReadTokens": 4,
+                "cacheWriteTokens": 1,
+                "reasoningTokens": 2,
+                "totalTokens": None,
+            },
+            {
+                "inputTokens": 7,
+                "outputTokens": 5,
+                "cacheReadTokens": 6,
+                "cacheWriteTokens": 2,
+                "reasoningTokens": 1,
+                "totalTokens": None,
+            },
+        ]
+        record = obs.make_record(
+            run_id="test-run", record_id="multi-step", task_id="task-multi-step",
+            client="opencode", client_version="v", model="m", effort="low", enabled=False,
+            task={"kind": "search"}, row={"agentUsageSteps": steps}, total_wall_ns=100,
+        )
+        self.assertEqual(record["agentUsageSteps"], steps)
+        self.assertEqual(record["agentUsage"]["inputTokens"], 17)
+        self.assertEqual(record["agentUsage"]["outputTokens"], 8)
+        self.assertEqual(record["agentUsage"]["cacheReadTokens"], 10)
+        self.assertEqual(record["agentUsage"]["cacheWriteTokens"], 3)
+        self.assertEqual(record["agentUsage"]["reasoningTokens"], 3)
+        self.assertIsNone(record["agentUsage"]["totalTokens"])
+        summary = obs.aggregate([record], run_id="test-run")
+        self.assertEqual(summary["groups"][0]["agentUsage"]["inputTokens"], 17)
+        self.assertEqual(summary["groups"][0]["agentUsage"]["outputTokens"], 8)
+        self.assertEqual(summary["groups"][0]["agentUsage"]["cacheReadTokens"], 10)
+        self.assertEqual(summary["groups"][0]["agentUsage"]["cacheWriteTokens"], 3)
+        self.assertEqual(summary["groups"][0]["agentUsage"]["reasoningTokens"], 3)
+        self.assertIsNone(summary["groups"][0]["agentUsage"]["totalTokens"])
 
     def test_observed_cache_state_is_copied_without_inference(self):
         missing = self.record("missing-state", duration=100, condition="oko-warm")

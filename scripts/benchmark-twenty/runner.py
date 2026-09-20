@@ -642,13 +642,15 @@ def records_for_rows(rows, tasks, versions, run_id):
 
 def canary_result(rows, tasks, clients, versions, run_id):
     client_runs = all(row.get('complete') and not row.get('providerErrors') for row in rows)
-    condition_match = all(not row.get('error', '').startswith('Observed Oko cache state') for row in rows)
+    condition_match = all(not str(row.get('error') or '').startswith('Observed Oko cache state') for row in rows)
     records = []
     metrics_present = True
     try:
         records = records_for_rows(rows, tasks, versions, run_id)
         metrics_present = all(
-            bool(record['okoUsage']['phaseMetrics']) and bool(row.get('cacheObservations'))
+            bool(record['okoUsage']['phaseMetrics'])
+            and bool(row.get('cacheObservations'))
+            and _canary_oko_instrumentation_present(row, record)
             for row, record in zip(rows, records)
             if row.get('condition') != 'native'
         )
@@ -692,6 +694,30 @@ def canary_result(rows, tasks, clients, versions, run_id):
         'taskIds': [task['id'] for task in tasks],
         'conditions': sorted({row['condition'] for row in rows}),
     }
+
+
+def _canary_oko_instrumentation_present(row, record):
+    """Require call metadata and at least one safe provider observation.
+
+    The invariant is intentionally not provider-call count == Oko MCP-call
+    count: one Oko call may perform recovery/deep provider calls. Instead,
+    the recorded Oko call count must be positive and fit within the agent's
+    tool-call count, while the safe provider-call list must be non-empty and
+    agree with the record's Jev count. Failed provider calls remain evidence.
+    """
+    oko_calls = row.get('okoCalls')
+    tool_calls = row.get('toolCalls')
+    recorded_calls = record.get('calls', {})
+    provider_calls = record.get('okoUsage', {}).get('providerCalls', [])
+    return (
+        isinstance(oko_calls, int) and not isinstance(oko_calls, bool) and oko_calls > 0
+        and isinstance(tool_calls, int) and not isinstance(tool_calls, bool)
+        and tool_calls >= oko_calls
+        and recorded_calls.get('okoCalls') == oko_calls
+        and recorded_calls.get('agentToolCalls') == tool_calls
+        and recorded_calls.get('jevCalls') == len(provider_calls) > 0
+        and bool(provider_calls)
+    )
 
 def main():
     global SETTINGS
