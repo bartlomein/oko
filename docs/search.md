@@ -24,8 +24,20 @@ For normal implementation searches, up to 15 of the 30 slots are reserved for
 matching source candidates from the same ranking applied to supported code files.
 Remaining slots come from the broad ranking, with overlapping excerpts counted
 once. This prevents documentation from crowding out all implementations while
-preserving access to prose and unsupported file types. General, explanation,
-and lexical-only searches retain the broad ranking.
+preserving access to prose and unsupported file types. Files in conventional
+test locations or with conventional test names (`tests/`, `__tests__/`,
+`test_*.py`, `*.test.ts`, `*_test.go`, ...) do not take the reserved slots
+unless the question mentions tests: they repeat the vocabulary of what they
+exercise and outnumber it, and on replayed agent questions they held about a
+third of the shortlist. They still compete in the broad ranking. General,
+explanation, and lexical-only searches retain the broad ranking.
+The last four slots go to short matching chunks (under 60 lines) that directly
+adjoin one of the five strongest candidates in the same file. A helper a few
+lines long has too few words to rank by itself, yet a question about its larger
+neighbour often needs it. A neighbour must match the question; adjacency only
+decides between otherwise weak candidates. On 169 replayed agent questions these
+two rules raised the share of expected locations reaching the shortlist from 76%
+to 89% without lowering it for any task.
 Declaration hints cover common Rust, Python, JavaScript/TypeScript, Go, Java,
 C#, C/C++, Kotlin and Swift syntax. Other syntax and non-code files retain
 content/path search. No repository-specific paths or framework rules are used.
