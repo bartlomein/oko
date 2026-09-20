@@ -28,6 +28,13 @@ const RRF_CONSTANT: f64 = 60.0;
 // source matches. The other half remains available to the broad ranking so
 // prose and unsupported source formats can still supply useful evidence.
 const IMPLEMENTATION_SOURCE_SLOTS: usize = SHORTLIST_LIMIT / 2;
+// A helper a few lines long has too few words to rank on its own, yet it is
+// often what a question about its larger neighbour also needs.
+const NEIGHBOR_SOURCES: usize = 5;
+const NEIGHBOR_SLOTS: usize = 4;
+// A short helper shares its chunk with whatever follows it, such as the start
+// of a test module. Larger neighbours rank on their own words.
+const NEIGHBOR_LINES: usize = 60;
 const STOP_WORDS: &[&str] = &[
     "a", "an", "and", "are", "by", "do", "does", "for", "how", "in", "is", "it", "its", "of", "on",
     "or", "the", "this", "that", "to", "what", "when", "where", "which", "who", "why",
@@ -51,6 +58,7 @@ struct Patterns {
     comment: Regex,
     symbol: Regex,
     symbol_extension: Regex,
+    test_path: Regex,
     typed_symbol: Regex,
     typed_extension: Regex,
 }
@@ -65,6 +73,9 @@ fn patterns() -> &'static Patterns {
             typed_extension: Regex::new(r"\.(?:java|cs|c|h|cc|cpp|hpp)$").unwrap(),
             typed_symbol: Regex::new(r"(?m)^[ \t]*(?:[A-Za-z_][A-Za-z0-9_.<>,?\[\]:*&]*[ \t]+)+([A-Za-z_][A-Za-z0-9_]*)[ \t]*\([^;\n]*\)[ \t]*(?:\{|throws\b)").unwrap(),
             symbol_extension: Regex::new(r"\.(?:rs|[cm]?js|jsx|ts|tsx|py|go|java|cs|c|h|cc|cpp|hpp|rb|php|swift|kt)$").unwrap(),
+            // Conventional test locations and file names across ecosystems; a
+            // naming hint, never a parse of the file.
+            test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$").unwrap(),
             symbol: Regex::new(r"(?m)^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|const|export|default|public|private|protected|static|final|override|abstract|internal|open|suspend)\s+)*(?:(?:fn|function\*?|def|fun)\s+([A-Za-z_][A-Za-z0-9_]*)|func\s+(?:\([^\n)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)|(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s+)?(?:\([^\n)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>)").unwrap(),
             acronym: Regex::new("([A-Z]+)([A-Z][a-z])").unwrap(),
             camel: Regex::new("([a-z0-9])([A-Z])").unwrap(),
@@ -371,6 +382,51 @@ fn redundant_source(a: &Chunk, b: &Chunk) -> bool {
     // Suppress substantially overlapping source, not distinct functions or
     // separate portions of a long function that happen to share a file.
     overlap >= shorter.div_ceil(2)
+}
+
+/// Give the last shortlist slots to small matching chunks that directly adjoin
+/// the strongest candidates in the same file. They must match the question
+/// themselves; adjacency only decides between otherwise weak candidates.
+fn lift_neighbors(selected: &mut Vec<Chunk>, candidates: &[Candidate<'_>]) {
+    let mut neighbors: Vec<(usize, &Candidate<'_>)> = Vec::new();
+    for (rank, strong) in selected.iter().take(NEIGHBOR_SOURCES).enumerate() {
+        for candidate in candidates {
+            let chunk = candidate.chunk;
+            let adjoins = chunk.path == strong.path
+                && chunk.end_line - chunk.start_line < NEIGHBOR_LINES
+                && ((chunk.start_line > strong.start_line
+                    && chunk.start_line <= strong.end_line + 1
+                    && chunk.end_line > strong.end_line)
+                    || (chunk.end_line < strong.end_line
+                        && chunk.end_line + 1 >= strong.start_line
+                        && chunk.start_line < strong.start_line));
+            if adjoins
+                && !selected.iter().any(|kept| redundant_source(chunk, kept))
+                && !neighbors
+                    .iter()
+                    .any(|(_, kept)| redundant_source(chunk, kept.chunk))
+            {
+                neighbors.push((rank, candidate));
+            }
+        }
+    }
+    // Neighbours of the best candidate first, then the better match.
+    neighbors.sort_by(|(a_rank, a), (b_rank, b)| {
+        a_rank
+            .cmp(b_rank)
+            .then(b.symbol_aware.total_cmp(&a.symbol_aware))
+            .then_with(|| compare_sources(a.chunk, b.chunk))
+    });
+    neighbors.truncate(NEIGHBOR_SLOTS);
+    if neighbors.is_empty() {
+        return;
+    }
+    selected.truncate(SHORTLIST_LIMIT - neighbors.len());
+    for (_, candidate) in neighbors {
+        let mut chunk = candidate.chunk.clone();
+        chunk.lexical_score = candidate.symbol_aware;
+        selected.push(chunk);
+    }
 }
 
 fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
@@ -787,19 +843,30 @@ impl PreparedCorpus {
             }
         }
         if !matches!(intent, RankingIntent::Implementation) {
-            return fuse_candidates(candidates);
+            let mut selected = fuse_candidates(candidates.clone());
+            lift_neighbors(&mut selected, &candidates);
+            return selected;
         }
         // Score against the same corpus-wide statistics in both lanes. File
         // extensions are only candidate hints: tests, callers and comments
         // still need the reranker's implementation judgment.
+        // Tests repeat the vocabulary of what they exercise and outnumber it, so
+        // they crowded implementations out of the reserved slots. They still
+        // compete in the broad lane, and keep their slots when asked about.
+        let about_tests = terms
+            .iter()
+            .any(|term| matches!(term.as_str(), "test" | "spec" | "fixtur"));
         let source = fuse_candidates(
             candidates
                 .iter()
-                .filter(|candidate| patterns().symbol_extension.is_match(&candidate.chunk.path))
+                .filter(|candidate| {
+                    patterns().symbol_extension.is_match(&candidate.chunk.path)
+                        && (about_tests || !patterns().test_path.is_match(&candidate.chunk.path))
+                })
                 .copied()
                 .collect(),
         );
-        let broad = fuse_candidates(candidates);
+        let broad = fuse_candidates(candidates.clone());
         let mut selected: Vec<_> = source
             .into_iter()
             .take(IMPLEMENTATION_SOURCE_SLOTS)
@@ -815,6 +882,7 @@ impl PreparedCorpus {
                 break;
             }
         }
+        lift_neighbors(&mut selected, &candidates);
         selected
     }
 }

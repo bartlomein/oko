@@ -42,6 +42,10 @@ pub struct ItemRanking {
     pub method: String,
     pub results: Vec<RankedItem>,
     pub omitted_count: usize,
+    /// Every judged candidate's id and relevance, best first, including those
+    /// at or below the threshold. Jev already scores them all in one request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub judged: Vec<(String, f64)>,
 }
 
 /// What makes a candidate useful; independent of its source or storage format.
@@ -91,7 +95,12 @@ pub struct RankOptions {
     pub limit: usize,
     pub no_jev: bool,
     pub intent: RankingIntent,
+    /// Total time allowed for one provider request.
+    pub timeout: Duration,
 }
+
+/// The SDK's total request timeout, for callers with no fallback.
+pub const JEV_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Default for RankOptions {
     fn default() -> Self {
@@ -100,6 +109,7 @@ impl Default for RankOptions {
             limit: 5,
             no_jev: false,
             intent: RankingIntent::General,
+            timeout: JEV_TIMEOUT,
         }
     }
 }
@@ -279,8 +289,12 @@ pub fn rank_response(
         .enumerate()
         .map(|(index, item)| Ok((index, item, score(&format!("candidate_{}", index + 1))?)))
         .collect::<Result<Vec<_>>>()?;
-    scored.retain(|(_, _, score)| *score > RELEVANCE_THRESHOLD);
     scored.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+    let judged = scored
+        .iter()
+        .map(|(_, item, score)| (item.id.clone(), *score))
+        .collect();
+    scored.retain(|(_, _, score)| *score > RELEVANCE_THRESHOLD);
     Ok(ItemRanking {
         method: "jev".into(),
         results: scored
@@ -289,6 +303,7 @@ pub fn rank_response(
             .map(|(_, item, score)| ranked(item, score))
             .collect(),
         omitted_count: original_count.saturating_sub(candidates.len()),
+        judged,
     })
 }
 
@@ -324,6 +339,18 @@ pub fn call_jev_observed(
     phase: &str,
     observations: &mut Vec<JevCallStats>,
 ) -> Result<Value> {
+    call_jev_observed_within(request, api_key, phase, observations, JEV_TIMEOUT)
+}
+
+/// As `call_jev_observed`, for a caller that can do without the provider
+/// sooner than the default timeout.
+pub fn call_jev_observed_within(
+    request: &Value,
+    api_key: &str,
+    phase: &str,
+    observations: &mut Vec<JevCallStats>,
+    timeout: Duration,
+) -> Result<Value> {
     let base = env_value("TYPESAFE_BASE_URL").unwrap_or_else(|| "https://api.typesafe.ai".into());
     let mut body = request.clone();
     body.as_object_mut()
@@ -336,7 +363,7 @@ pub fn call_jev_observed(
     let started = Instant::now();
     let client = match reqwest::blocking::Client::builder()
         .retry(reqwest::retry::never())
-        .timeout(Duration::from_secs(10))
+        .timeout(timeout)
         .build()
     {
         Ok(client) => client,
@@ -370,7 +397,14 @@ pub fn call_jev_observed(
                 response_bytes: 0,
                 http_status: None,
                 success: false,
-                error_class: Some("transport".into()),
+                error_class: Some(
+                    if error.is_timeout() {
+                        "timeout"
+                    } else {
+                        "transport"
+                    }
+                    .into(),
+                ),
                 usage: None,
             });
             return Err(error).context("Jev request failed");
@@ -388,7 +422,14 @@ pub fn call_jev_observed(
                 response_bytes: 0,
                 http_status: Some(status.as_u16()),
                 success: false,
-                error_class: Some("response_read".into()),
+                error_class: Some(
+                    if error.is_timeout() {
+                        "timeout"
+                    } else {
+                        "response_read"
+                    }
+                    .into(),
+                ),
                 usage: None,
             });
             return Err(error).context("Could not read Jev response");
@@ -514,6 +555,7 @@ pub fn rank_items_with_stats(
                 .map(|item| ranked(item, 0.0))
                 .collect(),
             omitted_count: 0,
+            judged: Vec::new(),
         });
     }
     let api_key = options
@@ -527,13 +569,14 @@ pub fn rank_items_with_stats(
             method: "jev".into(),
             results: vec![],
             omitted_count: 0,
+            judged: Vec::new(),
         });
     }
     let mut run = || -> Result<ItemRanking> {
         let (request, candidates) = prepare_request_with_intent(question, &items, options.intent)?;
         rank_response(
             &candidates,
-            &call_jev_observed(&request, api_key, phase, observations)?,
+            &call_jev_observed_within(&request, api_key, phase, observations, options.timeout)?,
             options.limit,
             items.len(),
         )

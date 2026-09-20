@@ -58,7 +58,13 @@ and stop without starting the main run when a client, condition, metric, provide
 evidence, schema, or privacy check fails. Non-native canary rows must record a
 positive Oko call count consistent with the agent tool count and at least one
 safe provider call; failed provider calls still count as instrumentation evidence,
-and provider-call count is not required to equal Oko MCP-call count. Include
+and provider-call count is not required to equal Oko MCP-call count. Oko's tool
+result is agent-facing source text, so cache state, timings, and provider-call
+summaries come from the per-trial `oko-metrics.jsonl` that the launcher selects
+with `OKO_METRICS_FILE`; the runner attaches each line to its Oko tool call. The
+server prepares the workspace at startup, so a session's observed cache state
+comes from its `prewarm` event (`cold` or `disk`) when one was recorded, and the
+first search after it is a memory hit. Include
 `--fast` when resuming a fast run; resume also
 requires a passed canary. Run timed benchmarks one at a time so competing
 sessions do not distort latency.

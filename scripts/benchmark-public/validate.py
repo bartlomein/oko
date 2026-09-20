@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Dependency-free, executable checks against actual edited source modules."""
 import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,51 @@ import types
 
 def check(task_id, work):
     work = Path(work).resolve()
+    if task_id == 'astro-forwarded-empty':
+        with tempfile.TemporaryDirectory() as temp:
+            module=Path(temp)/'request.mts'
+            module.write_bytes((work/'packages/internal-helpers/src/request.ts').read_bytes())
+            script='import assert from "node:assert/strict"; import * as m from '+json.dumps(module.as_uri())+';\n'
+            script+='''
+                for (const value of ['', '  ', ',later', ' ,later', [], [''], null, undefined])
+                    assert.equal(m.getFirstForwardedValue(value), undefined);
+                for (const [value, expected] of [[' a ,b','a'], [['a','b'],'a'], ['0','0'], ['::1','::1']])
+                    assert.equal(m.getFirstForwardedValue(value),expected);
+                assert.equal(m.getValidatedIpFromHeader('127.0.0.1,::1'),'127.0.0.1');
+                assert.equal(m.getValidatedIpFromHeader('<bad>'),undefined);
+            '''
+            subprocess.run(['node','--experimental-strip-types','--input-type=module','-e',script],check=True,timeout=30)
+        return
+    if task_id == 'httpx-reason-fallback':
+        spec=importlib.util.spec_from_file_location('subject',work/'httpx/_status_codes.py')
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        for value in (-1,0,199,299,599,999):assert m.codes.get_reason_phrase(value)=='Unknown Status'
+        for value,phrase in [(200,'OK'),(404,'Not Found'),(m.codes.IM_A_TEAPOT,"I'm a teapot")]:
+            assert m.codes.get_reason_phrase(value)==phrase
+        assert m.codes.is_success(299) and not m.codes.is_success(300)
+        assert m.codes.is_error(599) and not m.codes.is_error(600)
+        return
+    if task_id == 'ripgrep-capture-hyphen':
+        library=Path(__file__).resolve().parents[2]/'benchmarks/results/public-branch/libmemchr.rlib'
+        with tempfile.TemporaryDirectory() as temp:
+            harness=Path(temp)/'check.rs';binary=Path(temp)/'check'
+            source=work/'crates/matcher/src/interpolate.rs'
+            harness.write_text('include!('+json.dumps(str(source))+');\n'+r'''
+                #[test] fn benchmark_contract() {
+                    for (input,expected) in [("$first-name", "MATCH"), ("${first-name}","MATCH"),
+                        ("a${first-name}b","aMATCHb"), ("$$first-name","$first-name"),
+                        ("$1","MATCH"), ("${1}","MATCH"), ("$first_name","MATCH"),
+                        ("${first-name","${first-name"), ("$","$"), ("$unknown", "")] {
+                        let mut out=vec![];
+                        interpolate(input.as_bytes(), |i,out| { if i==1 {out.extend(b"MATCH")} },
+                            |name| if name=="first-name" || name=="first_name" {Some(1)} else {None}, &mut out);
+                        assert_eq!(out,expected.as_bytes(),"{}",input);
+                    }
+                }
+            ''')
+            subprocess.run(['rustc','--edition=2021','--test',str(harness),'--extern','memchr='+str(library),'-o',str(binary)],check=True,timeout=45)
+            subprocess.run([str(binary)],check=True,timeout=15)
+        return
     if task_id.startswith('astro-'):
         name, cases = {
             'astro-query-delimiter': ('removeQueryString', [('', ''), ('?q=a', ''), ('/docs?q=a?b', '/docs'), ('/docs?', '/docs'), ('/docs', '/docs'), ('/a%3Fb', '/a%3Fb')]),

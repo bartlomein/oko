@@ -28,7 +28,10 @@ def main(root=None, state_name="twenty"):
                 else:
                     value = value.split('#', 1)[0].strip()
                 env['TYPESAFE_API_KEY'] = value
-    env.update(OKO_RIPGREP=settings['rg'], OKO_CACHE_DIR=str(cache), OKO_NO_CACHE='0', TYPESAFE_DEFAULT_MODEL=settings['jevModel'])
+    # Oko keeps serving metadata out of the agent-visible tool result; the runner
+    # reads it from this per-trial file beside the cache directory.
+    env.update(OKO_RIPGREP=settings['rg'], OKO_CACHE_DIR=str(cache), OKO_NO_CACHE='0', TYPESAFE_DEFAULT_MODEL=settings['jevModel'],
+               OKO_METRICS_FILE=str(cache.parent / 'oko-metrics.jsonl'))
     os.execve(settings['oko'], [settings['oko'], 'mcp', '--root', str(workspace)], env)
 
 

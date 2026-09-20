@@ -309,6 +309,8 @@ def cache_observations(row):
             timings = value.get('timings')
             if isinstance(timings, Mapping) and isinstance(timings.get('cache'), Mapping):
                 result = [dict(timings['cache'])]
+            elif value.get('event') == 'prewarm' and isinstance(value.get('cache'), Mapping):
+                result = [dict(value['cache'])]
             else:
                 result = []
             for child in value.values():
@@ -323,9 +325,11 @@ def cache_observations(row):
 
     observations = []
     for tool in row.get('tools', []):
-        name = tool.get('name') or tool.get('tool')
-        if tool.get('server') == 'oko' or name in ('oko_search', 'mcp__oko__search'):
-            observations.extend(packets(tool.get('result', tool)))
+        if observability.is_oko_tool(tool):
+            # Startup preparation decides the session's cache state; the search
+            # that follows it is a memory hit. Older results embedded metadata.
+            observations.extend(packets(tool.get('okoPrewarm')))
+            observations.extend(packets({k: v for k, v in tool.items() if k != 'okoPrewarm'}))
     unique = []
     seen = set()
     for observation in observations:
@@ -510,6 +514,7 @@ def run_one(task, client, condition, output, index):
             except ValueError:
                 pass
         row.update(parse_events(client, events))
+        observability.attach_oko_metrics(row['tools'], trial / 'oko-metrics.jsonl')
         row['cacheObservations'] = cache_observations(row)
         row['observedCacheState'] = (
             'native' if condition == 'native'

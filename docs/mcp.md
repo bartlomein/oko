@@ -77,7 +77,7 @@ The server exposes `search` with these inputs:
 
 Results include an automatic context packet: up to three ranked matches with
 source excerpts and up to two supporting definitions or callers. Paths are relative
-to the returned search directory, with inclusive line ranges. Context is drawn
+to the searched directory, with inclusive line ranges. Context is drawn
 from the same file snapshot as the search, deduplicated, and bounded. Detected
 function headers remain lexical hints; JavaScript/TypeScript additionally use
 cached Tree-sitter function boundaries. Shortened excerpts are marked.
@@ -101,13 +101,92 @@ symbols, then direct runtime dependencies, callers, and static types. Name and
 path relevance break ties within those groups. This does not change the search
 ranking sent to Jev.
 
-`definitionComplete` means the returned excerpt contains a proven full definition;
-it does not mean every dependency or caller is included. A `resolved_caller`
-includes the actual call location in `referencedFrom` and its primary definition
-in `target`. Supporting evidence is removed if its primary anchor is trimmed away.
+### Result format
 
-When a top-ranked function has a known boundary and is at most 256 lines,
-Oko considers its full implementation instead of the usual 60-line source window.
+The tool result is one plain-text block, in ranked order, with no JSON escaping,
+scores, or serving metadata:
+
+````text
+src/email/retry-backoff.constant.ts:1-7 (whole file)
+```
+1	import { type QueueJobBackoffOptions } from '...';
+2
+3	export const EMAIL_SEND_RETRY_BACKOFF = {
+...
+```
+
+Definition referenced from src/email/retry-backoff.constant.ts:1:
+src/queue/job-options.ts:12-20 (complete definition)
+```
+12	export type QueueJobBackoffOptions = {
+...
+```
+````
+
+Each excerpt is headed `path:start-end (label)` and followed by the exact current
+source in a fence longer than any backtick run it contains. Every source line is
+prefixed with its file line number and a tab. Models count lines unreliably: given
+only a starting line and a hundred lines of code, agents located the right
+statements but reported ranges one to six lines off. The tool description tells
+agents to cite these numbers, to drop the prefix when editing, and not to
+re-read lines already shown. In a three-client run, Codex re-read the returned
+range in four of five sessions and OpenCode in all five even when the first
+response held everything the task needed, at four to six seconds per turn. The prefix costs
+about a tenth more response bytes; the structured packet in `OKO_METRICS_FILE`
+keeps unnumbered text. The label describes
+only that excerpt, never its relevance or whether the results answer the whole
+question; the tool description says so, because an agent that stops at the first
+plausible excerpt misses multi-location answers:
+
+- `whole file`: the excerpt is the entire file. A file without a provable
+  declaration boundary, such as a constants or configuration module, is still
+  whole and is not reported as incomplete.
+- `complete definition`: a proven full definition (`definitionComplete`); it does
+  not mean every dependency or caller is included.
+- `partial excerpt`: the enclosing code continues outside the range (`truncated`),
+  so the file should be read when the rest matters.
+
+Supporting excerpts are introduced by `Definition referenced from`, `Caller of`
+(parser-resolved bindings, with the reference or target location), or
+`Possible definition referenced from` (a lexical name match only). Supporting
+evidence is removed if its primary anchor is trimmed away. A search of a
+subdirectory starts with `Paths are relative to <directory>/.`; deep searches
+state their step count and stop reason; an empty result says so and suggests
+rephrasing or grep. When whole matches or related excerpts were dropped to fit
+the response cap, the text ends with a note saying so. Tool failures are a
+single error text.
+
+The same packet as structured JSON (`results`, `related`, `truncated`, and per
+excerpt `wholeFile`, `definitionComplete`, `truncated`, `symbol`, `score`) is
+available to operators through [`OKO_METRICS_FILE`](#timings-and-retrieval-metadata),
+never to the agent.
+
+An excerpt that begins at a declaration also includes the decorators, attributes,
+and comments directly above it, up to a blank line, other code, or another
+declaration: `@classmethod` is part of what a method is, and an edit to a
+function usually touches its comment.
+
+After the excerpts, a normal search names up to six further candidates by
+`path:start-end` only, under `Other candidates, judged less relevant and not
+shown:`. Jev judges every shortlisted candidate in the same request, so these
+cost no extra call and one line each; candidates Jev rated irrelevant (below
+0.2) and anything overlapping a shown excerpt are left out. In keyword order the
+heading is `Other keyword matches, not shown:`. An agent that needs more can
+open one of these instead of starting a blind search. `retrieval.candidates` in
+`OKO_METRICS_FILE` records every candidate's path, lines, and relevance, which
+shows whether missed code was judged irrelevant, fell below the threshold, or
+was never shortlisted.
+
+When the line that best matches the question is in a comment directly above a
+declaration in the winning chunk, the declaration is treated as the match: doc
+comments often repeat the question better than the code they document.
+
+When a ranked match lies in a function with a known boundary of at most 256
+lines, Oko returns the full implementation instead of the usual 60-line source
+window, for every match and not only the first: a window that stops a few lines
+short of the relevant statement costs a follow-up read, or a wrong answer.
+Under the response cap, lower-ranked complete definitions are first narrowed
+back to that window, lowest rank first, before any match is dropped.
 If the primary source match lacks a complete function boundary, Oko retains its
 winning chunk when it fits within 256 lines and known declaration boundaries.
 It still marks that excerpt as incomplete; retaining a chunk does not prove a
@@ -137,21 +216,55 @@ up-to-five-result output. Generic `rank` input is unchanged.
 See [source evidence validation](../benchmarks/source-evidence.md) for the snippet
 repair checks and the limits of the ranking evidence changes.
 
-MCP results include both structured JSON and equivalent text JSON for client
-compatibility. The **16,000-byte response cap includes both copies and JSON
-escaping**, excluding the small JSON-RPC envelope. Context is trimmed to fit
-and `truncated` is set; repeated question text and deep action labels are
-separately shortened and marked. Deep results retain investigation counters
-and stop reasons. Tool failures return an error without stopping the server.
+The agent receives a single copy of the evidence: no `structuredContent` and no
+output schema. Clients that receive both forms show the model two copies or only
+the JSON one, and the calling agent pays for every byte on each later turn. The
+**16,000-byte response cap covers the serialized result including JSON escaping
+of the text**, excluding the small JSON-RPC envelope. Context is trimmed to fit
+and marked as described above. Tool failures return an error without stopping
+the server.
 
-The response includes `timings` for preparation (including credential lookup),
+### Timings and retrieval metadata
+
+Serving metadata does not inform the agent's next step, so it is not part of the
+tool result. Set `OKO_METRICS_FILE` in the server's process environment to append
+one JSON line per completed search: the question (shortened to 512 bytes and
+marked), searched directory, ranking mode, `timings`, `retrieval`, deep
+`investigation` counters with shortened action labels, `responseBytes`,
+`responseLimitBytes`, and the structured packet. The file contains source
+excerpts and the question; keep it private. It is not read from `.env`, failed
+searches record nothing, and a write failure is reported on stderr without
+failing the search. The benchmark launchers set it per trial.
+
+### Startup preparation
+
+The server starts preparing the configured root in a background thread as soon
+as it launches, before the client has finished connecting. A coding agent
+usually spends several seconds starting up and composing its first request, so
+the first search normally finds the snapshot in memory and only reconciles
+changes, instead of paying for a disk load or a cold build. It still rescans
+current files: preparation never makes a search return older source. A search
+that arrives while preparation is running waits for it rather than repeating it
+(`timings.cacheWaitMs`), which costs one extra reconciliation compared with
+doing the work itself. Preparation failures are left for the first search to
+report. Set `OKO_NO_PREWARM=1` to prepare on the first search instead, for
+example when many servers are started for sessions that rarely search;
+preparation is also skipped with `OKO_NO_CACHE=1`, because nothing would be
+retained. A search of a subdirectory prepares that scope separately.
+
+When `OKO_METRICS_FILE` is set, finished preparation is recorded as
+`{"event":"prewarm","cache":{...}}` with the same fields as `timings.cache`,
+always before the line of any search that uses it. That search reports
+`memory`; the event shows whether the session started `cold` or from `disk`.
+
+Each search line includes `timings` for preparation (including credential lookup),
 scan, shortlist, context building, and total server work. Normal `retrieval`
 metadata reports candidate counts, budgeted request bytes (before the transport
 adds its model field), preview building, and client-side reranking time
 (HTTP preparation, provider wait, and parsing).
 Deep mode reports investigation time instead. These times exclude Codex's
 reasoning, answer generation, and client transport overhead. No request bodies
-or credentials are logged. Timing and context metadata are automatic.
+or credentials are logged.
 `timings.cache` reports cache status, reused/rebuilt file counts, and the time
 spent scanning, loading, validating/rebuilding file data, building corpus statistics,
 and saving. A disk hit reconstructs source from cached boundaries and validates
@@ -170,7 +283,18 @@ coverage checks, local overhead measurements, and validation limits.
 Normal mode uses one Jev ranking request for a nonempty shortlist, with an
 independent relevance judgment for each candidate. Deep mode is
 bounded to five local actions in MCP, unlike the CLI's optional unbounded mode.
-Each provider call retains its ten-second timeout. Configure a client tool timeout
+A normal MCP search waits four seconds for each Jev request (`OKO_JEV_TIMEOUT_MS`,
+500–10000). Jev usually answers in about half a second; when it is slow,
+unreachable, rate-limited, or returns a server error, the search returns the
+keyword-ranked shortlist instead of an error. The result then begins with a
+line saying that the matches are in keyword order and should be verified, and
+the metrics line reports `ranking: "lexical-fallback"` and
+`retrieval.lexicalFallback` (`timeout`, `unreachable`, or `unavailable`).
+Rejections that need an operator, such as an invalid key, are still errors. If
+Jev judged the first shortlist irrelevant and the recovery request then fails,
+the result stays empty: keyword order does not overrule that judgment. The CLI
+and deep mode keep the ten-second timeout and report provider failures, so
+measurements never mistake keyword order for Jev's. Configure a client tool timeout
 of 120 seconds when using deep mode; large repository scans can take longer.
 One search runs at a time; concurrent calls receive a busy error. Cancellation
 stops before the next search phase or provider call; it does not interrupt a

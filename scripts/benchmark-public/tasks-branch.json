@@ -1,0 +1,248 @@
+{
+  "suite": "branch-v1",
+  "repositories": [
+    {
+      "name": "astro",
+      "commit": "db2eaf17ce84a5f75c5eab30f4ae15af32de1a13",
+      "repository": "git@github.com:withastro/astro.git",
+      "tasks": [
+        {
+          "id": "astro-image-probe-authorization",
+          "kind": "search",
+          "question": "Trace remote image dimension probing: locate the initial and final URL authorization checks, and the shared helper that enforces protocol, domain, and remote-pattern authorization. Return these three decisions.",
+          "expected": [
+            {
+              "path": "packages/astro/src/assets/utils/remoteProbe.ts",
+              "startLine": 46,
+              "endLine": 46,
+              "sha256": "61f2bba1526e71d462eb439d74bc12fe7659aa29eeb8170327ee38ce7d09f6d8"
+            },
+            {
+              "path": "packages/astro/src/assets/utils/remoteProbe.ts",
+              "startLine": 81,
+              "endLine": 81,
+              "sha256": "61f2bba1526e71d462eb439d74bc12fe7659aa29eeb8170327ee38ce7d09f6d8"
+            },
+            {
+              "path": "packages/internal-helpers/src/remote.ts",
+              "startLine": 135,
+              "endLine": 141,
+              "sha256": "f1a93d96688117d1d9b449dae532651564ae484171f1d230151c9473ad385d47"
+            }
+          ]
+        },
+        {
+          "id": "astro-action-key-guards",
+          "kind": "search",
+          "question": "Trace how a dot-separated action name is decoded and resolved without traversing inherited or prototype-related properties. Return the lookup guards and the shared forbidden-key definition.",
+          "expected": [
+            {
+              "path": "packages/astro/src/actions/load.ts",
+              "startLine": 32,
+              "endLine": 32,
+              "sha256": "d82a7af35d828f655c8b5a03b5ee05aa32583e2614ba605e5973f36e9e085d36"
+            },
+            {
+              "path": "packages/astro/src/actions/load.ts",
+              "startLine": 50,
+              "endLine": 50,
+              "sha256": "d82a7af35d828f655c8b5a03b5ee05aa32583e2614ba605e5973f36e9e085d36"
+            },
+            {
+              "path": "packages/astro/src/actions/load.ts",
+              "startLine": 56,
+              "endLine": 56,
+              "sha256": "d82a7af35d828f655c8b5a03b5ee05aa32583e2614ba605e5973f36e9e085d36"
+            },
+            {
+              "path": "packages/internal-helpers/src/object.ts",
+              "startLine": 5,
+              "endLine": 5,
+              "sha256": "8b1d1253e7589bdb4301490423a87b1b141dbb3f93f0894a2fc7c406f673182b"
+            }
+          ]
+        },
+        {
+          "id": "astro-forwarded-empty",
+          "kind": "edit",
+          "question": "Change the helper that extracts the first forwarded header value so an empty or whitespace-only FIRST value returns undefined. Preserve the first-value rule: do not skip an empty first value to pick a later one. Preserve trimming, array handling, and null/undefined handling. Keep the change within this helper and its immediately preceding comment; leave IP validation unchanged.",
+          "path": "packages/internal-helpers/src/request.ts",
+          "replacements": [
+            {
+              "old": "\treturn multiValueHeader\n\t\t?.toString()\n\t\t?.split(',')\n\t\t.map((e) => e.trim())?.[0];",
+              "new": "\treturn multiValueHeader?.toString()?.split(',').map((e) => e.trim())?.[0] || undefined;"
+            }
+          ],
+          "sha256": "6ee040278f9fe4cb744f7cf8de2b53e3e1f725fc23dd541d3e8e9f6752dd7b7e",
+          "allowedLines": [
+            5,
+            11
+          ],
+          "dependencies": []
+        }
+      ]
+    },
+    {
+      "name": "httpx",
+      "commit": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+      "repository": "git@github.com:encode/httpx.git",
+      "tasks": [
+        {
+          "id": "httpx-decoder-chain",
+          "kind": "search",
+          "question": "Trace how response Content-Encoding values select decoders, how multiple decoders are combined, and why decoding runs in reverse application order. Return the response-side selection and the multi-decoder implementation.",
+          "expected": [
+            {
+              "path": "httpx/_models.py",
+              "startLine": 710,
+              "endLine": 711,
+              "sha256": "af118b075a5bcece608acbc989b221703935cbea128a4a98ca21a23ff3e860ac"
+            },
+            {
+              "path": "httpx/_models.py",
+              "startLine": 717,
+              "endLine": 718,
+              "sha256": "af118b075a5bcece608acbc989b221703935cbea128a4a98ca21a23ff3e860ac"
+            },
+            {
+              "path": "httpx/_decoders.py",
+              "startLine": 214,
+              "endLine": 214,
+              "sha256": "a74757f08d0d1077b1b37506a784ac66eb62321b17aeb5a5ebe1a7a956f488a3"
+            },
+            {
+              "path": "httpx/_decoders.py",
+              "startLine": 216,
+              "endLine": 219,
+              "sha256": "a74757f08d0d1077b1b37506a784ac66eb62321b17aeb5a5ebe1a7a956f488a3"
+            }
+          ]
+        },
+        {
+          "id": "httpx-async-auth-body",
+          "kind": "search",
+          "question": "Trace the async authentication flow from the client into the auth adapter: where is the async auth generator started and closed, and where are request/response bodies conditionally read before the synchronous auth generator continues?",
+          "expected": [
+            {
+              "path": "httpx/_client.py",
+              "startLine": 1652,
+              "endLine": 1652,
+              "sha256": "ed717b3ac00debb48d089daeb4dd7fbaf47cb5642ebc4a6e76f3a2fc6cfc0f70"
+            },
+            {
+              "path": "httpx/_client.py",
+              "startLine": 1676,
+              "endLine": 1677,
+              "sha256": "ed717b3ac00debb48d089daeb4dd7fbaf47cb5642ebc4a6e76f3a2fc6cfc0f70"
+            },
+            {
+              "path": "httpx/_auth.py",
+              "startLine": 96,
+              "endLine": 97,
+              "sha256": "60f0aac5d3c7b9b60c0f5a2bc284636e284a4b1e0f65c0028567dc98841f580b"
+            },
+            {
+              "path": "httpx/_auth.py",
+              "startLine": 104,
+              "endLine": 105,
+              "sha256": "60f0aac5d3c7b9b60c0f5a2bc284636e284a4b1e0f65c0028567dc98841f580b"
+            }
+          ]
+        },
+        {
+          "id": "httpx-reason-fallback",
+          "kind": "edit",
+          "question": "Change HTTP status reason-phrase lookup to return the literal string Unknown Status for unrecognized integer codes instead of an empty string. Preserve known phrases, enum/int inputs, and status classification helpers. Update only this lookup method, including any documentation you add within it.",
+          "path": "httpx/_status_codes.py",
+          "replacements": [
+            {
+              "old": "except ValueError:\n            return \"\"",
+              "new": "except ValueError:\n            return \"Unknown Status\""
+            }
+          ],
+          "sha256": "0d89fedae7c180c797cb9b3cc77fd307bc2302e00031ec136a43eb9b9ad712c7",
+          "allowedLines": [
+            38,
+            43
+          ],
+          "dependencies": []
+        }
+      ]
+    },
+    {
+      "name": "ripgrep",
+      "commit": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "repository": "git@github.com:BurntSushi/ripgrep.git",
+      "tasks": [
+        {
+          "id": "ripgrep-capture-expansion",
+          "kind": "search",
+          "question": "Trace replacement expansion from the Captures trait to the byte interpolation engine. Return where capture indices slice the haystack, where doubled dollar signs become one literal dollar, and where named references are resolved.",
+          "expected": [
+            {
+              "path": "crates/matcher/src/lib.rs",
+              "startLine": 453,
+              "endLine": 454,
+              "sha256": "98f194a9cd6a5db50fdd08fe20913f6865bd78b8760236d50395155121ea806e"
+            },
+            {
+              "path": "crates/matcher/src/interpolate.rs",
+              "startLine": 31,
+              "endLine": 34,
+              "sha256": "00b130d37cf2ca685e25f10201f37aa332f5d4cdfe04fe59b00df24a3be1e3a4"
+            },
+            {
+              "path": "crates/matcher/src/interpolate.rs",
+              "startLine": 49,
+              "endLine": 51,
+              "sha256": "00b130d37cf2ca685e25f10201f37aa332f5d4cdfe04fe59b00df24a3be1e3a4"
+            }
+          ]
+        },
+        {
+          "id": "ripgrep-printed-bytes",
+          "kind": "search",
+          "question": "Trace how the standard printer records bytes printed for a single search without losing the lifetime count. Return where the per-search counter resets, where byte statistics are recorded at search finish, and where successful writes update the counter.",
+          "expected": [
+            {
+              "path": "crates/printer/src/standard.rs",
+              "startLine": 842,
+              "endLine": 842,
+              "sha256": "8fc94a8cba6add7dbe8394cd2c6f24dffb773b9f85852ee6d4e97747d40e7460"
+            },
+            {
+              "path": "crates/printer/src/standard.rs",
+              "startLine": 864,
+              "endLine": 864,
+              "sha256": "8fc94a8cba6add7dbe8394cd2c6f24dffb773b9f85852ee6d4e97747d40e7460"
+            },
+            {
+              "path": "crates/printer/src/counter.rs",
+              "startLine": 56,
+              "endLine": 57,
+              "sha256": "ea4c5558d8ca442f91c06108dce64aa01c87517213c6731f9cc5a70cf39eca04"
+            }
+          ]
+        },
+        {
+          "id": "ripgrep-capture-hyphen",
+          "kind": "edit",
+          "question": "Extend replacement capture-name parsing to accept ASCII hyphens in named references, both $first-name and ${first-name}. Preserve digits, letters, underscore, numeric capture references, doubled-dollar escaping, and malformed-reference behavior. Only change the capture-name character predicate and its immediately preceding documentation; do not change the regex engine or tests.",
+          "path": "crates/matcher/src/interpolate.rs",
+          "replacements": [
+            {
+              "old": "b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' => true,",
+              "new": "b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'-' => true,"
+            }
+          ],
+          "sha256": "00b130d37cf2ca685e25f10201f37aa332f5d4cdfe04fe59b00df24a3be1e3a4",
+          "allowedLines": [
+            136,
+            143
+          ],
+          "dependencies": []
+        }
+      ]
+    }
+  ]
+}

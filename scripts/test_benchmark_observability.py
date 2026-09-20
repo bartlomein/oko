@@ -179,6 +179,39 @@ class ObservabilityTests(unittest.TestCase):
         )
         self.assertEqual(record["timing"]["okoWallNs"], 4567)
 
+    def test_metrics_file_supplies_oko_metadata_absent_from_text_results(self):
+        """Oko's tool result is plain source text; serving metadata arrives by file."""
+        searches = [
+            {"timings": {"totalWallNs": 4567, "totalMs": 5, "cache": {"status": "disk"}},
+             "retrieval": {"shortlistedCandidates": 30, "lexicalFallback": "timeout", "jevCalls": [{
+                 "phase": "normal", "durationNs": 9, "requestBytes": 10, "responseBytes": 11,
+                 "httpStatus": 200, "success": True, "errorClass": None,
+                 "usage": {"input_tokens": 3, "output_tokens": 1}}]},
+             "directory": "/private/workspace", "results": [{"text": "SOURCE BODY"}]},
+            {"timings": {"totalWallNs": 1, "totalMs": 1, "cache": {"status": "memory"}}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oko-metrics.jsonl"
+            path.write_text("".join(json.dumps(line) + "\n" for line in searches) + "not json\n")
+            tools = [
+                {"name": "Grep"},
+                {"name": "mcp__oko__search", "result": "auth.rs:1-1 (whole file)"},
+            ]
+            self.assertEqual(obs.attach_oko_metrics(tools, path), 2)
+            self.assertEqual(obs.attach_oko_metrics([{"name": "Read"}], path), 2)
+            self.assertEqual(obs.attach_oko_metrics(tools, Path(directory) / "absent"), 0)
+        self.assertNotIn("okoMetrics", tools[0])
+        self.assertEqual(len(tools[1]["okoMetrics"]), 2, "surplus searches are retained")
+        record = self.record("metrics-file", duration=100, condition="oko-warm",
+                             observed="disk", tools=tools)
+        self.assertEqual(record["timing"]["okoWallNs"], 4567)
+        self.assertEqual(record["okoUsage"]["providerCalls"][0]["usage"]["inputTokens"], 3)
+        self.assertEqual(record["okoUsage"]["phaseMetrics"][0]["cache"]["status"], "disk")
+        self.assertEqual(record["okoUsage"]["phaseMetrics"][0]["retrieval"]["lexicalFallback"], "timeout")
+        serialized = json.dumps(record)
+        self.assertNotIn("SOURCE BODY", serialized)
+        self.assertNotIn("/private/workspace", serialized)
+
     def test_agent_and_jev_usage_are_separate(self):
         row = {
             "durationNs": 100,

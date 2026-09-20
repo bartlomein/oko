@@ -109,6 +109,8 @@ _RETRIEVAL_FIELDS = (
     "shortlistedCandidates", "rankedCandidates", "omittedCandidates", "requestBytes",
     "previewMs", "rerankMs", "attempts", "recoveryCandidates", "recovered",
     "candidateCount", "omittedCount",
+    # Set when Jev was slow or unavailable and results are in keyword order.
+    "lexicalFallback",
 )
 _INVESTIGATION_FIELDS = ("steps", "jevCalls", "stopReason", "complete")
 _USAGE_FIELDS = (
@@ -290,6 +292,59 @@ def _safe_fields(value: Any, fields: Sequence[str]) -> dict[str, Any] | None:
             if number is not None:
                 result[field] = number
     return result or None
+
+
+def is_oko_tool(tool: Mapping[str, Any]) -> bool:
+    name = tool.get("name") or tool.get("tool")
+    return tool.get("server") == "oko" or name in ("oko_search", "mcp__oko__search")
+
+
+def read_oko_metrics(path: Any) -> list[dict[str, Any]]:
+    """Read the JSON lines Oko appends to ``OKO_METRICS_FILE``, one per completed search.
+
+    Oko keeps timings and retrieval metadata out of the agent-visible tool
+    result, so the launcher points this file into the trial directory.
+    """
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        return []
+    metrics = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            metrics.append(value)
+    return metrics
+
+
+def attach_oko_metrics(tools: Sequence[dict[str, Any]], path: Any) -> int:
+    """Attach each recorded search to the matching Oko tool call, in order.
+
+    A failed search records nothing, so surplus lines stay with the last Oko
+    call rather than being dropped. Returns the number of recorded searches.
+
+    The server prepares its workspace at startup and records that as a
+    ``prewarm`` event before any search that uses it. The first search then
+    reports a memory hit, so the event (``okoPrewarm`` on the first Oko call)
+    is what shows whether the session began with a cold or a disk cache.
+    """
+
+    lines = read_oko_metrics(path)
+    metrics = [line for line in lines if "event" not in line]
+    prewarm = [line for line in lines if line.get("event") == "prewarm"]
+    calls = [tool for tool in tools if is_oko_tool(tool)]
+    if calls and prewarm:
+        calls[0]["okoPrewarm"] = prewarm
+    for tool, metric in zip(calls, metrics):
+        tool["okoMetrics"] = [metric]
+    if calls and len(metrics) > len(calls):
+        calls[-1]["okoMetrics"].extend(metrics[len(calls):])
+    return len(metrics)
 
 
 def _safe_phase_metrics(value: Any) -> list[dict[str, Any]]:

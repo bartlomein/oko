@@ -79,7 +79,7 @@ def main():
                 "name": "search", "arguments": {
                     "question": "where is document search debounce configured?"}})
             check(not response.get("isError"), f"{phase}: MCP search failed")
-            packet = response["structuredContent"]
+            packet = client.last_metrics()
             check(packet["ranking"] == ("jev" if args.live else "lexical"),
                   "Unexpected ranking mode")
             timings = packet["timings"]["cache"]

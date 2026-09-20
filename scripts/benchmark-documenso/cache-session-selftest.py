@@ -112,7 +112,8 @@ class CacheSessionTests(unittest.TestCase):
                     response = transport.request('tools/call', {'name': 'search', 'arguments': {
                         'question': 'where is document search implemented?'}})
                     self.assertFalse(response.get('isError'))
-                    packet = response['structuredContent']
+                    self.assertNotIn('structuredContent', response)
+                    packet = bridge.backend.last_metrics()
                     self.assertEqual(packet['ranking'], 'lexical')
                     if phase == 'warm':
                         self.assertEqual(packet['timings']['cache']['status'], 'memory')

@@ -171,8 +171,8 @@
           "expected": [
             {
               "path": "crates/core/flags/hiargs.rs",
-              "startLine": 900,
-              "endLine": 921,
+              "startLine": 906,
+              "endLine": 906,
               "sha256": "4269c0129575a379a725d4023382d33277e73bc9928e6c81f5e8fa4824019169"
             },
             {
@@ -186,7 +186,7 @@
         {
           "id": "ripgrep-lowercase-size",
           "kind": "edit",
-          "question": "Extend the CLI human-readable byte-size parser to accept lowercase k, m, and g suffixes as aliases of K, M, and G using the same binary multipliers. Preserve plain byte counts, checked overflow, and rejection of unsupported suffixes such as T, KB, and whitespace. Update the parser documentation to mention lowercase aliases.",
+          "question": "Extend the CLI human-readable byte-size parser to accept lowercase k, m, and g suffixes as aliases of K, M, and G using the same binary multipliers. Preserve plain byte counts, checked overflow, and rejection of unsupported suffixes such as T, KB, and whitespace. Update the parser documentation to mention lowercase aliases. You may also update its invalid-format error message to describe lowercase support; leave other error variants unchanged.",
           "path": "crates/cli/src/human.rs",
           "replacements": [
             {
@@ -210,6 +210,16 @@
           "allowedLines": [
             71,
             100
+          ],
+          "allowedRanges": [
+            [
+              48,
+              54
+            ],
+            [
+              71,
+              100
+            ]
           ]
         },
         {

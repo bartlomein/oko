@@ -19,7 +19,7 @@ less install-oko.sh
 sh install-oko.sh
 ```
 
-The installer defaults to `v0.2.1`, including when that version is published as a
+The installer defaults to `v0.3.0`, including when that version is published as a
 prerelease. It does not rely on GitHub’s latest stable release endpoint. A draft
 or private release is not anonymously downloadable.
 
@@ -28,12 +28,12 @@ on the `sh` process (not on `curl`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh |
-  OKO_VERSION=v0.2.1 sh
+  OKO_VERSION=v0.3.0 sh
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKO_VERSION` | `v0.2.1` | Published release to download; the `v` prefix is optional. |
+| `OKO_VERSION` | `v0.3.0` | Published release to download; the `v` prefix is optional. |
 | `OKO_INSTALL_DIR` | `~/.local/share/oko` | Version directories containing binaries and license notices. |
 | `OKO_BIN_DIR` | `~/.local/bin` | Directory containing the `oko` symlink. |
 
@@ -64,7 +64,7 @@ Download the matching archive and `SHA256SUMS` from
 In the download directory, substitute your chosen filename:
 
 ```sh
-archive=oko-v0.2.1-aarch64-apple-darwin.tar.gz
+archive=oko-v0.3.0-aarch64-apple-darwin.tar.gz
 grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
 tar -xzf "$archive" &&
 "./${archive%.tar.gz}/oko" --version
@@ -106,6 +106,17 @@ Codex setup keeps its own stable copy: run the newly installed `oko setup` in ea
 configured project to update it. Start a new agent session so it launches the
 updated server. If your client keeps an old server running, reconnect its MCP
 connection or restart the client. Saved credentials are separate from the binary.
+
+### Upgrading to 0.3.0
+
+Coding agents need no changes: they read the search tool's text, which is now
+smaller. The MCP `search` result is plain text and no longer includes
+`structuredContent`, timings, or retrieval metadata. A script that calls the MCP
+tool itself and parses that JSON must set `OKO_METRICS_FILE` and read the JSON
+line Oko appends there for each search; see the
+[MCP reference](mcp.md#timings-and-retrieval-metadata). `oko ask --json` is
+unchanged. Rerun `oko setup` in each configured project so Codex uses the new
+binary and the updated search guidance in `AGENTS.md`.
 
 ## Troubleshooting
 

@@ -1,4 +1,5 @@
-use oko::search::{Chunk, SHORTLIST_LIMIT, chunk_text, rank_lexically};
+use oko::RankingIntent;
+use oko::search::{Chunk, SHORTLIST_LIMIT, chunk_text, rank_lexically, rank_lexically_with_intent};
 use std::collections::HashSet;
 
 fn source(path: &str, start_line: usize, text: &str) -> Chunk {
@@ -202,4 +203,112 @@ fn mixed_code_and_text_results_are_stable_across_corpus_order() {
         assert_eq!((result.start_line, result.end_line), (1, 1));
         assert!(result.lexical_score.is_finite() && result.lexical_score > 0.0);
     }
+}
+
+#[test]
+fn tests_do_not_take_the_slots_reserved_for_implementations() {
+    // Tests repeat the vocabulary of what they exercise and outnumber it.
+    let mut corpus: Vec<_> = (0..40)
+        .map(|index| {
+            source(
+                &format!("tests/client/test_auth_{index}.py"),
+                1,
+                "def test_async_auth_flow_closes_response_body():\n    assert async auth flow response body closed",
+            )
+        })
+        .collect();
+    corpus.push(source(
+        "httpx/_client.py",
+        1645,
+        "async def _send_handling_auth(self, request, auth):\n    auth_flow = auth.async_auth_flow(request)\n    await response.aclose()",
+    ));
+    let question = "where is the async auth flow response body closed";
+    let implementation =
+        rank_lexically_with_intent(&corpus, question, RankingIntent::Implementation);
+    assert_eq!(implementation.len(), SHORTLIST_LIMIT);
+    assert_eq!(
+        implementation[0].path, "httpx/_client.py",
+        "the only implementation leads the reserved source slots"
+    );
+    assert!(
+        implementation[1..]
+            .iter()
+            .all(|chunk| chunk.path.starts_with("tests/")),
+        "tests still compete for the remaining slots"
+    );
+
+    // A question about tests keeps them in the reserved slots.
+    let about_tests = rank_lexically_with_intent(
+        &corpus,
+        "which test covers the async auth flow response body",
+        RankingIntent::Implementation,
+    );
+    assert!(about_tests[0].path.starts_with("tests/"));
+
+    // Names that merely contain "test" are not test files.
+    for path in [
+        "src/contest.rs",
+        "src/latest_release.py",
+        "src/attestation/verify.ts",
+    ] {
+        let corpus = [source(path, 1, "fn async_auth_flow() {}")];
+        let ranked =
+            rank_lexically_with_intent(&corpus, "async auth flow", RankingIntent::Implementation);
+        assert_eq!(ranked.len(), 1, "{path}");
+    }
+}
+
+#[test]
+fn a_short_helper_beside_a_strong_match_reaches_the_shortlist() {
+    // Forty files outrank the helper on words alone; one match beats them all.
+    let mut corpus: Vec<_> = (0..40)
+        .map(|index| {
+            source(
+                &format!("src/other_{index}.rs"),
+                1,
+                "fn capture_name() {\n    // capture name\n}",
+            )
+        })
+        .collect();
+    corpus.push(source(
+        "src/interpolate.rs",
+        92,
+        "fn parse_capture_name_reference(replacement: &[u8]) {\n    // capture name reference parsing in the replacement\n}",
+    ));
+    let helper = source(
+        "src/interpolate.rs",
+        95,
+        "/// Whether the byte is allowed in a capture name.\nfn is_valid_cap_letter(b: &u8) -> bool {\n    b.is_ascii_alphanumeric()\n}",
+    );
+    corpus.push(helper.clone());
+    let question = "capture name reference parsing in the replacement";
+    let ranked = rank_lexically(&corpus, question);
+    assert_eq!(ranked.len(), SHORTLIST_LIMIT);
+    assert_eq!(locations(&ranked)[0], ("src/interpolate.rs", 92, 94));
+    assert!(
+        locations(&ranked).contains(&("src/interpolate.rs", 95, 98)),
+        "the adjoining helper takes one of the last slots: {:?}",
+        locations(&ranked)
+    );
+
+    // Adjacency alone is not evidence: a neighbour that matches nothing stays out.
+    let last = corpus.len() - 1;
+    corpus[last] = source(
+        "src/interpolate.rs",
+        134,
+        "fn unrelated() -> bool {\n    true\n}",
+    );
+    let ranked = rank_lexically(&corpus, question);
+    assert!(!locations(&ranked).contains(&("src/interpolate.rs", 95, 97)));
+
+    // Nor is it lifted beside a weak match.
+    let mut weak = corpus.clone();
+    weak[last] = helper;
+    weak[last - 1] = source(
+        "src/interpolate.rs",
+        92,
+        &"fn find_cap_ref() {}\n".repeat(42),
+    );
+    let ranked = rank_lexically(&weak, question);
+    assert!(!locations(&ranked).contains(&("src/interpolate.rs", 95, 98)));
 }

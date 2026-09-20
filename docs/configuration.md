@@ -78,6 +78,20 @@ They are disposable: missing, incompatible, damaged, or
 unwritable caches fall back to preparing current files. Caching does not change
 ranking or remove Jev requests.
 
+An MCP server prepares its root in the background at startup so the first search
+is a memory hit; set `OKO_NO_PREWARM=1` to defer that work to the first search.
+See [startup preparation](mcp.md#startup-preparation).
+
+Set `OKO_JEV_TIMEOUT_MS` (500–10000, default 4000) to change how long an MCP
+search waits for Jev before returning labelled keyword matches instead; see the
+[MCP reference](mcp.md).
+
+Set `OKO_METRICS_FILE` for an MCP server to append one JSON line per completed
+search with timings, retrieval metadata, and the structured result packet; see the
+[MCP reference](mcp.md#timings-and-retrieval-metadata). The agent-visible tool
+result contains source evidence only. The file includes source excerpts and the
+question, so keep it private. This setting is not read from `.env`.
+
 JSON cache timings distinguish preparation reuse (`reusedFiles`, `rebuiltFiles`)
 from source I/O (`readFiles`, `reusedContents`). `readFiles` counts paths attempted,
 including files rejected by the text/size checks. `validation` and

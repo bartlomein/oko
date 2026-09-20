@@ -180,6 +180,11 @@ impl WorkspaceCache {
         }
     }
 
+    /// Whether a load is retained in memory for the next request.
+    pub fn retains_snapshots(&self) -> bool {
+        self.enabled
+    }
+
     /// Keep disk caching, but fully read contents on each load. One-shot
     /// callers avoid starting a watcher that cannot benefit later requests.
     pub fn without_watching(mut self) -> Self {
