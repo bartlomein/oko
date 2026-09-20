@@ -254,9 +254,18 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert!(tools[0].get("outputSchema").is_none());
     let definition = serde_json::to_vec(&tools[0]).unwrap().len();
     assert!(
-        definition <= 1_500,
+        definition <= 1_700,
         "tool definition grew to {definition} bytes"
     );
+    // Brevity must not cost correctness: agents that read a completeness label
+    // as a relevance claim stop before the evidence is sufficient.
+    let description = tools[0]["description"].as_str().unwrap();
+    for guidance in [
+        "Labels describe only that excerpt",
+        "candidates, not a complete answer",
+    ] {
+        assert!(description.contains(guidance), "{description}");
+    }
     let result = client.search(json!({"question":"authentication token"}));
     assert_eq!(result["result"]["isError"], false, "{result}");
     assert_eq!(
@@ -338,7 +347,7 @@ fn server_instructions_stay_brief_and_subdirectory_searches_state_their_path_bas
     let response = client.request("initialize", json!({"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"oko-tests","version":"1"}}));
     client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let instructions = response["result"]["instructions"].as_str().unwrap();
-    assert!(instructions.len() <= 300, "{}", instructions.len());
+    assert!(instructions.len() <= 320, "{}", instructions.len());
 
     let scoped = client.search(json!({"question":"authentication token","directory":"server"}));
     assert_packet_envelope(&scoped);

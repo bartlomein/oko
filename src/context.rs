@@ -16,9 +16,11 @@ pub const PACKET_MAX_BYTES: usize = 16_000;
 const RESULT_LIMIT: usize = 3;
 const RELATED_LIMIT: usize = 2;
 const EXCERPT_LINES: usize = 60;
-// Spend more context on a proven primary implementation, not every candidate.
-// Uncertain declarations can retain the bounded primary winning chunk without
-// claiming a complete function. Larger spans use a focused source window.
+// Return a proven implementation whole: a window that stops short of the
+// relevant line costs the agent a follow-up read, or a wrong answer if it
+// trusts the window. Lower-ranked matches give this up first under the byte
+// budget. Uncertain declarations can retain the bounded primary winning chunk
+// without claiming a complete function. Larger spans use a focused source window.
 const PRIMARY_IMPLEMENTATION_LINES: usize = 256;
 const RELATED_LINES: usize = 32;
 // Bound lexical signature scanning; uncertain spans fall back to source context.
@@ -43,6 +45,10 @@ pub struct ContextMatch {
     #[serde(flatten)]
     pub excerpt: SourceExcerpt,
     pub score: f64,
+    /// The focused window that replaces a lower-ranked complete definition
+    /// before any match is dropped to fit the budget.
+    #[serde(skip)]
+    compact: Option<SourceExcerpt>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -786,7 +792,8 @@ impl ContextPacket {
     }
 
     /// Fit a serialized packet, including escaping and metadata, to a byte budget.
-    /// Drop lower-ranked matches, then related definitions, before shortening
+    /// Narrow lower-ranked complete definitions to their focused window, then
+    /// drop lower-ranked matches, then related definitions, before shortening
     /// the primary evidence. Only shorten the primary when it cannot fit alone.
     /// Budgets below the empty packet size yield an empty
     /// packet; the caller must reserve at least 44 bytes for that JSON envelope.
@@ -797,7 +804,16 @@ impl ContextPacket {
             > max_bytes
         {
             self.truncated = true;
-            if self.results.len() > 1 {
+            if let Some(result) = self
+                .results
+                .iter_mut()
+                .skip(1)
+                .rev()
+                .find(|result| result.compact.is_some())
+            {
+                result.excerpt = result.compact.take().expect("checked above");
+                self.prune_related();
+            } else if self.results.len() > 1 {
                 self.results.pop();
                 self.omitted = true;
                 self.prune_related();
@@ -881,11 +897,11 @@ fn build_packet_inner(
         }
         let focus = focus_line(chunk, &terms, snapshot);
         let primary = packet.results.is_empty();
-        let (limit, preserve_range) = if primary
-            && snapshot.containing(focus).is_some_and(|declaration| {
-                declaration.complete
-                    && declaration.end - declaration.line < PRIMARY_IMPLEMENTATION_LINES
-            }) {
+        let proven = snapshot.containing(focus).is_some_and(|declaration| {
+            declaration.complete
+                && declaration.end - declaration.line < PRIMARY_IMPLEMENTATION_LINES
+        });
+        let (limit, preserve_range) = if proven {
             (PRIMARY_IMPLEMENTATION_LINES, false)
         } else if primary
             && language(&chunk.path) != Language::Other
@@ -915,9 +931,25 @@ fn build_packet_inner(
         {
             continue;
         }
+        let compact = (!primary && proven)
+            .then(|| {
+                excerpt(
+                    &chunk.path,
+                    snapshot,
+                    focus,
+                    (chunk.start_line, chunk.end_line),
+                    EXCERPT_LINES,
+                    false,
+                )
+            })
+            .flatten()
+            .filter(|window| {
+                (window.start_line, window.end_line) != (context.start_line, context.end_line)
+            });
         packet.results.push(ContextMatch {
             excerpt: context,
             score: if score.is_finite() { *score } else { 0.0 },
+            compact,
         });
     }
     if let Some(navigation) = navigation {
@@ -1301,6 +1333,56 @@ mod tests {
         let packet = packet("worker.rs", &long, "transform");
         assert!(packet.results[0].excerpt.truncated);
         assert!(packet.render_text().contains("(partial excerpt)\n"));
+    }
+    #[test]
+    fn lower_ranked_definitions_are_whole_and_narrow_before_any_match_is_dropped() {
+        let function = |name: &str, marker: &str| {
+            let mut lines = vec![format!("fn {name}() {{")];
+            lines.extend((0..100).map(|line| format!("    step_{line}();")));
+            lines[5] = format!("    {marker}_start();");
+            lines[95] = format!("    {marker}_late_decision();");
+            lines.push("}".into());
+            lines.join("\n")
+        };
+        let first = function("probe", "probe");
+        let second = function("validate", "validate");
+        let mut corpus = chunk_text("probe.rs", &first);
+        corpus.extend(chunk_text("validate.rs", &second));
+        let winners: Vec<_> = ["probe.rs", "validate.rs"]
+            .iter()
+            .map(|path| {
+                let chunk = corpus.iter().find(|chunk| chunk.path == *path).unwrap();
+                (chunk.clone(), 0.9)
+            })
+            .collect();
+        let packet = build_packet(&corpus, &winners, "validate start");
+        let lower = &packet.results[1].excerpt;
+        assert_eq!((lower.start_line, lower.end_line), (1, 102));
+        assert!(lower.definition_complete && !lower.truncated);
+        assert!(lower.text.contains("validate_late_decision"));
+        assert!(!packet.truncated && !packet.omitted);
+
+        // Too small for both definitions, large enough for a focused window.
+        let mut fitted = packet.clone();
+        fitted.fit_to_budget(serde_json::to_vec(&packet).unwrap().len() - 600);
+        assert_eq!(fitted.results.len(), 2, "narrowed instead of dropped");
+        assert_eq!(fitted.results[0].excerpt.text, first);
+        let narrowed = &fitted.results[1].excerpt;
+        assert_eq!(narrowed.end_line - narrowed.start_line + 1, EXCERPT_LINES);
+        assert!(narrowed.truncated && !narrowed.definition_complete);
+        assert!(narrowed.text.contains("validate_start"));
+        assert!(fitted.truncated && !fitted.omitted);
+        assert!(
+            fitted
+                .render_text()
+                .contains("validate.rs:1-60 (partial excerpt)")
+        );
+
+        // The previous policy still applies once narrowing is exhausted.
+        fitted.fit_to_budget(serde_json::to_vec(&fitted).unwrap().len() - 600);
+        assert_eq!(fitted.results.len(), 1);
+        assert_eq!(fitted.results[0].excerpt.text, first);
+        assert!(fitted.omitted);
     }
     #[test]
     fn bounded_signature_fallback_preserves_source_without_inventing_a_span() {

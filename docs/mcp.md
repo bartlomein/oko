@@ -121,15 +121,18 @@ src/queue/job-options.ts:12-20 (complete definition)
 ````
 
 Each excerpt is headed `path:start-end (label)` and followed by the exact current
-source in a fence longer than any backtick run it contains. The label says whether
-rereading the file can add anything:
+source in a fence longer than any backtick run it contains. The label describes
+only that excerpt, never its relevance or whether the results answer the whole
+question; the tool description says so, because an agent that stops at the first
+plausible excerpt misses multi-location answers:
 
 - `whole file`: the excerpt is the entire file. A file without a provable
   declaration boundary, such as a constants or configuration module, is still
   whole and is not reported as incomplete.
 - `complete definition`: a proven full definition (`definitionComplete`); it does
   not mean every dependency or caller is included.
-- `partial excerpt`: the enclosing code continues outside the range (`truncated`).
+- `partial excerpt`: the enclosing code continues outside the range (`truncated`),
+  so the file should be read when the rest matters.
 
 Supporting excerpts are introduced by `Definition referenced from`, `Caller of`
 (parser-resolved bindings, with the reference or target location), or
@@ -146,8 +149,12 @@ excerpt `wholeFile`, `definitionComplete`, `truncated`, `symbol`, `score`) is
 available to operators through [`OKO_METRICS_FILE`](#timings-and-retrieval-metadata),
 never to the agent.
 
-When a top-ranked function has a known boundary and is at most 256 lines,
-Oko considers its full implementation instead of the usual 60-line source window.
+When a ranked match lies in a function with a known boundary of at most 256
+lines, Oko returns the full implementation instead of the usual 60-line source
+window, for every match and not only the first: a window that stops a few lines
+short of the relevant statement costs a follow-up read, or a wrong answer.
+Under the response cap, lower-ranked complete definitions are first narrowed
+back to that window, lowest rank first, before any match is dropped.
 If the primary source match lacks a complete function boundary, Oko retains its
 winning chunk when it fits within 256 lines and known declaration boundaries.
 It still marks that excerpt as incomplete; retaining a chunk does not prove a
