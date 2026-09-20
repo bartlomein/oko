@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bartlomein/oko/blob/main/benchmarks/oko-benchmark/v1/record.schema.json",
+  "title": "Oko benchmark v1 record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "runId", "recordId", "task", "target", "oko", "client", "condition", "status", "failure", "timing", "correctness", "calls", "agentUsage", "okoUsage", "privacy"],
+  "properties": {
+    "format": {"const": "oko-benchmark/v1"},
+    "runId": {"type": "string"},
+    "recordId": {"type": "string"},
+    "task": {
+      "type": "object", "additionalProperties": false, "required": ["idHash"],
+      "properties": {"idHash": {"type": "string"}}
+    },
+    "target": {
+      "type": "object", "additionalProperties": false, "required": ["commit"],
+      "properties": {"commit": {"type": ["string", "null"]}}
+    },
+    "oko": {
+      "type": "object", "additionalProperties": false, "required": ["commit", "version"],
+      "properties": {"commit": {"type": ["string", "null"]}, "version": {"type": ["string", "null"]}}
+    },
+    "client": {
+      "type": "object", "additionalProperties": false, "required": ["name", "version", "model", "effort"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": ["string", "null"]},
+        "model": {"type": ["string", "null"]},
+        "effort": {"type": ["string", "null"]}
+      }
+    },
+    "condition": {
+      "type": "object", "additionalProperties": false, "required": ["requested", "observedCacheState"],
+      "properties": {
+        "requested": {"enum": ["native", "oko-cold", "oko-warm"]},
+        "observedCacheState": {"type": ["string", "null"]}
+      }
+    },
+    "status": {"enum": ["succeeded", "failed", "timeout"]},
+    "failure": {
+      "type": "object", "additionalProperties": false, "required": ["class"],
+      "properties": {"class": {"type": ["string", "null"]}}
+    },
+    "timing": {
+      "type": "object", "additionalProperties": false, "required": ["totalWallNs", "agentWallNs", "okoWallNs", "monotonic"],
+      "properties": {
+        "totalWallNs": {"type": ["integer", "null"]},
+        "agentWallNs": {"type": ["integer", "null"]},
+        "okoWallNs": {"type": ["integer", "null"]},
+        "monotonic": {"const": true}
+      }
+    },
+    "correctness": {
+      "type": "object", "additionalProperties": false, "required": ["correctFirst", "correctTopFive", "expectedPatchMatch", "passed", "known", "quality"],
+      "properties": {
+        "correctFirst": {"type": ["boolean", "null"]},
+        "correctTopFive": {"type": ["boolean", "null"]},
+        "expectedPatchMatch": {"type": ["boolean", "null"]},
+        "passed": {"type": ["boolean", "null"]},
+        "known": {"type": "boolean"},
+        "quality": {"type": "string"}
+      }
+    },
+    "calls": {
+      "type": "object", "additionalProperties": false, "required": ["agentToolCalls", "okoCalls", "jevCalls"],
+      "properties": {
+        "agentToolCalls": {"type": ["integer", "null"]},
+        "okoCalls": {"type": ["integer", "null"]},
+        "jevCalls": {"type": ["integer", "null"]}
+      }
+    },
+    "agentUsage": {"$ref": "#/$defs/usage"},
+    "okoUsage": {
+      "type": "object", "additionalProperties": false, "required": ["providerCalls", "tokenUsage"],
+      "properties": {
+        "providerCalls": {"type": "array", "items": {"$ref": "#/$defs/providerCall"}},
+        "tokenUsage": {"type": ["array", "null"], "items": {"$ref": "#/$defs/usage"}}
+      }
+    },
+    "privacy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["promptRecorded", "sourceBodiesRecorded", "rawEventLogsRecorded", "headersRecorded", "keysRecorded", "toolArgumentsRecorded", "evidenceBodiesRecorded", "stderrRecorded", "absolutePathsRecorded"],
+      "properties": {
+        "promptRecorded": {"const": false},
+        "sourceBodiesRecorded": {"const": false},
+        "rawEventLogsRecorded": {"const": false},
+        "headersRecorded": {"const": false},
+        "keysRecorded": {"const": false},
+        "toolArgumentsRecorded": {"const": false},
+        "evidenceBodiesRecorded": {"const": false},
+        "stderrRecorded": {"const": false},
+        "absolutePathsRecorded": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "usage": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "properties": {
+        "inputTokens": {"type": ["integer", "null"]},
+        "outputTokens": {"type": ["integer", "null"]},
+        "cacheReadTokens": {"type": ["integer", "null"]},
+        "cacheWriteTokens": {"type": ["integer", "null"]},
+        "totalTokens": {"type": ["integer", "null"]}
+      }
+    },
+    "providerCall": {
+      "type": "object", "additionalProperties": false,
+      "required": ["phase", "durationNs", "requestBytes", "responseBytes", "httpStatus", "success", "errorClass", "usage"],
+      "properties": {
+        "phase": {"type": "string"},
+        "durationNs": {"type": ["integer", "null"]},
+        "requestBytes": {"type": ["integer", "null"]},
+        "responseBytes": {"type": ["integer", "null"]},
+        "httpStatus": {"type": ["integer", "null"]},
+        "success": {"type": "boolean"},
+        "errorClass": {"type": ["string", "null"]},
+        "usage": {"$ref": "#/$defs/usage"}
+      }
+    }
+  }
+}

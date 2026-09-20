@@ -1,5 +1,15 @@
 # Benchmarking and development
 
+## Shareable benchmark evidence
+
+All new benchmark runners should target the versioned
+[`oko-benchmark/v1` format](../benchmarks/oko-benchmark/v1/README.md). It keeps
+Rust-inside Oko measurements separate from Python-outside client timing, retains
+failed-run denominators, reports median/p95 successful latency, and never guesses
+missing token usage. The Twenty runner is the first integrated writer; existing
+historical scripts may keep their local artifacts while migrating their outer
+reports to the shared module.
+
 [← Back to Oko](../README.md)
 
 ## Public repository comparison

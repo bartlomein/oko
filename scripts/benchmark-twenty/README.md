@@ -93,6 +93,18 @@ Each run creates `benchmarks/results/twenty/results-*/report.json` and `report.m
 Per-session artifacts include raw events, stderr, final response, usage counters,
 Oko/tool call counts, grading, patches, and untracked file contents. Treat raw logs
 as local artifacts. Disposable workspaces are removed after artifacts are saved. Cleanup failures are recorded as warnings and retain the workspace without discarding a completed session.
+
+Every run also writes a separate `shareable/` bundle containing
+`run-manifest.json`, `records.jsonl`, `summary.json`, and `report.md` in the
+versioned `oko-benchmark/v1` format. The bundle is privacy-validated and does
+not copy the local raw events, stderr, prompts, source bodies, tool arguments,
+evidence, credentials, headers, or absolute paths. Agent usage and Oko/Jev usage
+remain separate; missing provider usage is `null`. Send the `shareable/` bundle
+for evidence, not the surrounding trial directories.
+
+Future runners can import `scripts/benchmark_observability.py` and call
+`perf_counter_ns()`, `make_record()`, and `write_bundle()`; the concise adoption
+example and schema references are in [`benchmarks/oko-benchmark/v1/README.md`](../../benchmarks/oko-benchmark/v1/README.md).
 Source-checkout state and frozen input hashes are rechecked at the end.
 
 Read questions are graded by top-one/top-five overlap with source-verified line

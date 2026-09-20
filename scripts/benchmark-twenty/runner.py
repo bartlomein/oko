@@ -2,6 +2,9 @@
 """Twenty benchmark (10 read-only, 5 edits). Defaults to plan-only; --execute is required for model calls."""
 import argparse, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tarfile, tempfile, time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import benchmark_observability as observability
+
 ROOT = Path(__file__).resolve().parent
 PROJECT_NAME = 'Twenty'
 STATE = ROOT.parents[1] / 'benchmarks/results/twenty'
@@ -255,7 +258,7 @@ def run_one(task, client, enabled, output, index):
     baseline_commit = git(work, 'rev-parse', 'HEAD')
     args, env = args_for(task, client, enabled, work, trial)
     row = {'id': task['id'], 'kind': task['kind'], 'client': client, 'oko': enabled, 'requestedModel': SETTINGS['models'][client], 'requestedEffort': SETTINGS.get('effort', 'medium'), 'artifact': str(trial)}
-    started = time.monotonic()
+    started_ns = observability.perf_counter_ns()
     try:
         with (trial / 'events.jsonl').open('w') as stdout, (trial / 'stderr.txt').open('w') as stderr:
             proc = subprocess.Popen(args, cwd=work, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
@@ -265,7 +268,8 @@ def run_one(task, client, enabled, output, index):
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
                 raise
-        row['seconds'] = time.monotonic() - started
+        row['durationNs'] = observability.elapsed_ns(started_ns)
+        row['seconds'] = row['durationNs'] / 1_000_000_000
         row['exitCode'] = proc.returncode
         events = []
         for line in (trial / 'events.jsonl').read_text().splitlines():
@@ -287,7 +291,8 @@ def run_one(task, client, enabled, output, index):
     except Exception as e:
         row['error'] = type(e).__name__ + ': ' + str(e)
     finally:
-        row.setdefault('seconds', time.monotonic() - started)
+        row.setdefault('durationNs', observability.elapsed_ns(started_ns))
+        row.setdefault('seconds', row['durationNs'] / 1_000_000_000)
         (trial / 'changes.patch').write_bytes(git(work, 'diff', '--binary', baseline_commit.decode().strip()))
         extras = git(work, 'ls-files', '--others', '-z').decode().split('\x00')
         for name in filter(None, extras):
@@ -307,6 +312,33 @@ def run_one(task, client, enabled, output, index):
 def source_state():
     repo = Path(SETTINGS['repository'])
     return {'commit': git(repo, 'rev-parse', 'HEAD').decode().strip(), 'status': git(repo, 'status', '--porcelain').decode()}
+
+
+def shareable_manifest(run_id, clients, versions):
+    return observability.manifest(
+        run_id=run_id,
+        target={
+            'repository': PROJECT_NAME,
+            'commit': SETTINGS.get('commit'),
+            'version': SETTINGS.get('targetVersion'),
+        },
+        oko={
+            'repository': 'bartlomein/oko',
+            'commit': SETTINGS.get('okoCommit'),
+            'version': SETTINGS.get('okoVersion'),
+            'binarySha256': SETTINGS.get('okoSha256'),
+        },
+        clients=[
+            {
+                'name': client,
+                'version': versions.get(client),
+                'model': SETTINGS['models'].get(client),
+                'effort': SETTINGS.get('effort'),
+            }
+            for client in clients
+        ],
+        runner_version='benchmark-twenty',
+    )
 
 def make_plan(tasks, modes=MODES, repeats=1):
     return [(task, *modes[(offset + i + repeat) % len(modes)], repeat + 1) for repeat in range(repeats) for i, task in enumerate(tasks) for offset in range(len(modes))]
@@ -375,6 +407,7 @@ def main():
     if not output.is_relative_to(STATE.resolve()):
         raise RuntimeError('Resume directory must be within benchmark artifacts')
     output.chmod(448)
+    run_id = output.name
     rows = []
     if args.resume:
         previous = json.loads((output / 'report.json').read_text())
@@ -399,6 +432,30 @@ def main():
             lines.append(f"| {row['client']} | {row['oko']} | {row['kind']} | {row['completed']}/{row['attempted']} | {row['firstHits']}/{row['topFiveHits']} | {row['expectedPatchMatches']} | {row['reviewRequired']} | {seconds} |")
         lines += ['', report['method'], '', *report['caveats']]
         (output / 'report.md').write_text('\n'.join(lines) + '\n')
+        records = [
+            observability.make_record(
+                run_id=run_id,
+                record_id=f'{index:03}',
+                task_id=row['id'],
+                client=row['client'],
+                client_version=versions.get(row['client']),
+                model=row.get('requestedModel'),
+                effort=row.get('requestedEffort'),
+                enabled=row.get('oko', False),
+                task=next(task for task in chosen if task['id'] == row['id']),
+                target_commit=SETTINGS.get('commit'),
+                oko_commit=SETTINGS.get('okoCommit'),
+                oko_version=SETTINGS.get('okoVersion'),
+                row=row,
+                total_wall_ns=row.get('durationNs'),
+            )
+            for index, row in enumerate(rows, 1)
+        ]
+        observability.write_bundle(
+            output / 'shareable',
+            shareable_manifest(run_id, clients, versions),
+            records,
+        )
     save_report()
     completed_count = len(rows)
     try:

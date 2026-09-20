@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bartlomein/oko/blob/main/benchmarks/oko-benchmark/v1/run-manifest.schema.json",
+  "title": "Oko benchmark v1 run manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "runId", "runner", "target", "oko", "clients", "privacy", "standards"],
+  "properties": {
+    "format": {"const": "oko-benchmark/v1"},
+    "runId": {"type": "string", "minLength": 1},
+    "runner": {
+      "type": "object", "additionalProperties": false, "required": ["name", "version"],
+      "properties": {"name": {"type": "string"}, "version": {"type": "string"}}
+    },
+    "target": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "commit", "version"],
+      "properties": {
+        "repository": {"type": "string"},
+        "commit": {"type": ["string", "null"]},
+        "version": {"type": ["string", "null"]}
+      }
+    },
+    "oko": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "commit", "version", "binarySha256"],
+      "properties": {
+        "repository": {"type": "string"},
+        "commit": {"type": ["string", "null"]},
+        "version": {"type": ["string", "null"]},
+        "binarySha256": {"type": ["string", "null"]}
+      }
+    },
+    "clients": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "version", "model", "effort"],
+        "properties": {
+          "name": {"type": "string"},
+          "version": {"type": ["string", "null"]},
+          "model": {"type": ["string", "null"]},
+          "effort": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "privacy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["promptRecorded", "sourceBodiesRecorded", "rawEventLogsRecorded", "headersRecorded", "keysRecorded", "toolArgumentsRecorded", "evidenceBodiesRecorded", "stderrRecorded", "absolutePathsRecorded"],
+      "properties": {
+        "promptRecorded": {"const": false},
+        "sourceBodiesRecorded": {"const": false},
+        "rawEventLogsRecorded": {"const": false},
+        "headersRecorded": {"const": false},
+        "keysRecorded": {"const": false},
+        "toolArgumentsRecorded": {"const": false},
+        "evidenceBodiesRecorded": {"const": false},
+        "stderrRecorded": {"const": false},
+        "absolutePathsRecorded": {"const": false}
+      }
+    },
+    "standards": {"type": "object", "additionalProperties": {"type": "string"}}
+  }
+}

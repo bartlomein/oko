@@ -474,7 +474,13 @@ fn assert_packet_envelope(response: &Value) -> &Value {
     assert!(packet["results"].as_array().unwrap().len() <= 3);
     assert!(packet["related"].as_array().unwrap().len() <= 2);
     assert!(packet["truncated"].is_boolean());
-    for phase in ["preparationMs", "scanMs", "contextMs", "totalMs"] {
+    for phase in [
+        "preparationMs",
+        "scanMs",
+        "contextMs",
+        "totalMs",
+        "totalWallNs",
+    ] {
         assert!(
             packet["timings"][phase].as_f64().is_some_and(|n| n >= 0.0),
             "missing or invalid timing {phase}: {packet}"

@@ -1,0 +1,10 @@
+{
+  "format": "oko-benchmark/v1",
+  "runId": "run-example-001",
+  "runner": {"name": "benchmark-twenty", "version": "1"},
+  "target": {"repository": "example-repository", "commit": "0123456789abcdef0123456789abcdef01234567", "version": null},
+  "oko": {"repository": "bartlomein/oko", "commit": "89abcdef0123456789abcdef0123456789abcdef", "version": "0.2.1", "binarySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "clients": [{"name": "codex", "version": "example-client-1", "model": "example-model", "effort": "medium"}],
+  "privacy": {"promptRecorded": false, "sourceBodiesRecorded": false, "rawEventLogsRecorded": false, "headersRecorded": false, "keysRecorded": false, "toolArgumentsRecorded": false, "evidenceBodiesRecorded": false, "stderrRecorded": false, "absolutePathsRecorded": false},
+  "standards": {"pythonPerfCounterNs": "https://docs.python.org/3/library/time.html#time.perf_counter_ns", "httpSemantics": "https://www.rfc-editor.org/rfc/rfc9110.html"}
+}
