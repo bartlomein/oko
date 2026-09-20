@@ -254,13 +254,14 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert!(tools[0].get("outputSchema").is_none());
     let definition = serde_json::to_vec(&tools[0]).unwrap().len();
     assert!(
-        definition <= 1_700,
+        definition <= 1_800,
         "tool definition grew to {definition} bytes"
     );
     // Brevity must not cost correctness: agents that read a completeness label
     // as a relevance claim stop before the evidence is sufficient.
     let description = tools[0]["description"].as_str().unwrap();
     for guidance in [
+        "prefixed with its file line number",
         "Labels describe only that excerpt",
         "candidates, not a complete answer",
     ] {
@@ -270,7 +271,7 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert_eq!(result["result"]["isError"], false, "{result}");
     assert_eq!(
         result["result"]["content"][0]["text"],
-        "auth.rs:1-1 (whole file)\n```\nfn authenticate() { validate_token(); }\n```\n"
+        "auth.rs:1-1 (whole file)\n```\n1\tfn authenticate() { validate_token(); }\n```\n"
     );
     let data = &result["metrics"];
     assert_eq!(data["ranking"], "lexical");
@@ -353,7 +354,7 @@ fn server_instructions_stay_brief_and_subdirectory_searches_state_their_path_bas
     assert_packet_envelope(&scoped);
     assert_eq!(
         scoped["result"]["content"][0]["text"],
-        "Paths are relative to server/.\n\nauth.rs:1-1 (whole file)\n```\nfn authenticate() { validate_token(); }\n```\n"
+        "Paths are relative to server/.\n\nauth.rs:1-1 (whole file)\n```\n1\tfn authenticate() { validate_token(); }\n```\n"
     );
     let unscoped = client.search(json!({"question":"authentication token"}));
     assert!(
@@ -706,9 +707,16 @@ fn assert_packet_envelope(response: &Value) -> &Value {
             + header.len()..];
         let fence = body.lines().next().unwrap();
         assert!(fence.len() >= 3 && fence.chars().all(|c| c == '`'));
+        // The agent reads each line's number instead of counting from the header.
+        let numbered = excerpt["text"]
+            .as_str()
+            .unwrap()
+            .split('\n')
+            .zip(excerpt["startLine"].as_u64().unwrap()..)
+            .map(|(line, number)| format!("{number}\t{line}\n"))
+            .collect::<String>();
         assert!(
-            body[fence.len() + 1..]
-                .starts_with(&format!("{}\n{fence}\n", excerpt["text"].as_str().unwrap())),
+            body[fence.len() + 1..].starts_with(&format!("{numbered}{fence}\n")),
             "{header}: {text}"
         );
     }

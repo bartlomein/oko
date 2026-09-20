@@ -712,7 +712,9 @@ impl SourceExcerpt {
 }
 impl SourceExcerpt {
     /// `path:start-end (label)` followed by the exact source in a fence that
-    /// the source itself cannot close.
+    /// the source itself cannot close. Every line carries its file line number
+    /// and a tab: models count lines unreliably, so an agent asked for a
+    /// location would otherwise cite a line or two off.
     fn render(&self, out: &mut String) {
         let label = if self.whole_file {
             "whole file"
@@ -729,9 +731,14 @@ impl SourceExcerpt {
             .unwrap_or(0);
         let fence = "`".repeat(longest_run.max(2) + 1);
         out.push_str(&format!(
-            "{}:{}-{} ({label})\n{fence}\n{}\n{fence}\n",
-            self.path, self.start_line, self.end_line, self.text
+            "{}:{}-{} ({label})\n{fence}\n",
+            self.path, self.start_line, self.end_line
         ));
+        for (offset, line) in self.text.split('\n').enumerate() {
+            out.push_str(&format!("{}\t{line}\n", self.start_line + offset));
+        }
+        out.push_str(&fence);
+        out.push('\n');
     }
 }
 impl ContextPacket {
@@ -1331,7 +1338,15 @@ mod tests {
         assert!(!result.truncated && !result.omitted);
         assert_eq!(
             result.render_text(),
-            format!("retry.constant.ts:1-4 (whole file)\n```\n{source}\n```\n")
+            format!(
+                "retry.constant.ts:1-4 (whole file)\n```\n{}\n```\n",
+                source
+                    .lines()
+                    .enumerate()
+                    .map(|(index, line)| format!("{}\t{line}", index + 1))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
         );
     }
     #[test]
@@ -1342,10 +1357,10 @@ mod tests {
         );
         let text = packet("worker.rs", &source, "transform").render_text();
         assert!(
-            text.starts_with("worker.rs:1-6 (complete definition)\n````\nfn transform() {"),
+            text.starts_with("worker.rs:1-6 (complete definition)\n````\n1\tfn transform() {"),
             "{text}"
         );
-        assert!(text.ends_with("}\n````\n"), "{text}");
+        assert!(text.ends_with("6\t}\n````\n"), "{text}");
         assert!(!text.contains("score"));
         let long = format!("fn transform() {{\n{}\n}}", ["    step();"; 400].join("\n"));
         let packet = packet("worker.rs", &long, "transform");

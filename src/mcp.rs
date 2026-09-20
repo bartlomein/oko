@@ -428,7 +428,7 @@ fn prewarm(server: &OkoServer) {
 impl OkoServer {
     #[tool(
         name = "search",
-        description = "Find code from a description of its behavior when the exact name is unknown; use grep for known identifiers. Returns up to three ranked excerpts and up to two related definitions or callers as `path:start-end (label)` plus exact current source. Labels describe only that excerpt: `whole file` and `complete definition` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters. Results are candidates, not a complete answer: check relevance, and keep searching or reading when a question spans several locations. `Possible definition` is a name match, not a resolved binding.",
+        description = "Find code from a description of its behavior when the exact name is unknown; use grep for known identifiers. Returns up to three ranked excerpts and up to two related definitions or callers as `path:start-end (label)` plus exact current source, each line prefixed with its file line number and a tab; cite those numbers, and drop the prefix when editing. Labels describe only that excerpt: `whole file` and `complete definition` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters. Results are candidates, not a complete answer: check relevance, and keep searching or reading when a question spans several locations. `Possible definition` is a name match, not a resolved binding.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

@@ -109,19 +109,28 @@ scores, or serving metadata:
 ````text
 src/email/retry-backoff.constant.ts:1-7 (whole file)
 ```
-export const EMAIL_SEND_RETRY_BACKOFF = {
-  ...
+1	import { type QueueJobBackoffOptions } from '...';
+2
+3	export const EMAIL_SEND_RETRY_BACKOFF = {
+...
 ```
 
 Definition referenced from src/email/retry-backoff.constant.ts:1:
 src/queue/job-options.ts:12-20 (complete definition)
 ```
+12	export type QueueJobBackoffOptions = {
 ...
 ```
 ````
 
 Each excerpt is headed `path:start-end (label)` and followed by the exact current
-source in a fence longer than any backtick run it contains. The label describes
+source in a fence longer than any backtick run it contains. Every source line is
+prefixed with its file line number and a tab. Models count lines unreliably: given
+only a starting line and a hundred lines of code, agents located the right
+statements but reported ranges one to six lines off. The tool description tells
+agents to cite these numbers and to drop the prefix when editing. The prefix costs
+about a tenth more response bytes; the structured packet in `OKO_METRICS_FILE`
+keeps unnumbered text. The label describes
 only that excerpt, never its relevance or whether the results answer the whole
 question; the tool description says so, because an agent that stops at the first
 plausible excerpt misses multi-location answers:
