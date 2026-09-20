@@ -197,15 +197,35 @@ def parse_events(client, events):
                 errors.append(e)
         final = ''.join((x.get('text', '') for x in messages if x.get('messageID') == final_id))
     else:
+        results = {}
         for e in events:
             if e.get('type') == 'assistant':
-                tools += [c for c in e.get('message', {}).get('content', []) if c.get('type') == 'tool_use']
+                tools += [dict(c) for c in e.get('message', {}).get('content', []) if c.get('type') == 'tool_use']
+            if e.get('type') == 'user':
+                for content in e.get('message', {}).get('content', []):
+                    if isinstance(content, dict) and content.get('type') == 'tool_result':
+                        results[content.get('tool_use_id')] = content.get('content')
             if e.get('type') == 'result':
                 complete = not e.get('is_error', False)
                 final = e.get('result', '')
                 usage = e.get('usage')
                 if e.get('is_error') or e.get('permission_denials'):
                     errors.append(e)
+        for tool in tools:
+            if tool.get('name') != 'mcp__oko__search' or tool.get('id') not in results:
+                continue
+            content = results[tool['id']]
+            blocks = [{'type': 'text', 'text': content}] if isinstance(content, str) else content
+            decoded = []
+            for block in blocks if isinstance(blocks, list) else []:
+                if not isinstance(block, dict) or block.get('type') != 'text':
+                    continue
+                try:
+                    decoded.append(json.loads(block.get('text', '')))
+                except (TypeError, ValueError):
+                    pass
+            # Keep response bodies local; the bundle writer copies only safe measurements.
+            tool['result'] = decoded
     names = [str(t.get('name') or t.get('tool') or t.get('type', '')) for t in tools]
     oko = sum((n in ('oko_search', 'mcp__oko__search') or t.get('server') == 'oko' for n, t in zip(names, tools)))
     tokens = None

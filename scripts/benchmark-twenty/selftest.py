@@ -190,6 +190,50 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(r.parse_events('codex', [dict(type='turn.failed')])['providerErrors'])
         self.assertTrue(r.parse_events('opencode', [dict(type='error')])['providerErrors'])
 
+    def test_claude_tool_results_reach_shareable_measurements(self):
+        call = dict(phase='normal', durationNs=123, requestBytes=40, responseBytes=80,
+                    httpStatus=200, success=True, errorClass=None, usage={'totalTokens': 7})
+        payload = json.dumps({'stats': {'providerCalls': [call]},
+                              'sourceBody': 'PRIVATE_SOURCE', 'prompt': 'PRIVATE_PROMPT'})
+        for content in (payload, [{'type': 'text', 'text': payload},
+                                  {'type': 'text', 'text': 'not JSON'}]):
+            with self.subTest(content=content):
+                events = [
+                    dict(type='assistant', message={'content': [
+                        dict(type='tool_use', id='oko-1', name='mcp__oko__search', input={}),
+                        dict(type='tool_use', id='native-1', name='Read', input={}),
+                    ]}),
+                    dict(type='user', message={'content': [
+                        dict(type='tool_result', tool_use_id='native-1', content=payload),
+                        dict(type='tool_result', tool_use_id='oko-1', content=content),
+                        dict(type='tool_result', tool_use_id='unmatched', content=payload),
+                    ]}),
+                    dict(type='result', is_error=False, result=self.answer),
+                ]
+                original = json.dumps(events)
+                row = r.parse_events('claude', events)
+                self.assertEqual(json.dumps(events), original)
+                self.assertEqual(row['toolCalls'], 2)
+                self.assertEqual(row['okoCalls'], 1)
+                record = r.observability.make_record(
+                    run_id='test', record_id='1', task_id='read', client='claude',
+                    client_version='test', model='test', effort='medium', enabled=True, row=row,
+                )
+                self.assertEqual(record['calls']['jevCalls'], 1)
+                self.assertEqual(record['okoUsage']['providerCalls'][0]['durationNs'], 123)
+                self.assertEqual(record['okoUsage']['tokenUsage'][0]['totalTokens'], 7)
+                self.assertNotIn('PRIVATE_', json.dumps(record))
+
+        row = r.parse_events('claude', [
+            dict(type='assistant', message={'content': [
+                dict(type='tool_use', id='oko-1', name='mcp__oko__search', input={}),
+            ]}),
+            dict(type='user', message={'content': [
+                dict(type='tool_result', tool_use_id='oko-1', content='tool failed', is_error=True),
+            ]}),
+        ])
+        self.assertEqual(row['tools'][0]['result'], [])
+
     def test_explicit_provider_totals_are_copied_without_inference(self):
         codex = r.parse_events('codex', [
             dict(type='turn.completed', usage=dict(input_tokens=10, output_tokens=2, total_tokens=17)),
