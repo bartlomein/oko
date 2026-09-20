@@ -90,16 +90,22 @@ are not identical; OpenCode permissions are not an OS sandbox. Repository
 instructions remain part of the task context.
 
 Each run creates `benchmarks/results/twenty/results-*/report.json` and `report.md`.
+Local report groups are separated by client, requested model, requested effort,
+requested condition, observed cache state, and task kind; changing the model or
+effort never silently merges sessions.
 Per-session artifacts include raw events, stderr, final response, usage counters,
 Oko/tool call counts, grading, patches, and untracked file contents. Treat raw logs
 as local artifacts. Disposable workspaces are removed after artifacts are saved. Cleanup failures are recorded as warnings and retain the workspace without discarding a completed session.
 
 Every run also writes a separate `shareable/` bundle containing
 `run-manifest.json`, `records.jsonl`, `summary.json`, and `report.md` in the
-versioned `oko-benchmark/v1` format. The bundle is privacy-validated and does
+versioned `oko-benchmark/v1` format. The bundle is privacy- and schema-validated
+before files are written and does
 not copy the local raw events, stderr, prompts, source bodies, tool arguments,
 evidence, credentials, headers, or absolute paths. Agent usage and Oko/Jev usage
-remain separate; missing provider usage is `null`. Send the `shareable/` bundle
+remain separate; partial provider usage remains partial, and an agent total is
+`null` unless the provider explicitly reports an aggregate total. Send the
+`shareable/` bundle
 for evidence, not the surrounding trial directories.
 
 Future runners can import `scripts/benchmark_observability.py` and call

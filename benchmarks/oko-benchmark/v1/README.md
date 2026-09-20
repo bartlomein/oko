@@ -14,7 +14,11 @@ Each shareable bundle contains:
   hash; prompts, source bodies, snippets, tool arguments, raw events, stderr,
   headers, keys, and absolute paths are not allowed.
 - `summary.json`: grouped denominators, failures, correctness counts, median
-  and p95 successful wall time, and separate agent/Jev token sections.
+  and p95 successful wall time, and separate agent/Jev token sections. Groups
+  are separated by client name, requested model, requested effort, requested
+  condition, and observed cache state. An observed cache state is `null` when
+  the runner did not receive a trustworthy observation; it is never inferred
+  from the requested condition.
 - `report.md`: a human-readable rendering of `summary.json`.
 
 Use the JSON Schema files in this directory with JSON Schema draft 2020-12.
@@ -33,7 +37,15 @@ Python measures the outer client attempt with
 [`time.perf_counter_ns()`](https://docs.python.org/3/library/time.html#time.perf_counter_ns),
 writes JSONL, validates privacy, and aggregates. Total wall time is authoritative
 and is never reconstructed by adding overlapping cache/retrieval/provider phases.
-Missing usage is `null`; no token estimator is used.
+Missing usage is `null`; no token estimator is used. Input, output, and cache
+fields may be present without a total. A total is copied only from a provider's
+explicit aggregate total field; it is never reconstructed by adding partial
+fields or summing per-step values.
+
+The standard-library writer validates the manifest, every record, and the
+generated summary against the checked-in schemas before creating any bundle
+files. Unknown fields are rejected wherever the schemas disallow additional
+properties.
 
 The design is informed by the
 [OpenTelemetry GenAI span](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md),

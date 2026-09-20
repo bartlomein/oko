@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import benchmark_observability as obs
@@ -53,11 +54,19 @@ class ObservabilityTests(unittest.TestCase):
     def test_privacy_rejects_forbidden_fields_paths_and_secrets(self):
         for value in (
             {"prompt": "do not publish"},
+            {"Prompt": "do not publish"},
+            {"PROMPT_TEXT": "do not publish"},
+            {"prompt-text": "do not publish"},
             {"sourceBody": "fn secret() {}"},
             {"rawEvents": []},
             {"stderr": "provider output"},
             {"headers": {"authorization": "Bearer secret"}},
-            {"localPath": "/home/user/private/repo"},
+            {"Headers": {"content-type": "text/plain"}},
+            {"local_path": "/project/private/repo"},
+            {"absolute-path": "/srv/benchmark/output"},
+            {"note": "/etc/oko/config"},
+            {"note": "/root/.config/oko"},
+            {"note": "/app/workspace/result.json"},
             {"note": "Authorization: Bearer abcdefghijklmnop"},
             {"note": "ghp_12345678901234567890"},
         ):
@@ -70,6 +79,17 @@ class ObservabilityTests(unittest.TestCase):
             "cacheReadTokens": None,
             "cacheWriteTokens": None,
             "totalTokens": None,
+            "source": {
+                "repository": "bartlomein/oko",
+                "url": "https://github.com/bartlomein/oko",
+            },
+        })
+
+    def test_privacy_does_not_treat_urls_or_repository_labels_as_paths(self):
+        obs.validate_shareable({
+            "repository": "bartlomein/oko",
+            "sourceUrl": "https://github.com/bartlomein/oko/tree/main/src",
+            "documentation": "https://docs.example.test/project",
         })
 
     def test_usage_is_null_when_missing_and_total_is_never_inferred(self):
@@ -129,6 +149,34 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(group["latencyNs"]["median"], 200)
         self.assertEqual(group["latencyNs"]["p95"], 300)
 
+    def test_aggregation_separates_model_effort_and_cache_observation(self):
+        records = [self.record("one", duration=100)]
+        model_variant = self.record("two", duration=200)
+        model_variant["client"]["model"] = "other-model"
+        effort_variant = self.record("three", duration=300)
+        effort_variant["client"]["effort"] = "high"
+        cache_variant = self.record("four", duration=400)
+        cache_variant["condition"]["observedCacheState"] = "oko-warm"
+        summary = obs.aggregate(records + [model_variant, effort_variant, cache_variant], run_id="test-run")
+        self.assertEqual(len(summary["groups"]), 4)
+        self.assertEqual(
+            {
+                (
+                    group["client"]["model"],
+                    group["client"]["effort"],
+                    group["condition"]["requested"],
+                    group["condition"]["observedCacheState"],
+                )
+                for group in summary["groups"]
+            },
+            {
+                ("test-model", "medium", "oko-cold", None),
+                ("other-model", "medium", "oko-cold", None),
+                ("test-model", "high", "oko-cold", None),
+                ("test-model", "medium", "oko-cold", "oko-warm"),
+            },
+        )
+
     def test_writer_emits_jsonl_summary_and_report(self):
         manifest = obs.manifest(
             run_id="test-run",
@@ -143,6 +191,33 @@ class ObservabilityTests(unittest.TestCase):
             self.assertTrue((output / "run-manifest.json").is_file())
             self.assertTrue((output / "summary.json").is_file())
             self.assertIn("p95", (output / "report.md").read_text())
+            summary = json.loads((output / "summary.json").read_text())
+            obs.validate_schema(json.loads((FORMAT_ROOT / "summary.schema.json").read_text()), summary)
+
+    def test_writer_rejects_schema_invalid_manifest_and_record_before_writing(self):
+        manifest = obs.manifest(
+            run_id="test-run",
+            target={"repository": "fixture", "commit": "a" * 40, "version": None},
+            oko={"repository": "bartlomein/oko", "commit": "b" * 40, "version": "0.2.1", "binarySha256": None},
+            clients=[{"name": "codex", "version": "v", "model": "m", "effort": "low"}],
+        )
+        record = self.record("one", duration=100)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "bundle"
+            invalid_manifest = dict(manifest, unexpected="not in schema")
+            with self.assertRaises(ValueError):
+                obs.write_bundle(output, invalid_manifest, [record])
+            self.assertFalse(output.exists())
+
+            invalid_record = dict(record, unexpected="not in schema")
+            with self.assertRaises(ValueError):
+                obs.write_bundle(output, manifest, [invalid_record])
+            self.assertFalse(output.exists())
+
+            with patch.object(obs, "aggregate", return_value={"format": obs.FORMAT, "runId": "test-run", "unexpected": True}):
+                with self.assertRaises(ValueError):
+                    obs.write_bundle(output, manifest, [record])
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

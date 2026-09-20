@@ -4,8 +4,8 @@
   "generatedAt": null,
   "records": {"attempted": 1, "succeeded": 1, "failed": 0},
   "groups": [{
-    "client": "codex",
-    "condition": "oko-cold",
+    "client": {"name": "codex", "model": "example-model", "effort": "medium"},
+    "condition": {"requested": "oko-cold", "observedCacheState": "oko-cold"},
     "attempted": 1,
     "succeeded": 1,
     "failed": 0,

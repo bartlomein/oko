@@ -184,11 +184,60 @@ class BenchmarkTests(unittest.TestCase):
             self.assertTrue(parsed['complete'])
             self.assertEqual(parsed['final'], self.answer)
             self.assertEqual(parsed['okoCalls'], 1)
-            self.assertEqual(parsed['tokens']['total'], 12)
+            self.assertIsNone(parsed['tokens']['total'])
             self.assertFalse(r.parse_events(client, [])['complete'])
         self.assertTrue(r.parse_events('claude', [dict(type='result', is_error=True)])['providerErrors'])
         self.assertTrue(r.parse_events('codex', [dict(type='turn.failed')])['providerErrors'])
         self.assertTrue(r.parse_events('opencode', [dict(type='error')])['providerErrors'])
+
+    def test_explicit_provider_totals_are_copied_without_inference(self):
+        codex = r.parse_events('codex', [
+            dict(type='turn.completed', usage=dict(input_tokens=10, output_tokens=2, total_tokens=17)),
+        ])
+        self.assertEqual(codex['tokens']['total'], 17)
+
+        claude = r.parse_events('claude', [
+            dict(type='result', is_error=False, result=self.answer,
+                 usage=dict(input_tokens=3, output_tokens=2, total_tokens=19)),
+        ])
+        self.assertEqual(claude['tokens']['total'], 19)
+
+        opencode = r.parse_events('opencode', [
+            dict(type='text', part=dict(messageID='last', text=self.answer)),
+            dict(type='step_finish', part=dict(reason='stop', messageID='last',
+                                                tokens=dict(input=10, output=2, total=12),
+                                                usage=dict(total_tokens=23))),
+        ])
+        self.assertEqual(opencode['tokens']['total'], 23)
+        self.assertEqual(opencode['tokens']['steps'][0]['total'], 12)
+
+    def test_summary_separates_model_effort_and_observed_condition(self):
+        def row(model, effort, observed):
+            return dict(
+                client='codex', requestedModel=model, requestedEffort=effort,
+                oko=True, observedCacheState=observed, kind='search', seconds=1.0,
+                tokens={'total': None}, grade={'correctTopFive': True, 'correctFirst': True},
+            )
+
+        result = r.summary([
+            row('model-a', 'low', None),
+            row('model-b', 'low', None),
+            row('model-a', 'high', None),
+            row('model-a', 'low', 'oko-warm'),
+        ])
+        self.assertEqual(len(result), 4)
+        self.assertEqual(
+            {
+                (item['client'], item['model'], item['effort'], item['condition']['requested'], item['condition']['observedCacheState'])
+                for item in result
+            },
+            {
+                ('codex', 'model-a', 'low', 'oko-cold', None),
+                ('codex', 'model-b', 'low', 'oko-cold', None),
+                ('codex', 'model-a', 'high', 'oko-cold', None),
+                ('codex', 'model-a', 'low', 'oko-cold', 'oko-warm'),
+            },
+        )
 
     def test_process_run_saves_artifacts_and_rejects_wrong_condition(self):
         def minimal_checkout(work):

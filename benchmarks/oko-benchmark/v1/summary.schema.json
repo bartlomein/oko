@@ -19,8 +19,21 @@
         "type": "object", "additionalProperties": false,
         "required": ["client", "condition", "attempted", "succeeded", "failed", "denominator", "latencyNs", "correctness", "agentUsage", "jevUsage"],
         "properties": {
-          "client": {"type": "string"},
-          "condition": {"enum": ["native", "oko-cold", "oko-warm"]},
+          "client": {
+            "type": "object", "additionalProperties": false, "required": ["name", "model", "effort"],
+            "properties": {
+              "name": {"type": "string"},
+              "model": {"type": ["string", "null"]},
+              "effort": {"type": ["string", "null"]}
+            }
+          },
+          "condition": {
+            "type": "object", "additionalProperties": false, "required": ["requested", "observedCacheState"],
+            "properties": {
+              "requested": {"enum": ["native", "oko-cold", "oko-warm"]},
+              "observedCacheState": {"type": ["string", "null"]}
+            }
+          },
           "attempted": {"type": "integer"},
           "succeeded": {"type": "integer"},
           "failed": {"type": "integer"},

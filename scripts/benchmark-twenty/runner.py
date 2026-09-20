@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Twenty benchmark (10 read-only, 5 edits). Defaults to plan-only; --execute is required for model calls."""
-import argparse, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tarfile, tempfile, time
+import argparse, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tarfile, tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import benchmark_observability as observability
@@ -145,10 +145,22 @@ def args_for(task, client, enabled, work, trial):
     settings = {'disableAllHooks': True, 'autoMemoryEnabled': False, 'claudeMdExcludes': ['/**'], 'pluginConfigs': {'agents-md@builtin': {'options': {'instructionFiles': 'managed-only'}}}, 'permissions': {'deny': ['Read(**/.env)', 'Read(**/.env.*)']}}
     return ([exe, '-p', '--output-format', 'stream-json', '--verbose', '--restricted', '--tools', tools, '--allowedTools', tools + (',mcp__oko__search' if enabled else ''), '--permission-mode', 'dontAsk', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', json.dumps(mcp), '--disable-slash-commands', '--no-session-persistence', '--no-chrome', '--effort', effort, '--model', SETTINGS['models'][client], '--setting-sources', '', '--settings', json.dumps(settings), p], env)
 
+def _explicit_total(usage):
+    """Return only a provider-declared aggregate token total."""
+    if not isinstance(usage, dict):
+        return None
+    for key in ('total_tokens', 'totalTokens'):
+        value = usage.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 and int(value) == value:
+            return int(value)
+    return None
+
+
 def parse_events(client, events):
     tools = []
     final = ''
     usage = None
+    reported_total = None
     complete = False
     errors = []
     if client == 'codex':
@@ -172,6 +184,8 @@ def parse_events(client, events):
             part = e.get('part', {})
             if e.get('type') == 'step_finish':
                 usage.append(part)
+                if reported_total is None:
+                    reported_total = _explicit_total(part.get('usage'))
                 if part.get('reason') == 'stop':
                     complete = True
                     final_id = part.get('messageID')
@@ -196,12 +210,12 @@ def parse_events(client, events):
     oko = sum((n in ('oko_search', 'mcp__oko__search') or t.get('server') == 'oko' for n, t in zip(names, tools)))
     tokens = None
     if client == 'codex' and usage:
-        tokens = {'input': usage.get('input_tokens'), 'cachedInput': usage.get('cached_input_tokens'), 'output': usage.get('output_tokens'), 'total': usage.get('input_tokens', 0) + usage.get('output_tokens', 0)}
+        tokens = {'input': usage.get('input_tokens'), 'cachedInput': usage.get('cached_input_tokens'), 'output': usage.get('output_tokens'), 'total': _explicit_total(usage)}
     elif client == 'claude' and usage:
-        tokens = {'input': usage.get('input_tokens'), 'cacheRead': usage.get('cache_read_input_tokens'), 'cacheWrite': usage.get('cache_creation_input_tokens'), 'output': usage.get('output_tokens'), 'total': sum((usage.get(k, 0) for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens')))}
+        tokens = {'input': usage.get('input_tokens'), 'cacheRead': usage.get('cache_read_input_tokens'), 'cacheWrite': usage.get('cache_creation_input_tokens'), 'output': usage.get('output_tokens'), 'total': _explicit_total(usage)}
     elif client == 'opencode' and usage:
         steps = [x.get('tokens') or {} for x in usage]
-        tokens = {'steps': steps, 'total': sum((x['total'] for x in steps)) if all((isinstance(x.get('total'), (int, float)) for x in steps)) else None}
+        tokens = {'steps': steps, 'total': reported_total}
     return dict(final=final, complete=complete, usage=usage, tokens=tokens, tools=tools, okoCalls=oko, toolCalls=len(tools), providerErrors=errors)
 
 def grade(task, work, final):
@@ -241,13 +255,47 @@ def grade(task, work, final):
 
 def summary(rows):
     result = []
-    for client, enabled in MODES:
-        for kind in ('search', 'edit'):
-            group = [r for r in rows if (r['client'], r['oko'], r['kind']) == (client, enabled, kind)]
-            if not group:
-                continue
-            good = [r for r in group if not r.get('error')]
-            result.append(dict(client=client, oko=enabled, kind=kind, attempted=len(group), completed=len(good), medianSeconds=statistics.median((r['seconds'] for r in good)) if good else None, topFiveHits=sum((r.get('grade', {}).get('correctTopFive', False) for r in good)), firstHits=sum((r.get('grade', {}).get('correctFirst', False) for r in good)), totalAgentTokens=sum((r['tokens']['total'] for r in good)) if good and all(((r.get('tokens') or {}).get('total') is not None for r in good)) else None, expectedPatchMatches=sum((r.get('grade', {}).get('expectedPatchMatch', False) for r in good)), reviewRequired=sum((r.get('grade', {}).get('reviewRequired', False) for r in good))))
+    keys = {
+        (
+            r['client'],
+            r.get('requestedModel'),
+            r.get('requestedEffort'),
+            bool(r['oko']),
+            r.get('observedCacheState'),
+            r['kind'],
+        )
+        for r in rows
+    }
+    keys = sorted(keys, key=lambda key: tuple('' if value is None else str(value) for value in key))
+    for client, model, effort, enabled, observed_cache_state, kind in keys:
+        group = [
+            r for r in rows
+            if (
+                r['client'],
+                r.get('requestedModel'),
+                r.get('requestedEffort'),
+                bool(r['oko']),
+                r.get('observedCacheState'),
+                r['kind'],
+            ) == (client, model, effort, enabled, observed_cache_state, kind)
+        ]
+        good = [r for r in group if not r.get('error')]
+        result.append(dict(
+            client=client,
+            model=model,
+            effort=effort,
+            condition={'requested': 'oko-cold' if enabled else 'native', 'observedCacheState': observed_cache_state},
+            oko=enabled,
+            kind=kind,
+            attempted=len(group),
+            completed=len(good),
+            medianSeconds=statistics.median((r['seconds'] for r in good)) if good else None,
+            topFiveHits=sum((r.get('grade', {}).get('correctTopFive', False) for r in good)),
+            firstHits=sum((r.get('grade', {}).get('correctFirst', False) for r in good)),
+            totalAgentTokens=sum((r['tokens']['total'] for r in good)) if good and all(((r.get('tokens') or {}).get('total') is not None for r in good)) else None,
+            expectedPatchMatches=sum((r.get('grade', {}).get('expectedPatchMatch', False) for r in good)),
+            reviewRequired=sum((r.get('grade', {}).get('reviewRequired', False) for r in good)),
+        ))
     return result
 
 def run_one(task, client, enabled, output, index):
@@ -257,7 +305,17 @@ def run_one(task, client, enabled, output, index):
     checkout(work)
     baseline_commit = git(work, 'rev-parse', 'HEAD')
     args, env = args_for(task, client, enabled, work, trial)
-    row = {'id': task['id'], 'kind': task['kind'], 'client': client, 'oko': enabled, 'requestedModel': SETTINGS['models'][client], 'requestedEffort': SETTINGS.get('effort', 'medium'), 'artifact': str(trial)}
+    row = {
+        'id': task['id'],
+        'kind': task['kind'],
+        'client': client,
+        'oko': enabled,
+        'requestedCondition': 'oko-cold' if enabled else 'native',
+        'observedCacheState': None,
+        'requestedModel': SETTINGS['models'][client],
+        'requestedEffort': SETTINGS.get('effort', 'medium'),
+        'artifact': str(trial),
+    }
     started_ns = observability.perf_counter_ns()
     try:
         with (trial / 'events.jsonl').open('w') as stdout, (trial / 'stderr.txt').open('w') as stderr:
@@ -426,10 +484,10 @@ def main():
     def save_report():
         report['summary'] = summary(rows)
         save(output / 'report.json', report)
-        lines = [f'# {PROJECT_NAME} benchmark', '', f"Completed: {report['complete']}. Sessions: {len(rows)}/{len(plan)}.", '', '| Client | Oko | Kind | Completed / attempted | First / top five | Exact patches | Review | Median seconds |', '|---|---|---|---|---|---|---|---|']
+        lines = [f'# {PROJECT_NAME} benchmark', '', f"Completed: {report['complete']}. Sessions: {len(rows)}/{len(plan)}.", '', '| Client | Model | Effort | Requested | Observed cache | Kind | Completed / attempted | First / top five | Exact patches | Review | Median seconds |', '|---|---|---|---|---|---|---|---|---|---|---|']
         for row in report['summary']:
             seconds = f"{row['medianSeconds']:.2f}" if row['medianSeconds'] is not None else 'N/A'
-            lines.append(f"| {row['client']} | {row['oko']} | {row['kind']} | {row['completed']}/{row['attempted']} | {row['firstHits']}/{row['topFiveHits']} | {row['expectedPatchMatches']} | {row['reviewRequired']} | {seconds} |")
+            lines.append(f"| {row['client']} | {row['model'] or '—'} | {row['effort'] or '—'} | {row['condition']['requested']} | {row['condition']['observedCacheState'] or '—'} | {row['kind']} | {row['completed']}/{row['attempted']} | {row['firstHits']}/{row['topFiveHits']} | {row['expectedPatchMatches']} | {row['reviewRequired']} | {seconds} |")
         lines += ['', report['method'], '', *report['caveats']]
         (output / 'report.md').write_text('\n'.join(lines) + '\n')
         records = [

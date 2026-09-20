@@ -35,10 +35,11 @@ PRIVACY_ASSERTIONS = {
 _RECORDED_ASSERTION_KEYS = set(PRIVACY_ASSERTIONS)
 _FORBIDDEN_KEYS = {
     "prompt",
+    "prompt_text",
     "promptText",
     "question",
+    "question_text",
     "questionText",
-    "source",
     "sourceText",
     "sourceBody",
     "sourceBodies",
@@ -66,6 +67,7 @@ _FORBIDDEN_KEYS = {
     "secret",
     "secrets",
     "toolArguments",
+    "tool_arguments",
     "toolInput",
     "toolOutput",
     "arguments",
@@ -78,6 +80,9 @@ _FORBIDDEN_KEYS = {
     "cwd",
     "artifact",
 }
+_FORBIDDEN_NORMALIZED_KEYS = {
+    re.sub(r"[^a-z0-9]", "", key.casefold()) for key in _FORBIDDEN_KEYS
+}
 _SECRET_PATTERN = re.compile(
     r"(?:api[_-]?key|authorization|bearer|secret|password)\s*[:=]\s*\S+"
     r"|(?:sk-|ghp_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{10,}"
@@ -85,9 +90,9 @@ _SECRET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _ABSOLUTE_PATH_PATTERN = re.compile(
-    r"(?:^|[\s\"'=])/(?:home|Users|tmp|private|var|workspace|mnt|opt)/"
-    r"|(?:^|[\s\"'=])[A-Za-z]:\\"
+    r"(?<![A-Za-z0-9_./-])/(?!/)(?=[A-Za-z0-9._~%+-]|$)[^\s\"'<>]*"
 )
+_WINDOWS_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:\\")
 
 
 class PrivacyError(ValueError):
@@ -179,6 +184,19 @@ def _condition(task: Mapping[str, Any], enabled: bool) -> tuple[str, str | None]
     return requested, observed
 
 
+def _normalized_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.casefold())
+
+
+def _contains_absolute_path(value: str) -> bool:
+    for match in _ABSOLUTE_PATH_PATTERN.finditer(value):
+        prefix = value[: match.start()]
+        if re.search(r"[A-Za-z][A-Za-z0-9+.-]*:$", prefix):
+            continue
+        return True
+    return bool(_WINDOWS_PATH_PATTERN.search(value))
+
+
 def _agent_usage(row: Mapping[str, Any]) -> dict[str, int | None] | None:
     usage = row.get("usage")
     if isinstance(usage, Mapping):
@@ -258,7 +276,10 @@ def make_record(
 ) -> dict[str, Any]:
     task = task or {}
     row = row or {}
-    requested_condition, observed_condition = _condition(task, enabled)
+    condition_task = dict(task)
+    if row.get("observedCacheState") is not None:
+        condition_task["observedCacheState"] = row["observedCacheState"]
+    requested_condition, observed_condition = _condition(condition_task, enabled)
     provider_calls = _provider_calls(row)
     usage = _agent_usage(row)
     status = "succeeded" if not row.get("error") else "timeout" if "Timeout" in str(row.get("error")) else "failed"
@@ -336,16 +357,37 @@ def _percentile(values: Sequence[int], percentile: float) -> int | None:
 
 def aggregate(records: Sequence[Mapping[str, Any]], *, run_id: str, generated_at: str | None = None) -> dict[str, Any]:
     groups: list[dict[str, Any]] = []
-    keys = sorted({(r["client"]["name"], r["condition"]["requested"]) for r in records})
-    for client, condition in keys:
-        group = [r for r in records if (r["client"]["name"], r["condition"]["requested"]) == (client, condition)]
+    keys = {
+        (
+            r["client"]["name"],
+            r["client"].get("model"),
+            r["client"].get("effort"),
+            r["condition"]["requested"],
+            r["condition"].get("observedCacheState"),
+        )
+        for r in records
+    }
+    keys = sorted(keys, key=lambda key: tuple("" if value is None else str(value) for value in key))
+    for client, model, effort, requested_condition, observed_cache_state in keys:
+        group = [
+            r
+            for r in records
+            if (
+                r["client"]["name"],
+                r["client"].get("model"),
+                r["client"].get("effort"),
+                r["condition"]["requested"],
+                r["condition"].get("observedCacheState"),
+            )
+            == (client, model, effort, requested_condition, observed_cache_state)
+        ]
         successful = [r for r in group if r["status"] == "succeeded"]
         durations = [v for v in _values(successful, "timing", "totalWallNs") if isinstance(v, int)]
         correct = [r for r in group if r.get("correctness", {}).get("known")]
         groups.append(
             {
-                "client": client,
-                "condition": condition,
+                "client": {"name": client, "model": model, "effort": effort},
+                "condition": {"requested": requested_condition, "observedCacheState": observed_cache_state},
                 "attempted": len(group),
                 "succeeded": len(successful),
                 "failed": len(group) - len(successful),
@@ -390,8 +432,8 @@ def report_markdown(summary: Mapping[str, Any]) -> str:
         f"Format: `{summary['format']}`",
         f"Records: {summary['records']['succeeded']}/{summary['records']['attempted']} succeeded; {summary['records']['failed']} failed.",
         "",
-        "| Client | Condition | Succeeded / attempted | Median ms | p95 ms | Correct / known | Agent tokens | Jev calls |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Client | Model | Effort | Requested | Observed cache | Succeeded / attempted | Median ms | p95 ms | Correct / known | Agent tokens | Jev calls |",
+        "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for group in summary["groups"]:
         latency = group["latencyNs"]
@@ -400,7 +442,7 @@ def report_markdown(summary: Mapping[str, Any]) -> str:
         usage = group["agentUsage"]["totalTokens"]
         usage = "—" if usage is None else str(usage)
         lines.append(
-            f"| {group['client']} | {group['condition']} | {group['succeeded']}/{group['attempted']} | {median} | {p95} | {group['correctness']['correct']}/{group['correctness']['known']} | {usage} | {group['jevUsage']['calls']} |"
+            f"| {group['client']['name']} | {group['client']['model'] or '—'} | {group['client']['effort'] or '—'} | {group['condition']['requested']} | {group['condition']['observedCacheState'] or '—'} | {group['succeeded']}/{group['attempted']} | {median} | {p95} | {group['correctness']['correct']}/{group['correctness']['known']} | {usage} | {group['jevUsage']['calls']} |"
         )
     lines += [
         "",
@@ -419,16 +461,20 @@ def validate_shareable(value: Any, *, _path: str = "$") -> None:
             if key in _RECORDED_ASSERTION_KEYS:
                 if not isinstance(child, bool):
                     raise PrivacyError(f"{_path}.{key} must be boolean")
-            elif key in _FORBIDDEN_KEYS or key.lower().endswith("body") or key.lower().endswith("snippet"):
+            elif (
+                _normalized_key(key) in _FORBIDDEN_NORMALIZED_KEYS
+                or _normalized_key(key).endswith("body")
+                or _normalized_key(key).endswith("snippet")
+            ):
                 raise PrivacyError(f"forbidden shareable field: {_path}.{key}")
-            elif key in {"token", "tokens", "credential", "credentials", "key"}:
+            elif _normalized_key(key) in {"token", "tokens", "credential", "credentials", "key"}:
                 raise PrivacyError(f"forbidden shareable field: {_path}.{key}")
             validate_shareable(child, _path=f"{_path}.{key}")
     elif isinstance(value, list):
         for index, child in enumerate(value):
             validate_shareable(child, _path=f"{_path}[{index}]")
     elif isinstance(value, str):
-        if _SECRET_PATTERN.search(value) or _ABSOLUTE_PATH_PATTERN.search(value):
+        if _SECRET_PATTERN.search(value) or _contains_absolute_path(value):
             raise PrivacyError(f"forbidden secret or absolute path at {_path}")
 
 
@@ -443,6 +489,7 @@ def _schema_error(
     if isinstance(reference, str) and reference.startswith("#/"):
         target: Any = root
         for part in reference[2:].split("/"):
+            part = part.replace("~1", "/").replace("~0", "~")
             target = target.get(part) if isinstance(target, Mapping) else None
         if not isinstance(target, Mapping):
             return f"{path} has unresolved reference {reference}"
@@ -469,21 +516,27 @@ def _schema_error(
         return f"{path} is shorter than minLength"
     if "enum" in schema and value not in schema["enum"]:
         return f"{path} is not in enum"
-    if "anyOf" in schema and not any(_schema_error(option, value, path) is None for option in schema["anyOf"]):
+    if "anyOf" in schema and not any(_schema_error(option, value, path, root) is None for option in schema["anyOf"]):
         return f"{path} does not match anyOf"
     if isinstance(value, Mapping):
         missing = [key for key in schema.get("required", []) if key not in value]
         if missing:
             return f"{path} missing required {missing}"
-        if schema.get("additionalProperties") is False:
-            unknown = set(value) - set(schema.get("properties", {}))
-            if unknown:
-                return f"{path} has unknown properties {sorted(unknown)}"
+        properties = schema.get("properties", {})
+        unknown = set(value) - set(properties)
+        additional = schema.get("additionalProperties", True)
+        if unknown and additional is False:
+            return f"{path} has unknown properties {sorted(unknown)}"
         for key, child in value.items():
-            if key in schema.get("properties", {}):
-                error = _schema_error(schema["properties"][key], child, f"{path}.{key}", root)
-                if error:
-                    return error
+            if key in properties:
+                child_schema = properties[key]
+            elif isinstance(additional, Mapping):
+                child_schema = additional
+            else:
+                continue
+            error = _schema_error(child_schema, child, f"{path}.{key}", root)
+            if error:
+                return error
     if isinstance(value, list) and schema.get("items"):
         for index, child in enumerate(value):
             error = _schema_error(schema["items"], child, f"{path}[{index}]", root)
@@ -500,15 +553,22 @@ def validate_schema(schema: Mapping[str, Any], value: Any) -> None:
 
 
 def write_bundle(directory: Path, manifest: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    directory.mkdir(parents=True, exist_ok=True)
-    validate_shareable(manifest)
+    schema_root = Path(__file__).resolve().parent.parent / "benchmarks/oko-benchmark/v1"
+    schemas = {
+        name: json.loads((schema_root / name).read_text())
+        for name in ("run-manifest.schema.json", "record.schema.json", "summary.schema.json")
+    }
+    validate_schema(schemas["run-manifest.schema.json"], manifest)
     for record in records:
-        validate_shareable(record)
+        validate_schema(schemas["record.schema.json"], record)
+    summary = aggregate(records, run_id=str(manifest["runId"]))
+    validate_schema(schemas["summary.schema.json"], summary)
+
+    directory.mkdir(parents=True, exist_ok=True)
     (directory / "run-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     with (directory / "records.jsonl").open("w") as stream:
         for record in records:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
-    summary = aggregate(records, run_id=str(manifest["runId"]))
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (directory / "report.md").write_text(report_markdown(summary))
     return summary
