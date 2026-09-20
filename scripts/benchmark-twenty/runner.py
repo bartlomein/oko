@@ -323,9 +323,9 @@ def cache_observations(row):
 
     observations = []
     for tool in row.get('tools', []):
-        name = tool.get('name') or tool.get('tool')
-        if tool.get('server') == 'oko' or name in ('oko_search', 'mcp__oko__search'):
-            observations.extend(packets(tool.get('result', tool)))
+        if observability.is_oko_tool(tool):
+            # Current Oko reports through okoMetrics; older results embedded it.
+            observations.extend(packets(tool))
     unique = []
     seen = set()
     for observation in observations:
@@ -510,6 +510,7 @@ def run_one(task, client, condition, output, index):
             except ValueError:
                 pass
         row.update(parse_events(client, events))
+        observability.attach_oko_metrics(row['tools'], trial / 'oko-metrics.jsonl')
         row['cacheObservations'] = cache_observations(row)
         row['observedCacheState'] = (
             'native' if condition == 'native'

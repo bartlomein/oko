@@ -141,7 +141,8 @@ class RunnerTests(unittest.TestCase):
                 client.initialize()
                 def search():
                     result=client.request('tools/call',{'name':'search','arguments':{'question':'retry_delay','intent':'implementation'}})
-                    return json.loads(result['content'][0]['text'])
+                    self.assertFalse(result.get('isError'))
+                    return client.last_metrics()
                 packet=search()
                 self.assertTrue(r.check_cache('warm',[packet['timings']['cache']]))
                 target.write_text('pub fn retry_delay() -> u32 { 300 }\n')

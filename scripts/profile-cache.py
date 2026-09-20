@@ -21,10 +21,15 @@ import time
 
 class Client:
     def __init__(self, binary, root, cache, timeout, *, live=False, api_key=None, model=None,
-                 command=None):
+                 command=None, metrics=None):
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("TYPESAFE_", "OKO_"))}
-        env.update(OKO_CACHE_DIR=str(cache), OKO_NO_CACHE="0", TYPESAFE_API_KEY="")
+        # Oko's tool result is agent-facing text. Timings, retrieval metadata and
+        # the structured packet are appended here, one JSON line per search. A
+        # launcher passed as `command` chooses its own file; name it in `metrics`.
+        self.metrics = Path(metrics or Path(cache) / "oko-metrics.jsonl")
+        env.update(OKO_CACHE_DIR=str(cache), OKO_NO_CACHE="0", TYPESAFE_API_KEY="",
+                   OKO_METRICS_FILE=str(self.metrics))
         if live:
             env.pop("TYPESAFE_API_KEY")
             if api_key:
@@ -41,6 +46,16 @@ class Client:
         self.request_id = 0
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
+
+    def last_metrics(self):
+        """Metadata and structured packet of the most recent completed search."""
+        try:
+            lines = self.metrics.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+        if not lines:
+            raise RuntimeError("Oko recorded no search metrics")
+        return json.loads(lines[-1])
 
     def read(self):
         try:
@@ -142,9 +157,9 @@ def main():
                         "name": "search", "arguments": {"question": args.question},
                     })
                     wall_ms = round((time.perf_counter() - started) * 1000, 3)
-                    if result.get("isError") or "structuredContent" not in result:
-                        raise RuntimeError("MCP search failed or omitted structuredContent")
-                    packet = result["structuredContent"]
+                    if result.get("isError"):
+                        raise RuntimeError("MCP search failed")
+                    packet = client.last_metrics()
                     canonical = json.dumps(semantic_packet(packet), sort_keys=True,
                                            separators=(",", ":"))
                     if reference is None:

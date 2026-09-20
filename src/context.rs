@@ -32,6 +32,10 @@ pub struct ContextPacket {
     pub related: Vec<RelatedDefinition>,
     /// Some source context or ranked matches were omitted to keep the packet bounded.
     pub truncated: bool,
+    /// Whole matches or related definitions were dropped, as opposed to an
+    /// included excerpt merely being partial.
+    #[serde(skip)]
+    pub omitted: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,7 +74,10 @@ pub struct SourceExcerpt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SymbolHeader>,
     /// The excerpt is incomplete; a single very long line may be cut at a UTF-8 boundary.
+    /// A whole file is never incomplete, even without a proven declaration boundary.
     pub truncated: bool,
+    /// The excerpt is the entire file, so rereading it adds nothing.
+    pub whole_file: bool,
     /// True only when the complete enclosing definition is proven and included.
     /// This says nothing about whether all surrounding dependencies were returned.
     pub definition_complete: bool,
@@ -499,6 +506,15 @@ impl<'a> Snapshot<'a> {
             code,
         }
     }
+    /// Chunks tile a file from line 1, so a gapless range ending at the last
+    /// known line is the entire file.
+    fn covers_whole_file(&self, start: usize, end: usize) -> bool {
+        start == 1
+            && self
+                .lines
+                .last_key_value()
+                .is_some_and(|(last, _)| *last == end && self.lines.len() == end)
+    }
     fn containing(&self, number: usize) -> Option<&Declaration> {
         self.declarations
             .iter()
@@ -577,20 +593,24 @@ fn excerpt(
         .collect::<Vec<_>>()
         .join("\n");
     let symbol = parent.map(|d| symbol_header(snapshot, d));
-    let truncated = start > low
+    // Without a proven declaration boundary, source context must not
+    // advertise a complete implementation (even when it reaches EOF).
+    let unproven = start > low
         || end < high
-        // Without a proven declaration boundary, source context must not
-        // advertise a complete implementation (even when it reaches EOF).
         || (bounded_parent.is_none() && language(path) != Language::Other)
         || symbol.as_ref().is_some_and(|s| s.truncated);
+    // Nothing is missing from a whole file, so it is not an incomplete
+    // excerpt; that still proves no declaration boundary.
+    let whole_file = snapshot.covers_whole_file(start, end);
     Some(SourceExcerpt {
         path: path.into(),
         start_line: start,
         end_line: end,
         text,
         symbol,
-        truncated,
-        definition_complete: !truncated && bounded_parent.is_some(),
+        truncated: unproven && !whole_file,
+        whole_file,
+        definition_complete: !unproven && bounded_parent.is_some(),
         focus_line: focus,
     })
 }
@@ -664,11 +684,77 @@ impl SourceExcerpt {
             self.text.truncate(prefix(&self.text, target).len());
         }
         self.truncated = true;
+        self.whole_file = false;
         self.definition_complete = false;
         true
     }
 }
+impl SourceExcerpt {
+    /// `path:start-end (label)` followed by the exact source in a fence that
+    /// the source itself cannot close.
+    fn render(&self, out: &mut String) {
+        let label = if self.whole_file {
+            "whole file"
+        } else if self.definition_complete {
+            "complete definition"
+        } else {
+            "partial excerpt"
+        };
+        let longest_run = self
+            .text
+            .split(|c| c != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        let fence = "`".repeat(longest_run.max(2) + 1);
+        out.push_str(&format!(
+            "{}:{}-{} ({label})\n{fence}\n{}\n{fence}\n",
+            self.path, self.start_line, self.end_line, self.text
+        ));
+    }
+}
 impl ContextPacket {
+    /// Compact agent-facing rendering: exact source without JSON escaping,
+    /// scores, or serving metadata. Matches are in ranked order.
+    pub fn render_text(&self) -> String {
+        let mut out = String::new();
+        for result in &self.results {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            result.excerpt.render(&mut out);
+        }
+        for related in &self.related {
+            let relation = match related.relation {
+                "resolved_definition" => "Definition",
+                "resolved_caller" => "Caller",
+                _ => "Possible definition",
+            };
+            let anchor = related.target.as_ref().map_or_else(
+                || {
+                    related
+                        .referenced_from
+                        .iter()
+                        .map(|source| format!("{}:{}", source.path, source.line))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+                |target| format!("{}:{}", target.path, target.line),
+            );
+            let verb = if related.target.is_some() {
+                "of"
+            } else {
+                "referenced from"
+            };
+            out.push_str(&format!("\n{relation} {verb} {anchor}:\n"));
+            related.excerpt.render(&mut out);
+        }
+        if self.omitted {
+            out.push_str("\nLower-ranked evidence was omitted to fit the response limit.\n");
+        }
+        out
+    }
+
     fn prune_related(&mut self) {
         for related in &mut self.related {
             if let Some(target) = &related.target {
@@ -678,6 +764,7 @@ impl ContextPacket {
                             .contains(&target.line)
                 }) {
                     self.truncated = true;
+                    self.omitted = true;
                     related.referenced_from.clear();
                 }
                 continue;
@@ -690,7 +777,9 @@ impl ContextPacket {
                             .contains(&source.line)
                 })
             });
-            self.truncated |= related.referenced_from.len() != before;
+            let pruned = related.referenced_from.len() != before;
+            self.truncated |= pruned;
+            self.omitted |= pruned;
         }
         self.related
             .retain(|related| !related.referenced_from.is_empty());
@@ -710,12 +799,15 @@ impl ContextPacket {
             self.truncated = true;
             if self.results.len() > 1 {
                 self.results.pop();
+                self.omitted = true;
                 self.prune_related();
             } else if self.related.pop().is_some() {
                 // Related definitions are already ordered by query relevance.
+                self.omitted = true;
             } else if let Some(primary) = self.results.first_mut() {
                 if !primary.excerpt.shrink() {
                     self.results.pop();
+                    self.omitted = true;
                 }
             } else {
                 break;
@@ -751,6 +843,7 @@ fn build_packet_inner(
         results: vec![],
         related: vec![],
         truncated: false,
+        omitted: false,
     };
     if winners.is_empty() {
         return packet;
@@ -970,6 +1063,8 @@ fn build_packet_inner(
             break;
         }
     }
+    // Until here only dropped winners set the flag.
+    packet.omitted = packet.truncated;
     packet.truncated |= packet.results.iter().any(|r| r.excerpt.truncated)
         || packet.related.iter().any(|r| r.excerpt.truncated);
     packet.fit_to_budget(PACKET_MAX_BYTES);
@@ -1028,6 +1123,7 @@ fn attach_navigation(
                     .definitions(&candidate.path)
                     .iter()
                     .any(|d| d.complete && d.start_line == start && d.end_line == end);
+            let whole_file = snapshot.covers_whole_file(start, end);
             let context = SourceExcerpt {
                 path: candidate.path.clone(),
                 start_line: start,
@@ -1037,7 +1133,8 @@ fn attach_navigation(
                     .collect::<Vec<_>>()
                     .join("\n"),
                 symbol: None,
-                truncated: !complete,
+                truncated: !complete && !whole_file,
+                whole_file,
                 definition_complete: complete,
                 focus_line: focus,
             };
@@ -1162,12 +1259,48 @@ mod tests {
             let result = packet("worker.rs", source, question);
             let excerpt = &result.results[0].excerpt;
             assert!(excerpt.text.contains("produce_output();"));
-            assert!(excerpt.truncated);
-            assert!(result.truncated);
+            // The whole file is present, so nothing is missing to reread,
+            // but an unclosed body is never a proven definition.
+            assert!(excerpt.whole_file);
+            assert!(!excerpt.truncated);
+            assert!(!excerpt.definition_complete);
             if question == "produce_output" {
                 assert!(excerpt.symbol.is_none());
             }
         }
+    }
+    #[test]
+    fn whole_file_without_a_declaration_is_not_reported_as_incomplete() {
+        let source = "export const RETRY_BACKOFF = {\n  strategy: 'exponential',\n  initialDelayMilliseconds: 5_000,\n} as const;";
+        let result = packet("retry.constant.ts", source, "retry backoff initial delay");
+        let excerpt = &result.results[0].excerpt;
+        assert_eq!((excerpt.start_line, excerpt.end_line), (1, 4));
+        assert!(excerpt.whole_file);
+        assert!(!excerpt.truncated);
+        assert!(!excerpt.definition_complete);
+        assert!(!result.truncated && !result.omitted);
+        assert_eq!(
+            result.render_text(),
+            format!("retry.constant.ts:1-4 (whole file)\n```\n{source}\n```\n")
+        );
+    }
+    #[test]
+    fn rendered_text_labels_completeness_and_survives_embedded_fences() {
+        let source = format!(
+            "fn transform() {{\n    // ```\n{}\n}}\nfn unrelated() {{}}",
+            ["    step();"; 3].join("\n")
+        );
+        let text = packet("worker.rs", &source, "transform").render_text();
+        assert!(
+            text.starts_with("worker.rs:1-6 (complete definition)\n````\nfn transform() {"),
+            "{text}"
+        );
+        assert!(text.ends_with("}\n````\n"), "{text}");
+        assert!(!text.contains("score"));
+        let long = format!("fn transform() {{\n{}\n}}", ["    step();"; 400].join("\n"));
+        let packet = packet("worker.rs", &long, "transform");
+        assert!(packet.results[0].excerpt.truncated);
+        assert!(packet.render_text().contains("(partial excerpt)\n"));
     }
     #[test]
     fn bounded_signature_fallback_preserves_source_without_inventing_a_span() {
@@ -1478,6 +1611,7 @@ mod tests {
             results: vec![primary],
             related: vec![],
             truncated: true,
+            omitted: true,
         };
         let budget = serde_json::to_vec(&primary_only).unwrap().len();
         result.fit_to_budget(budget);

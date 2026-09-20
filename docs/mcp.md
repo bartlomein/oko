@@ -77,7 +77,7 @@ The server exposes `search` with these inputs:
 
 Results include an automatic context packet: up to three ranked matches with
 source excerpts and up to two supporting definitions or callers. Paths are relative
-to the returned search directory, with inclusive line ranges. Context is drawn
+to the searched directory, with inclusive line ranges. Context is drawn
 from the same file snapshot as the search, deduplicated, and bounded. Detected
 function headers remain lexical hints; JavaScript/TypeScript additionally use
 cached Tree-sitter function boundaries. Shortened excerpts are marked.
@@ -101,10 +101,50 @@ symbols, then direct runtime dependencies, callers, and static types. Name and
 path relevance break ties within those groups. This does not change the search
 ranking sent to Jev.
 
-`definitionComplete` means the returned excerpt contains a proven full definition;
-it does not mean every dependency or caller is included. A `resolved_caller`
-includes the actual call location in `referencedFrom` and its primary definition
-in `target`. Supporting evidence is removed if its primary anchor is trimmed away.
+### Result format
+
+The tool result is one plain-text block, in ranked order, with no JSON escaping,
+scores, or serving metadata:
+
+````text
+src/email/retry-backoff.constant.ts:1-7 (whole file)
+```
+export const EMAIL_SEND_RETRY_BACKOFF = {
+  ...
+```
+
+Definition referenced from src/email/retry-backoff.constant.ts:1:
+src/queue/job-options.ts:12-20 (complete definition)
+```
+...
+```
+````
+
+Each excerpt is headed `path:start-end (label)` and followed by the exact current
+source in a fence longer than any backtick run it contains. The label says whether
+rereading the file can add anything:
+
+- `whole file`: the excerpt is the entire file. A file without a provable
+  declaration boundary, such as a constants or configuration module, is still
+  whole and is not reported as incomplete.
+- `complete definition`: a proven full definition (`definitionComplete`); it does
+  not mean every dependency or caller is included.
+- `partial excerpt`: the enclosing code continues outside the range (`truncated`).
+
+Supporting excerpts are introduced by `Definition referenced from`, `Caller of`
+(parser-resolved bindings, with the reference or target location), or
+`Possible definition referenced from` (a lexical name match only). Supporting
+evidence is removed if its primary anchor is trimmed away. A search of a
+subdirectory starts with `Paths are relative to <directory>/.`; deep searches
+state their step count and stop reason; an empty result says so and suggests
+rephrasing or grep. When whole matches or related excerpts were dropped to fit
+the response cap, the text ends with a note saying so. Tool failures are a
+single error text.
+
+The same packet as structured JSON (`results`, `related`, `truncated`, and per
+excerpt `wholeFile`, `definitionComplete`, `truncated`, `symbol`, `score`) is
+available to operators through [`OKO_METRICS_FILE`](#timings-and-retrieval-metadata),
+never to the agent.
 
 When a top-ranked function has a known boundary and is at most 256 lines,
 Oko considers its full implementation instead of the usual 60-line source window.
@@ -137,21 +177,34 @@ up-to-five-result output. Generic `rank` input is unchanged.
 See [source evidence validation](../benchmarks/source-evidence.md) for the snippet
 repair checks and the limits of the ranking evidence changes.
 
-MCP results include both structured JSON and equivalent text JSON for client
-compatibility. The **16,000-byte response cap includes both copies and JSON
-escaping**, excluding the small JSON-RPC envelope. Context is trimmed to fit
-and `truncated` is set; repeated question text and deep action labels are
-separately shortened and marked. Deep results retain investigation counters
-and stop reasons. Tool failures return an error without stopping the server.
+The agent receives a single copy of the evidence: no `structuredContent` and no
+output schema. Clients that receive both forms show the model two copies or only
+the JSON one, and the calling agent pays for every byte on each later turn. The
+**16,000-byte response cap covers the serialized result including JSON escaping
+of the text**, excluding the small JSON-RPC envelope. Context is trimmed to fit
+and marked as described above. Tool failures return an error without stopping
+the server.
 
-The response includes `timings` for preparation (including credential lookup),
+### Timings and retrieval metadata
+
+Serving metadata does not inform the agent's next step, so it is not part of the
+tool result. Set `OKO_METRICS_FILE` in the server's process environment to append
+one JSON line per completed search: the question (shortened to 512 bytes and
+marked), searched directory, ranking mode, `timings`, `retrieval`, deep
+`investigation` counters with shortened action labels, `responseBytes`,
+`responseLimitBytes`, and the structured packet. The file contains source
+excerpts and the question; keep it private. It is not read from `.env`, failed
+searches record nothing, and a write failure is reported on stderr without
+failing the search. The benchmark launchers set it per trial.
+
+Each line includes `timings` for preparation (including credential lookup),
 scan, shortlist, context building, and total server work. Normal `retrieval`
 metadata reports candidate counts, budgeted request bytes (before the transport
 adds its model field), preview building, and client-side reranking time
 (HTTP preparation, provider wait, and parsing).
 Deep mode reports investigation time instead. These times exclude Codex's
 reasoning, answer generation, and client transport overhead. No request bodies
-or credentials are logged. Timing and context metadata are automatic.
+or credentials are logged.
 `timings.cache` reports cache status, reused/rebuilt file counts, and the time
 spent scanning, loading, validating/rebuilding file data, building corpus statistics,
 and saving. A disk hit reconstructs source from cached boundaries and validates

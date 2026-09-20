@@ -167,6 +167,29 @@ class BenchmarkTests(unittest.TestCase):
         target.symlink_to(Path(self.temp.name) / 'outside')
         self.assertIn('gradingError', r.grade(self.edit, self.work, ''))
 
+    def test_text_tool_results_take_cache_state_from_the_metrics_file(self):
+        text = 'auth.rs:1-1 (whole file)\n```\nfn authenticate() {}\n```\n'
+        streams = {
+            'codex': [dict(type='item.completed', item=dict(type='mcp_tool_call', server='oko', tool='search',
+                                                          result=dict(content=[dict(type='text', text=text)])))],
+            'opencode': [dict(type='tool_use', part=dict(tool='oko_search', state=dict(output=text)))],
+            'claude': [dict(type='assistant', message=dict(content=[dict(type='tool_use', name='mcp__oko__search', id='one')])),
+                       dict(type='user', message=dict(content=[dict(type='tool_result', tool_use_id='one', content=text)]))],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            metrics = Path(directory) / 'oko-metrics.jsonl'
+            metrics.write_text(json.dumps({'ranking': 'jev', 'timings': {'totalMs': 9, 'cache': {
+                'status': 'disk', 'rebuiltFiles': 0, 'reusedFiles': 7}}}) + '\n')
+            for client, events in streams.items():
+                row = r.parse_events(client, events)
+                self.assertEqual(r.cache_observations(row), [], client)
+                self.assertFalse(r.check_condition('oko-warm', [], row['okoCalls']))
+                self.assertEqual(r.observability.attach_oko_metrics(row['tools'], metrics), 1)
+                observations = r.cache_observations(row)
+                self.assertEqual([o['status'] for o in observations], ['disk'], client)
+                self.assertTrue(r.check_condition('oko-warm', observations, row['okoCalls']))
+                self.assertFalse(r.check_condition('oko-cold', observations, row['okoCalls']))
+
     def test_three_event_formats_and_errors(self):
         streams = {
             'codex': [dict(type='item.completed', item=dict(type='mcp_tool_call', server='oko')),

@@ -65,6 +65,7 @@ class Bridge:
                                            str(work), str(trial / 'cache')]
             self.backend = profiler.Client(Path(r.SETTINGS['oko']), work, trial / 'cache',
                                            120, command=command, live=not offline,
+                                           metrics=trial / 'oko-metrics.jsonl' if command else None,
                                            api_key=os.environ.get('TYPESAFE_API_KEY') if not offline else None)
             self.initialized = self.backend.request('initialize', {
                 'protocolVersion': '2024-11-05', 'capabilities': {},
@@ -107,7 +108,7 @@ class Bridge:
                     before_hash = r.digest(target) if target.is_file() else None
                     result = self.backend.request(method, params)
                     if method == 'tools/call':
-                        packet = result.get('structuredContent', {})
+                        packet = {} if result.get('isError') else self.backend.last_metrics()
                         call = dict(phase=self.phase, serverPid=self.backend.process.pid,
                                     tool=params.get('name'), arguments=params.get('arguments'),
                                     targetSha256BeforeCall=before_hash,

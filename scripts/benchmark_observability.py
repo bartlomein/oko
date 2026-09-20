@@ -292,6 +292,50 @@ def _safe_fields(value: Any, fields: Sequence[str]) -> dict[str, Any] | None:
     return result or None
 
 
+def is_oko_tool(tool: Mapping[str, Any]) -> bool:
+    name = tool.get("name") or tool.get("tool")
+    return tool.get("server") == "oko" or name in ("oko_search", "mcp__oko__search")
+
+
+def read_oko_metrics(path: Any) -> list[dict[str, Any]]:
+    """Read the JSON lines Oko appends to ``OKO_METRICS_FILE``, one per completed search.
+
+    Oko keeps timings and retrieval metadata out of the agent-visible tool
+    result, so the launcher points this file into the trial directory.
+    """
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        return []
+    metrics = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            metrics.append(value)
+    return metrics
+
+
+def attach_oko_metrics(tools: Sequence[dict[str, Any]], path: Any) -> int:
+    """Attach each recorded search to the matching Oko tool call, in order.
+
+    A failed search records nothing, so surplus lines stay with the last Oko
+    call rather than being dropped. Returns the number of recorded searches.
+    """
+
+    metrics = read_oko_metrics(path)
+    calls = [tool for tool in tools if is_oko_tool(tool)]
+    for tool, metric in zip(calls, metrics):
+        tool["okoMetrics"] = [metric]
+    if calls and len(metrics) > len(calls):
+        calls[-1]["okoMetrics"].extend(metrics[len(calls):])
+    return len(metrics)
+
+
 def _safe_phase_metrics(value: Any) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     if isinstance(value, Mapping):

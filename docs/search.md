@@ -70,7 +70,8 @@ Deep mode retains its existing investigation budget; generic `rank` is unchanged
 
 It never sends the full repository. Each request is limited to 32,000 bytes before
 the model field is added. This is a byte budget, not a token count. Requests have
-a 10-second timeout; HTTP errors are not retried. MCP retrieval metadata includes
+a 10-second timeout; HTTP errors are not retried. MCP retrieval metadata (written
+to `OKO_METRICS_FILE`, not returned to the agent) includes
 `attempts`, `recoveryCandidates`, and `recovered`. `requestBytes`, `previewMs`, and
 `rerankMs` sum both attempts; `rankedCandidates` and `omittedCandidates` describe
 the initial attempt. Recovery can therefore add one provider request and up to

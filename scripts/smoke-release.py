@@ -52,8 +52,8 @@ def mcp_search(binary, root, env):
             answer = request(3, "tools/call", {"name": "search", "arguments": {
                 "question": "where is archive checksum verification implemented?"}})
             assert not answer.get("isError"), answer
-            packet = answer.get("structuredContent") or json.loads(answer["content"][0]["text"])
-            assert packet["results"][0]["path"] == "archive.rs", packet
+            assert "structuredContent" not in answer, answer
+            assert answer["content"][0]["text"].startswith("archive.rs:"), answer
         finally:
             child.terminate()
             try:

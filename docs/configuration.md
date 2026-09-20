@@ -78,6 +78,12 @@ They are disposable: missing, incompatible, damaged, or
 unwritable caches fall back to preparing current files. Caching does not change
 ranking or remove Jev requests.
 
+Set `OKO_METRICS_FILE` for an MCP server to append one JSON line per completed
+search with timings, retrieval metadata, and the structured result packet; see the
+[MCP reference](mcp.md#timings-and-retrieval-metadata). The agent-visible tool
+result contains source evidence only. The file includes source excerpts and the
+question, so keep it private. This setting is not read from `.env`.
+
 JSON cache timings distinguish preparation reuse (`reusedFiles`, `rebuiltFiles`)
 from source I/O (`readFiles`, `reusedContents`). `readFiles` counts paths attempted,
 including files rejected by the text/size checks. `validation` and

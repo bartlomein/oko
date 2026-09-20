@@ -15,6 +15,7 @@ struct Client {
     input: Option<ChildStdin>,
     output: Receiver<Value>,
     id: u64,
+    metrics: tempfile::TempDir,
     _cache: Option<tempfile::TempDir>,
 }
 impl Client {
@@ -25,9 +26,11 @@ impl Client {
         client
     }
     fn start_with_cache(root: &Path, offline: bool, endpoint: Option<&str>, cache: &Path) -> Self {
+        let metrics = tempfile::tempdir().unwrap();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_oko"));
         cmd.args(["mcp", "--root"])
             .arg(root)
+            .env("OKO_METRICS_FILE", metrics.path().join("metrics.jsonl"))
             .env("OKO_CACHE_DIR", cache)
             .env("OKO_NO_CACHE", "0")
             .env("TYPESAFE_API_KEY", "")
@@ -60,6 +63,7 @@ impl Client {
             input: Some(input),
             output,
             id: 0,
+            metrics,
             _cache: None,
         }
     }
@@ -86,8 +90,27 @@ impl Client {
         assert!(response["result"]["capabilities"]["tools"].is_object());
         self.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     }
+    /// The agent-visible result, plus the operator's `OKO_METRICS_FILE` line
+    /// for a completed search under the test-only `metrics` key.
     fn search(&mut self, args: Value) -> Value {
-        self.request("tools/call", json!({"name":"search","arguments":args}))
+        let path = self.metrics.path().join("metrics.jsonl");
+        let lines = |path: &Path| {
+            fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let before = lines(&path).len();
+        let mut response = self.request("tools/call", json!({"name":"search","arguments":args}));
+        let recorded = lines(&path);
+        if response["result"]["isError"] == false {
+            assert_eq!(recorded.len(), before + 1, "one metrics line per search");
+            response["metrics"] = serde_json::from_str(recorded.last().unwrap()).unwrap();
+        } else {
+            assert_eq!(recorded.len(), before, "failed searches record nothing");
+        }
+        response
     }
 }
 
@@ -160,9 +183,20 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert_eq!(tools[0]["name"], "search");
     assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+    // Every agent turn pays for the tool definition, whether or not it searches.
+    assert!(tools[0].get("outputSchema").is_none());
+    let definition = serde_json::to_vec(&tools[0]).unwrap().len();
+    assert!(
+        definition <= 1_500,
+        "tool definition grew to {definition} bytes"
+    );
     let result = client.search(json!({"question":"authentication token"}));
     assert_eq!(result["result"]["isError"], false, "{result}");
-    let data = &result["result"]["structuredContent"];
+    assert_eq!(
+        result["result"]["content"][0]["text"],
+        "auth.rs:1-1 (whole file)\n```\nfn authenticate() { validate_token(); }\n```\n"
+    );
+    let data = &result["metrics"];
     assert_eq!(data["ranking"], "lexical");
     assert_eq!(data["results"][0]["path"], "auth.rs");
     assert_eq!(data["results"][0]["startLine"], 1);
@@ -173,7 +207,7 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     .unwrap();
     let result = client.search(json!({"question":"changed authenticate"}));
     assert!(
-        result["result"]["structuredContent"]["results"][0]["text"]
+        result["metrics"]["results"][0]["text"]
             .as_str()
             .unwrap()
             .contains("changed_authenticate")
@@ -218,12 +252,42 @@ fn invalid_arguments_boundaries_and_missing_key_are_recoverable() {
     let result = paid.search(json!({"question":"auth"}));
     assert_eq!(result["result"]["isError"], true);
     assert!(
-        result["result"]["structuredContent"]["error"]
+        result["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("No TypeSafe key")
     );
 }
+#[test]
+fn server_instructions_stay_brief_and_subdirectory_searches_state_their_path_base() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("server")).unwrap();
+    fs::write(
+        root.path().join("server/auth.rs"),
+        "fn authenticate() { validate_token(); }\n",
+    )
+    .unwrap();
+    let mut client = Client::start(root.path(), true, None);
+    let response = client.request("initialize", json!({"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"oko-tests","version":"1"}}));
+    client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let instructions = response["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.len() <= 300, "{}", instructions.len());
+
+    let scoped = client.search(json!({"question":"authentication token","directory":"server"}));
+    assert_packet_envelope(&scoped);
+    assert_eq!(
+        scoped["result"]["content"][0]["text"],
+        "Paths are relative to server/.\n\nauth.rs:1-1 (whole file)\n```\nfn authenticate() { validate_token(); }\n```\n"
+    );
+    let unscoped = client.search(json!({"question":"authentication token"}));
+    assert!(
+        unscoped["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("server/auth.rs:1-1 (whole file)\n")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_directory_cannot_escape_workspace() {
@@ -304,14 +368,15 @@ fn normal_and_deep_search_use_mock_jev_and_survive_provider_errors() {
         assert_eq!(result["result"]["isError"], fail, "{result}");
         if !fail {
             assert_packet_envelope(&result);
-            assert_eq!(
-                result["result"]["structuredContent"]["results"][0]["path"],
-                "auth.rs"
-            );
+            assert_eq!(result["metrics"]["results"][0]["path"], "auth.rs");
             if deep {
-                assert_eq!(
-                    result["result"]["structuredContent"]["investigation"]["jevCalls"],
-                    1
+                assert_eq!(result["metrics"]["investigation"]["jevCalls"], 1);
+                assert!(
+                    result["result"]["content"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("Deep search stopped after 1 step: "),
+                    "{result}"
                 );
             }
         }
@@ -463,14 +528,58 @@ fn assert_packet_envelope(response: &Value) -> &Value {
     let result = &response["result"];
     assert!(
         serde_json::to_vec(result).unwrap().len() <= 16_000,
-        "the complete MCP result includes both structured content and escaped text"
+        "the complete MCP result, including JSON escaping, is bounded"
     );
-    let packet = &result["structuredContent"];
-    let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        text, *packet,
-        "text-only MCP clients receive the same evidence"
+    assert!(
+        result.get("structuredContent").is_none(),
+        "the agent receives one copy of the evidence"
     );
+    let content = result["content"].as_array().unwrap();
+    assert_eq!(content.len(), 1);
+    let text = content[0]["text"].as_str().unwrap();
+    for serving_detail in ["timings", "retrieval", "jevCalls", "score", "Ms\""] {
+        assert!(!text.contains(serving_detail), "{serving_detail}: {text}");
+    }
+    let packet = &response["metrics"];
+    // The server measures before rmcp drops fields that are absent on the wire.
+    let measured = packet["responseBytes"].as_u64().unwrap() as usize;
+    assert!((serde_json::to_vec(result).unwrap().len()..=16_000).contains(&measured));
+    // Every structured excerpt reaches the agent as exact, unescaped source.
+    let excerpts = packet["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(packet["related"].as_array().unwrap());
+    for excerpt in excerpts {
+        let label = if excerpt["wholeFile"] == true {
+            "whole file"
+        } else if excerpt["definitionComplete"] == true {
+            "complete definition"
+        } else {
+            "partial excerpt"
+        };
+        assert_eq!(excerpt["truncated"] == true, label == "partial excerpt");
+        let header = format!(
+            "{}:{}-{} ({label})\n",
+            excerpt["path"].as_str().unwrap(),
+            excerpt["startLine"],
+            excerpt["endLine"]
+        );
+        let body = &text[text
+            .find(&header)
+            .unwrap_or_else(|| panic!("{header}: {text}"))
+            + header.len()..];
+        let fence = body.lines().next().unwrap();
+        assert!(fence.len() >= 3 && fence.chars().all(|c| c == '`'));
+        assert!(
+            body[fence.len() + 1..]
+                .starts_with(&format!("{}\n{fence}\n", excerpt["text"].as_str().unwrap())),
+            "{header}: {text}"
+        );
+    }
+    if packet["results"].as_array().unwrap().is_empty() {
+        assert!(text.starts_with("No relevant code found."), "{text}");
+    }
     assert!(packet["results"].as_array().unwrap().len() <= 3);
     assert!(packet["related"].as_array().unwrap().len() <= 2);
     assert!(packet["truncated"].is_boolean());
@@ -1312,7 +1421,7 @@ fn empty_search_recovers_unseen_candidates_once_and_preserves_constraints() {
             .iter()
             .any(|item| item["source"] == recovered["source"])
     );
-    let packet = &response["result"]["structuredContent"];
+    let packet = &response["metrics"];
     assert_eq!(packet["retrieval"]["attempts"], 2);
     assert_eq!(packet["retrieval"]["recovered"], true);
     assert_eq!(packet["results"].as_array().unwrap().len(), 1);
@@ -1340,7 +1449,7 @@ fn persistent_miss_stops_after_two_requests_without_lowering_threshold() {
         |request| relevance_response(request, |_| 0.5),
     );
     assert_eq!(requests.len(), 2);
-    let packet = &response["result"]["structuredContent"];
+    let packet = &response["metrics"];
     assert_eq!(packet["retrieval"]["attempts"], 2);
     assert_eq!(packet["retrieval"]["recovered"], false);
     assert!(packet["results"].as_array().unwrap().is_empty());
@@ -1356,7 +1465,7 @@ fn empty_search_skips_identical_recovery_evidence() {
         |request| relevance_response(request, |_| 0.1),
     );
     assert_eq!(requests.len(), 1);
-    let packet = &response["result"]["structuredContent"];
+    let packet = &response["metrics"];
     assert_eq!(packet["retrieval"]["attempts"], 1);
     assert!(packet["results"].as_array().unwrap().is_empty());
 }
