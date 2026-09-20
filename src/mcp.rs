@@ -156,6 +156,7 @@ impl OkoServer {
         let mut investigate_ms = None;
         let mut lexical_fallback = None;
         let mut candidates = Vec::new();
+        let mut runners_up = Vec::new();
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -198,7 +199,7 @@ impl OkoServer {
                 snapshot.rank_with_intent(&input.question, input.intent.into())
             };
             shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-            let (results, stats) = super::rank_code_with_stats(
+            let (results, mut stats) = super::rank_code_with_stats(
                 &input.question,
                 &shortlist,
                 corpus,
@@ -220,6 +221,21 @@ impl OkoServer {
             )?;
             lexical_fallback = stats.lexical_fallback;
             candidates = stats.candidates.clone();
+            runners_up = std::mem::take(&mut stats.runners_up)
+                .into_iter()
+                .map(|r| {
+                    (
+                        search::Chunk {
+                            path: r.path,
+                            start_line: r.start_line,
+                            end_line: r.end_line,
+                            text: r.text,
+                            lexical_score: 0.0,
+                        },
+                        r.score,
+                    )
+                })
+                .collect();
             let retrieval = Some(serde_json::to_value(stats)?);
             let winners = results
                 .into_iter()
@@ -287,9 +303,10 @@ impl OkoServer {
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
-        let packet = oko::context::build_packet_with_navigation(
+        let packet = oko::context::build_packet_with_runners_up(
             corpus,
             &winners,
+            &runners_up,
             &input.question,
             snapshot.navigation(),
         );
@@ -356,7 +373,7 @@ fn other_candidates(
     }
     let judged = others.iter().any(|candidate| candidate.score.is_some());
     let mut text = if judged {
-        "\nOther candidates, judged less relevant and not shown:\n".to_owned()
+        "\nOther candidates, not shown, best first:\n".to_owned()
     } else {
         "\nOther keyword matches, not shown:\n".to_owned()
     };
@@ -490,7 +507,7 @@ fn prewarm(server: &OkoServer) {
 impl OkoServer {
     #[tool(
         name = "search",
-        description = "Find code by describing its behavior when the exact name is unknown; use grep for known identifiers. Returns up to three ranked excerpts and two related definitions or callers as `path:start-end (label)` plus the exact current file contents, each line prefixed with its file line number and a tab; cite those numbers and drop the prefix when editing. Do not re-read lines already shown: reading or grepping them returns the same text. Labels describe only that excerpt: `whole file` and `complete definition` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters. Results are candidates, not a complete answer: check relevance, and keep searching or reading when a question spans several locations. `Possible definition` is a name match only. `Other candidates` lists unshown places rated lower; read them when the excerpts fall short.",
+        description = "Find code by describing its behavior when the exact name is unknown; use grep for known identifiers. Returns up to three ranked excerpts and two related definitions or callers as `path:start-end (label)` plus the exact current file contents, each line prefixed with its file line number and a tab; cite those numbers and drop the prefix when editing. Labels describe only that excerpt: `whole file` and `complete definition(s)` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters. `possible match` was rated below the relevance cutoff and is shown because there was room. Results are candidates, not a complete answer: keep searching or reading when a question spans several locations. `Possible definition` is a name match only. `Other candidates` lists unshown places, best first; read them when the excerpts fall short.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

@@ -210,6 +210,13 @@ def replay_build(label, binary, workspaces, questions, tasks, live, timeout, pro
                         text = ''.join(b.get('text', '') for b in response.get('content', []))
                         row.update(score(packet, anchors(tasks[task][1]), query.get('directory')),
                                    ranking=packet.get('ranking'),
+                                   # Ranges only, never source: enough to see how a miss happened.
+                                   shown=[[kind, e['path'], e['startLine'], e['endLine'], bool(e.get('truncated')),
+                                           e.get('score')]
+                                          for kind in ('results', 'related') for e in packet.get(kind) or []],
+                                   candidates=[[c['path'], c['startLine'], c['endLine'], c.get('score')]
+                                               for c in retrieval.get('candidates') or []],
+                                   omittedNote=bool(packet.get('truncated')),
                                    # What the agent pays for: every copy the client forwards.
                                    responseBytes=len(json.dumps({k: v for k, v in response.items()
                                                                  if k in ('content', 'structuredContent')})),

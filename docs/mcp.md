@@ -142,7 +142,9 @@ plausible excerpt misses multi-location answers:
   declaration boundary, such as a constants or configuration module, is still
   whole and is not reported as incomplete.
 - `complete definition`: a proven full definition (`definitionComplete`); it does
-  not mean every dependency or caller is included.
+  not mean every dependency or caller is included. `2 complete definitions` means
+  the match and the short definition or definitions that directly follow it
+  (`definitions`), described below.
 - `partial excerpt`: the enclosing code continues outside the range (`truncated`),
   so the file should be read when the rest matters.
 
@@ -153,8 +155,9 @@ evidence is removed if its primary anchor is trimmed away. A search of a
 subdirectory starts with `Paths are relative to <directory>/.`; deep searches
 state their step count and stop reason; an empty result says so and suggests
 rephrasing or grep. When whole matches or related excerpts were dropped to fit
-the response cap, the text ends with a note saying so. Tool failures are a
-single error text.
+the response cap, the text ends with a note saying so; having more accepted
+matches than the three shown is not reported as a size cut, because those are
+named after the excerpts. Tool failures are a single error text.
 
 The same packet as structured JSON (`results`, `related`, `truncated`, and per
 excerpt `wholeFile`, `definitionComplete`, `truncated`, `symbol`, `score`) is
@@ -166,9 +169,32 @@ and comments directly above it, up to a blank line, other code, or another
 declaration: `@classmethod` is part of what a method is, and an edit to a
 function usually touches its comment.
 
+A short definition (up to 20 lines, 30 in total) that directly follows a shown
+complete definition comes with it when the shown code references it by name or
+the question asks about it by name: the predicate a parser calls, the sibling
+method the question names. Only blank lines may separate them. On 169 replayed
+agent questions, over a quarter of the expected code missing from a response
+began one or two lines after a shown definition, and agents read on regardless,
+at a model turn each. A definition tied to neither stays out, so responses do
+not grow with unrelated neighbours.
+
+Most responses use one or two of the three excerpt slots and a fraction of the
+response cap. A spare slot is given to a candidate Jev rated from 0.35 up to its
+0.5 cutoff, as a focused window labelled `possible match` (`lowerConfidence`),
+only beside at least one accepted match and only while the response is under
+6,000 bytes. Nothing accepted remains an empty result. In the same replay 11 of
+30 such excerpts held expected code that was otherwise missing; at 0.2 it would
+have been 12 of 65. Together these two rules raised responses containing
+everything the task needed from 67% to 84% for 12% more bytes, with no question
+losing coverage. The following-definition rule alone reaches 79%. The label
+states what the excerpt is and gives no instruction such as "check it": agents
+that follow instructions literally turn that into extra reads. In agent runs no
+client made more calls after receiving one, and Claude used the useful ones
+without a follow-up.
+
 After the excerpts, a normal search names up to six further candidates by
-`path:start-end` only, under `Other candidates, judged less relevant and not
-shown:`. Jev judges every shortlisted candidate in the same request, so these
+`path:start-end` only, under `Other candidates, not shown, best first:`. Jev
+judges every shortlisted candidate in the same request, so these
 cost no extra call and one line each; candidates Jev rated irrelevant (below
 0.2) and anything overlapping a shown excerpt are left out. In keyword order the
 heading is `Other keyword matches, not shown:`. An agent that needs more can
