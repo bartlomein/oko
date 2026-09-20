@@ -158,6 +158,22 @@ excerpt `wholeFile`, `definitionComplete`, `truncated`, `symbol`, `score`) is
 available to operators through [`OKO_METRICS_FILE`](#timings-and-retrieval-metadata),
 never to the agent.
 
+An excerpt that begins at a declaration also includes the decorators, attributes,
+and comments directly above it, up to a blank line, other code, or another
+declaration: `@classmethod` is part of what a method is, and an edit to a
+function usually touches its comment.
+
+After the excerpts, a normal search names up to six further candidates by
+`path:start-end` only, under `Other candidates, judged less relevant and not
+shown:`. Jev judges every shortlisted candidate in the same request, so these
+cost no extra call and one line each; candidates Jev rated irrelevant (below
+0.2) and anything overlapping a shown excerpt are left out. In keyword order the
+heading is `Other keyword matches, not shown:`. An agent that needs more can
+open one of these instead of starting a blind search. `retrieval.candidates` in
+`OKO_METRICS_FILE` records every candidate's path, lines, and relevance, which
+shows whether missed code was judged irrelevant, fell below the threshold, or
+was never shortlisted.
+
 When the line that best matches the question is in a comment directly above a
 declaration in the winning chunk, the declaration is treated as the match: doc
 comments often repeat the question better than the code they document.

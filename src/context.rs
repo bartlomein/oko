@@ -13,6 +13,9 @@ use std::{
 };
 
 pub const PACKET_MAX_BYTES: usize = 16_000;
+// Five was measured on 169 replayed agent questions: Jev rarely accepts more
+// than three candidates, so coverage did not move, while keyword-ranked
+// responses grew by half. Further candidates are named by path instead.
 const RESULT_LIMIT: usize = 3;
 const RELATED_LIMIT: usize = 2;
 const EXCERPT_LINES: usize = 60;
@@ -521,6 +524,33 @@ impl<'a> Snapshot<'a> {
                 .last_key_value()
                 .is_some_and(|(last, _)| *last == end && self.lines.len() == end)
     }
+    /// Decorators, attributes, and comments directly above a declaration belong
+    /// to it: `@classmethod` changes what the function is, and an edit to the
+    /// function usually touches its comment. A blank line, other code, or
+    /// another declaration ends the attachment.
+    fn attached_header_start(&self, declaration: usize) -> usize {
+        const ATTACHED_LINES: usize = 24;
+        let mut start = declaration;
+        while start > 1 && declaration - start < ATTACHED_LINES {
+            let line = start - 1;
+            let (Some(raw), Some(code)) = (self.lines.get(&line), self.code.get(&line)) else {
+                break;
+            };
+            let code = code.trim();
+            let attached = !raw.trim().is_empty()
+                && (code.is_empty() || code.starts_with('@') || code.starts_with("#["));
+            if !attached
+                || self
+                    .declarations
+                    .iter()
+                    .any(|d| d.line <= line && d.end >= line)
+            {
+                break;
+            }
+            start = line;
+        }
+        start
+    }
     /// A doc comment often repeats the question better than the code it
     /// documents, and chunks begin at that comment. Only comments and blank
     /// lines may separate the line from the declaration it introduces.
@@ -608,6 +638,10 @@ fn excerpt(
         } else {
             end += 1;
         }
+    }
+    // A definition begins with what is attached to it, not with its keyword.
+    if parent.is_some_and(|d| d.line == start) {
+        start = snapshot.attached_header_start(start);
     }
     let text = (start..=end)
         .map(|n| snapshot.lines[&n])
@@ -1418,6 +1452,53 @@ mod tests {
         assert!(fitted.omitted);
     }
     #[test]
+    fn excerpts_begin_with_the_decorators_and_comments_attached_to_a_definition() {
+        // The winner is the chunk holding `needle`, wherever it is in the file.
+        let packet = |path: &str, source: &str, needle: &str| {
+            let corpus = chunk_text(path, source);
+            let winner = corpus
+                .iter()
+                .find(|chunk| chunk.text.contains(needle))
+                .unwrap()
+                .clone();
+            build_packet(&corpus, &[(winner, 0.9)], needle)
+        };
+        let python = "def first():\n    return 1\n\n@cache\n@validate(strict=True)\ndef get_reason_phrase(value):\n    try:\n        return codes(value).phrase\n    except ValueError:\n        return \"\"\n\n@cache\ndef other():\n    return 2";
+        let result = packet("status.py", python, "get_reason_phrase");
+        let excerpt = &result.results[0].excerpt;
+        assert_eq!(excerpt.start_line, 4, "{}", excerpt.text);
+        assert!(
+            excerpt
+                .text
+                .starts_with("@cache\n@validate(strict=True)\ndef get_reason_phrase")
+        );
+        assert!(
+            !excerpt.text.contains("return 1"),
+            "the previous function is not attached"
+        );
+        assert!(
+            !excerpt.text.contains("def other"),
+            "nor is the next one's decorator"
+        );
+
+        let rust = "fn before() {}\n\n/// Parses the header.\n#[inline]\npub fn first_forwarded_value() -> u32 {\n    1\n}";
+        let result = packet("request.rs", rust, "first_forwarded_value");
+        let excerpt = &result.results[0].excerpt;
+        assert_eq!(
+            (excerpt.start_line, excerpt.end_line),
+            (3, 7),
+            "{}",
+            excerpt.text
+        );
+        assert!(excerpt.definition_complete && !excerpt.truncated);
+
+        // A blank line ends the attachment: that comment describes something else.
+        let detached =
+            "// Section heading\n\nfn first_forwarded_value() -> u32 {\n    1\n}\nfn after() {}";
+        let result = packet("plain.rs", detached, "first_forwarded_value");
+        assert_eq!(result.results[0].excerpt.start_line, 3);
+    }
+    #[test]
     fn a_match_in_the_doc_comment_returns_the_function_it_documents() {
         let mut lines = vec![
             "import { isRemoteAllowed } from './remote';".to_owned(),
@@ -1449,7 +1530,9 @@ mod tests {
             "infers dimensions of a remote image URL authorization",
         );
         let excerpt = &packet.results[1].excerpt;
-        assert_eq!((excerpt.start_line, excerpt.end_line), (6, 98));
+        // The function it documents, beginning with that comment.
+        assert_eq!((excerpt.start_line, excerpt.end_line), (3, 98));
+        assert!(excerpt.text.starts_with("/**\n * Infers the dimensions"));
         assert!(excerpt.definition_complete && !excerpt.truncated);
         assert!(excerpt.text.contains("isRemoteAllowed(finalUrl)"));
 

@@ -30,6 +30,12 @@ const METRICS_FILE: &str = "OKO_METRICS_FILE";
 // response is better served by keyword-ranked matches, labelled as such, than by
 // ten seconds of silence followed by an error.
 const JEV_PATIENCE: Duration = Duration::from_secs(4);
+// Jev judges every shortlisted candidate in the same request. Naming the best
+// of those it did not accept costs a line each and lets an agent that needs
+// more open the right file instead of starting a blind search.
+const OTHER_CANDIDATES: usize = 6;
+// Below this Jev considers a candidate irrelevant; listing it would mislead.
+const OTHER_CANDIDATE_FLOOR: f64 = 0.2;
 
 /// OKO_JEV_TIMEOUT_MS, between half a second and the provider's own timeout.
 fn jev_patience() -> Duration {
@@ -62,7 +68,7 @@ impl From<Intent> for RankingIntent {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SearchInput {
-    /// Behavior or code to locate, in the user's terms (at most 4096 bytes).
+    /// Behavior or code to locate, in the user's terms.
     /// For edits, describe the existing code; keep stated exclusions.
     question: String,
     /// Subdirectory of the workspace to search. Defaults to the root.
@@ -74,7 +80,7 @@ struct SearchInput {
     /// Slower multi-step search; only when a normal search was insufficient.
     #[serde(default)]
     deep: bool,
-    /// Deep mode only: 1 to 5 steps, default 5.
+    /// Deep only: 1-5 steps, default 5.
     max_steps: Option<usize>,
 }
 
@@ -149,6 +155,7 @@ impl OkoServer {
         let mut shortlist_ms = None;
         let mut investigate_ms = None;
         let mut lexical_fallback = None;
+        let mut candidates = Vec::new();
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -212,6 +219,7 @@ impl OkoServer {
                 },
             )?;
             lexical_fallback = stats.lexical_fallback;
+            candidates = stats.candidates.clone();
             let retrieval = Some(serde_json::to_value(stats)?);
             let winners = results
                 .into_iter()
@@ -285,7 +293,14 @@ impl OkoServer {
             &input.question,
             snapshot.navigation(),
         );
-        packet_result(metadata, packet, &notes, started, context_started)
+        packet_result(
+            metadata,
+            packet,
+            &notes,
+            &candidates,
+            started,
+            context_started,
+        )
     }
 }
 
@@ -309,10 +324,56 @@ fn prefix(text: &str, bytes: usize) -> &str {
     &text[..end]
 }
 
+/// The best candidates that are not among the returned excerpts, by path only.
+fn other_candidates(
+    packet: &oko::context::ContextPacket,
+    candidates: &[super::CandidateScore],
+) -> String {
+    let shown: Vec<_> = packet
+        .results
+        .iter()
+        .map(|result| &result.excerpt)
+        .chain(packet.related.iter().map(|related| &related.excerpt))
+        .collect();
+    let others: Vec<_> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .score
+                .is_none_or(|score| score >= OTHER_CANDIDATE_FLOOR)
+        })
+        .filter(|candidate| {
+            !shown.iter().any(|excerpt| {
+                excerpt.path == candidate.path
+                    && excerpt.start_line <= candidate.end_line
+                    && candidate.start_line <= excerpt.end_line
+            })
+        })
+        .take(OTHER_CANDIDATES)
+        .collect();
+    if others.is_empty() {
+        return String::new();
+    }
+    let judged = others.iter().any(|candidate| candidate.score.is_some());
+    let mut text = if judged {
+        "\nOther candidates, judged less relevant and not shown:\n".to_owned()
+    } else {
+        "\nOther keyword matches, not shown:\n".to_owned()
+    };
+    for candidate in others {
+        text.push_str(&format!(
+            "{}:{}-{}\n",
+            candidate.path, candidate.start_line, candidate.end_line
+        ));
+    }
+    text
+}
+
 fn packet_result(
     mut metadata: Value,
     mut packet: oko::context::ContextPacket,
     notes: &str,
+    candidates: &[super::CandidateScore],
     started: Instant,
     context_started: Instant,
 ) -> Result<CallToolResult> {
@@ -329,6 +390,7 @@ fn packet_result(
             }
             text.push_str(&packet.render_text());
         }
+        text.push_str(&other_candidates(&packet, candidates));
         let result = CallToolResult::success(vec![ContentBlock::text(text)]);
         let size = serde_json::to_vec(&result)?.len();
         if size <= MAX_MCP_RESULT_BYTES {
@@ -428,7 +490,7 @@ fn prewarm(server: &OkoServer) {
 impl OkoServer {
     #[tool(
         name = "search",
-        description = "Find code from a description of its behavior when the exact name is unknown; use grep for known identifiers. Returns up to three ranked excerpts and up to two related definitions or callers as `path:start-end (label)` plus exact current source, each line prefixed with its file line number and a tab; cite those numbers, and drop the prefix when editing. Labels describe only that excerpt: `whole file` and `complete definition` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters. Results are candidates, not a complete answer: check relevance, and keep searching or reading when a question spans several locations. `Possible definition` is a name match, not a resolved binding.",
+        description = "Find code by describing its behavior when the exact name is unknown; use grep for known identifiers. Returns up to three ranked excerpts and two related definitions or callers as `path:start-end (label)` plus current source, each line prefixed with its file line number and a tab; cite those numbers and drop the prefix when editing. Labels describe only that excerpt: `whole file` and `complete definition` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters. Results are candidates, not a complete answer: check relevance, and keep searching or reading when a question spans several locations. `Possible definition` is a name match only. `Other candidates` lists unshown places rated lower; read them when the excerpts fall short.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

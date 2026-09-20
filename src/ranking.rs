@@ -42,6 +42,10 @@ pub struct ItemRanking {
     pub method: String,
     pub results: Vec<RankedItem>,
     pub omitted_count: usize,
+    /// Every judged candidate's id and relevance, best first, including those
+    /// at or below the threshold. Jev already scores them all in one request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub judged: Vec<(String, f64)>,
 }
 
 /// What makes a candidate useful; independent of its source or storage format.
@@ -285,8 +289,12 @@ pub fn rank_response(
         .enumerate()
         .map(|(index, item)| Ok((index, item, score(&format!("candidate_{}", index + 1))?)))
         .collect::<Result<Vec<_>>>()?;
-    scored.retain(|(_, _, score)| *score > RELEVANCE_THRESHOLD);
     scored.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+    let judged = scored
+        .iter()
+        .map(|(_, item, score)| (item.id.clone(), *score))
+        .collect();
+    scored.retain(|(_, _, score)| *score > RELEVANCE_THRESHOLD);
     Ok(ItemRanking {
         method: "jev".into(),
         results: scored
@@ -295,6 +303,7 @@ pub fn rank_response(
             .map(|(_, item, score)| ranked(item, score))
             .collect(),
         omitted_count: original_count.saturating_sub(candidates.len()),
+        judged,
     })
 }
 
@@ -546,6 +555,7 @@ pub fn rank_items_with_stats(
                 .map(|item| ranked(item, 0.0))
                 .collect(),
             omitted_count: 0,
+            judged: Vec::new(),
         });
     }
     let api_key = options
@@ -559,6 +569,7 @@ pub fn rank_items_with_stats(
             method: "jev".into(),
             results: vec![],
             omitted_count: 0,
+            judged: Vec::new(),
         });
     }
     let mut run = || -> Result<ItemRanking> {

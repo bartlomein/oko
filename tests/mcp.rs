@@ -521,6 +521,87 @@ fn a_slow_overloaded_or_unreachable_ranker_yields_labelled_keyword_matches() {
 }
 
 #[test]
+fn runners_up_are_named_by_path_and_every_judgment_is_recorded() {
+    let root = tempfile::tempdir().unwrap();
+    for name in ["accepted", "close", "weak", "irrelevant"] {
+        fs::write(
+            root.path().join(format!("{name}.rs")),
+            format!("pub fn parcel_dispatch_{name}() {{ deliver_parcel(); }}\n"),
+        )
+        .unwrap();
+    }
+    let (response, requests) = search_with_counted_provider(
+        root.path(),
+        json!({"question":"parcel dispatch"}),
+        |request| {
+            relevance_response(request, |candidate| {
+                let source = candidate["source"].as_str().unwrap();
+                if source.starts_with("accepted.rs:") {
+                    0.9
+                } else if source.starts_with("close.rs:") {
+                    0.45
+                } else if source.starts_with("weak.rs:") {
+                    0.25
+                } else {
+                    0.05
+                }
+            })
+        },
+    );
+    assert_eq!(requests.len(), 1, "runners-up come from the same judgment");
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(packet["results"].as_array().unwrap().len(), 1);
+    assert_eq!(packet["results"][0]["path"], "accepted.rs");
+    let judged: Vec<_> = packet["retrieval"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["path"].as_str().unwrap(), c["score"].as_f64().unwrap()))
+        .collect();
+    assert_eq!(
+        judged,
+        [
+            ("accepted.rs", 0.9),
+            ("close.rs", 0.45),
+            ("weak.rs", 0.25),
+            ("irrelevant.rs", 0.05)
+        ]
+    );
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.ends_with(
+            "\nOther candidates, judged less relevant and not shown:\nclose.rs:1-1\nweak.rs:1-1\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("irrelevant.rs"), "rated irrelevant: {text}");
+
+    // Keyword order has no judgments; the next matches are still worth naming.
+    for index in 0..8 {
+        fs::write(
+            root.path().join(format!("extra{index}.rs")),
+            "pub fn parcel_dispatch_extra() {}\n",
+        )
+        .unwrap();
+    }
+    let mut offline = Client::start(root.path(), true, None);
+    offline.initialize();
+    let response = offline.search(json!({"question":"parcel dispatch"}));
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(packet["results"].as_array().unwrap().len(), 3);
+    assert!(packet["retrieval"]["candidates"][0].get("score").is_none());
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let listed = text
+        .split("\nOther keyword matches, not shown:\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{text}"));
+    assert_eq!(listed.lines().count(), 6);
+    for result in packet["results"].as_array().unwrap() {
+        assert!(!listed.contains(result["path"].as_str().unwrap()), "{text}");
+    }
+}
+
+#[test]
 fn closing_client_input_exits_server() {
     let root = fixture();
     let mut client = Client::start(root.path(), true, None);

@@ -161,7 +161,34 @@ pub(crate) struct CodeRankingStats {
     /// Why results are in keyword order although Jev was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lexical_fallback: Option<&'static str>,
+    /// Every candidate of the final ranking, best first: Jev's relevance for
+    /// each, or keyword order without one. Shows whether missed code was
+    /// judged irrelevant, fell just below the threshold, or was never
+    /// shortlisted, and supplies the runners-up offered to the agent.
+    pub candidates: Vec<CandidateScore>,
     pub jev_calls: Vec<JevCallStats>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CandidateScore {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+}
+
+fn lexical_candidates(chunks: &[search::Chunk]) -> Vec<CandidateScore> {
+    chunks
+        .iter()
+        .map(|chunk| CandidateScore {
+            path: chunk.path.clone(),
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            score: None,
+        })
+        .collect()
 }
 
 /// A provider that is slow, unreachable, or overloaded says nothing about the
@@ -230,6 +257,7 @@ pub(crate) fn rank_code_with_stats(
         ..Default::default()
     };
     let scored: Vec<(search::Chunk, f64)> = if no_jev {
+        stats.candidates = lexical_candidates(chunks);
         chunks
             .iter()
             .take(search::RESULT_LIMIT)
@@ -266,6 +294,7 @@ pub(crate) fn rank_code_with_stats(
                     return Err(error);
                 };
                 stats.lexical_fallback = Some(reason);
+                stats.candidates = lexical_candidates(chunks);
                 return Ok((lexical_results(chunks), stats));
             }
         };
@@ -326,6 +355,19 @@ pub(crate) fn rank_code_with_stats(
                 selected = recovery;
             }
         }
+        stats.candidates = ranking
+            .judged
+            .iter()
+            .map(|(id, score)| {
+                let chunk = &selected[id.parse::<usize>().expect("IDs generated locally")];
+                CandidateScore {
+                    path: chunk.path.clone(),
+                    start_line: chunk.start_line,
+                    end_line: chunk.end_line,
+                    score: Some(*score),
+                }
+            })
+            .collect();
         let mut scored: Vec<_> = ranking
             .results
             .into_iter()
