@@ -37,6 +37,8 @@ const SIBLING_BUDGET: usize = 30;
 // code again, while most responses used a fraction of the budget and one or two
 // of three slots. They are shown only in a spare slot of a small response, as a
 // focused window, and labelled, because most of them are not what was asked for.
+// The label states what they are and gives no instruction: agents that follow
+// instructions literally turn "check this" into extra reads.
 const RUNNER_UP_BELOW_BYTES: usize = 6_000;
 // Bound lexical signature scanning; uncertain spans fall back to source context.
 const SIGNATURE_LINES: usize = 128;
@@ -831,7 +833,7 @@ impl SourceExcerpt {
             "partial excerpt".to_owned()
         };
         if lower_confidence {
-            label.push_str(", lower confidence");
+            label.push_str(", possible match");
         }
         let longest_run = self
             .text
@@ -983,7 +985,7 @@ pub fn build_packet_with_navigation(
 
 /// As `build_packet_with_navigation`, offering candidates rated just below the
 /// relevance cutoff for slots the accepted winners leave free. They appear only
-/// while the packet is small, and are labelled lower confidence.
+/// while the packet is small, and are labelled as possible matches.
 pub fn build_packet_with_runners_up(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
@@ -1737,7 +1739,7 @@ mod tests {
         let text = packet.render_text();
         assert!(text.contains("accepted.rs:1-3 (whole file)\n"), "{text}");
         assert!(
-            text.contains("close.rs:1-3 (whole file, lower confidence)\n"),
+            text.contains("close.rs:1-3 (whole file, possible match)\n"),
             "{text}"
         );
         assert!(!text.contains("omitted"), "{text}");

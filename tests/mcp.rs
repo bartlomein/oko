@@ -263,7 +263,7 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     for guidance in [
         "prefixed with its file line number",
         // A runner-up must never be mistaken for a match the ranker accepted.
-        "`lower confidence` marks a match rated below the relevance cutoff",
+        "`possible match` was rated below the relevance cutoff",
         "Labels describe only that excerpt",
         "candidates, not a complete answer",
     ] {
@@ -577,7 +577,7 @@ fn runners_up_are_named_by_path_and_every_judgment_is_recorded() {
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(shown, [("accepted.rs", false), ("close.rs", true)]);
     assert!(
-        text.contains("close.rs:1-1 (whole file, lower confidence)\n"),
+        text.contains("close.rs:1-1 (whole file, possible match)\n"),
         "{text}"
     );
     assert!(
@@ -789,7 +789,7 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         };
         assert_eq!(excerpt["truncated"] == true, label == "partial excerpt");
         if excerpt["lowerConfidence"] == true {
-            label.push_str(", lower confidence");
+            label.push_str(", possible match");
         }
         let header = format!(
             "{}:{}-{} ({label})\n",
@@ -1186,7 +1186,7 @@ fn independent_scores_keep_multiple_implementations_in_one_provider_call() {
         response["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("test.rs:1-2 (whole file, lower confidence)\n")
+            .contains("test.rs:1-2 (whole file, possible match)\n")
     );
     assert!(
         results[0]["text"]

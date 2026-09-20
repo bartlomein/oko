@@ -180,13 +180,17 @@ not grow with unrelated neighbours.
 
 Most responses use one or two of the three excerpt slots and a fraction of the
 response cap. A spare slot is given to a candidate Jev rated from 0.35 up to its
-0.5 cutoff, as a focused window labelled `lower confidence` (`lowerConfidence`),
+0.5 cutoff, as a focused window labelled `possible match` (`lowerConfidence`),
 only beside at least one accepted match and only while the response is under
 6,000 bytes. Nothing accepted remains an empty result. In the same replay 11 of
 30 such excerpts held expected code that was otherwise missing; at 0.2 it would
 have been 12 of 65. Together these two rules raised responses containing
 everything the task needed from 67% to 84% for 12% more bytes, with no question
-losing coverage.
+losing coverage. The following-definition rule alone reaches 79%. The label
+states what the excerpt is and gives no instruction such as "check it": agents
+that follow instructions literally turn that into extra reads. In agent runs no
+client made more calls after receiving one, and Claude used the useful ones
+without a follow-up.
 
 After the excerpts, a normal search names up to six further candidates by
 `path:start-end` only, under `Other candidates, not shown, best first:`. Jev
