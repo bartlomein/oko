@@ -17,7 +17,7 @@
       "type": "array",
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["client", "condition", "attempted", "succeeded", "failed", "denominator", "latencyNs", "correctness", "agentUsage", "jevUsage"],
+        "required": ["client", "condition", "taskKind", "attempted", "succeeded", "failed", "denominator", "latencyNs", "correctness", "agentUsage", "jevUsage"],
         "properties": {
           "client": {
             "type": "object", "additionalProperties": false, "required": ["name", "model", "effort"],
@@ -34,6 +34,7 @@
               "observedCacheState": {"type": ["string", "null"]}
             }
           },
+          "taskKind": {"enum": ["search", "edit", "unknown"]},
           "attempted": {"type": "integer"},
           "succeeded": {"type": "integer"},
           "failed": {"type": "integer"},
@@ -53,18 +54,20 @@
               "outputTokens": {"type": ["integer", "null"]},
               "cacheReadTokens": {"type": ["integer", "null"]},
               "cacheWriteTokens": {"type": ["integer", "null"]},
-              "totalTokens": {"type": ["integer", "null"]}
+              "totalTokens": {"type": ["integer", "null"]},
+              "reasoningTokens": {"type": ["integer", "null"]}
             }
           },
           "jevUsage": {
-            "type": "object", "additionalProperties": false, "required": ["calls", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens"],
+            "type": "object", "additionalProperties": false, "required": ["calls", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens", "reasoningTokens"],
             "properties": {
               "calls": {"type": "integer"},
               "inputTokens": {"type": ["integer", "null"]},
               "outputTokens": {"type": ["integer", "null"]},
               "cacheReadTokens": {"type": ["integer", "null"]},
               "cacheWriteTokens": {"type": ["integer", "null"]},
-              "totalTokens": {"type": ["integer", "null"]}
+              "totalTokens": {"type": ["integer", "null"]},
+              "reasoningTokens": {"type": ["integer", "null"]}
             }
           }
         }

@@ -18,6 +18,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 FORMAT = "oko-benchmark/v1"
+FORMAT_VERSION = 1
 SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema"
 
 PRIVACY_ASSERTIONS = {
@@ -94,6 +95,23 @@ _ABSOLUTE_PATH_PATTERN = re.compile(
 )
 _WINDOWS_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:\\")
 
+_CACHE_FIELDS = (
+    "status", "scanMs", "loadMs", "scanLoadOverlapped", "prepareMs",
+    "aggregateMs", "aggregateReused", "navigationMs", "saveMs", "totalMs",
+    "reusedFiles", "rebuiltFiles", "readFiles", "reusedContents", "validation",
+    "validationReason", "fallbackReason",
+)
+_TIMING_FIELDS = (
+    "preparationMs", "scanMs", "shortlistMs", "investigateMs", "contextMs",
+    "totalWallNs", "totalMs",
+)
+_RETRIEVAL_FIELDS = (
+    "shortlistedCandidates", "rankedCandidates", "omittedCandidates", "requestBytes",
+    "previewMs", "rerankMs", "attempts", "recoveryCandidates", "recovered",
+    "candidateCount", "omittedCount",
+)
+_INVESTIGATION_FIELDS = ("steps", "jevCalls", "stopReason", "complete")
+
 
 class PrivacyError(ValueError):
     """Raised when a value cannot be included in a shareable bundle."""
@@ -132,8 +150,8 @@ def normalize_usage(value: Any, *, aliases: Mapping[str, Sequence[str]] | None =
     if value is None:
         return None
     aliases = aliases or {
-        "inputTokens": ("inputTokens", "input_tokens", "prompt_tokens"),
-        "outputTokens": ("outputTokens", "output_tokens", "completion_tokens"),
+        "inputTokens": ("inputTokens", "input_tokens", "prompt_tokens", "input"),
+        "outputTokens": ("outputTokens", "output_tokens", "completion_tokens", "output"),
         "cacheReadTokens": (
             "cacheReadTokens",
             "cache_read_input_tokens",
@@ -145,13 +163,20 @@ def normalize_usage(value: Any, *, aliases: Mapping[str, Sequence[str]] | None =
             "cache_creation_input_tokens",
             "cache_write_tokens",
         ),
-        "totalTokens": ("totalTokens", "total_tokens"),
+        "totalTokens": ("totalTokens", "total_tokens", "total"),
+        "reasoningTokens": ("reasoningTokens", "reasoning_tokens", "reasoning"),
     }
     if not isinstance(value, Mapping):
         return None
     result: dict[str, int | None] = {}
     for target, names in aliases.items():
         result[target] = next((_number(value[name]) for name in names if name in value), None)
+    if isinstance(value.get("cache"), Mapping):
+        cache = value["cache"]
+        if result["cacheReadTokens"] is None:
+            result["cacheReadTokens"] = _number(cache.get("read"))
+        if result["cacheWriteTokens"] is None:
+            result["cacheWriteTokens"] = _number(cache.get("write"))
     return result if any(item is not None for item in result.values()) else None
 
 
@@ -179,8 +204,8 @@ def _condition(task: Mapping[str, Any], enabled: bool) -> tuple[str, str | None]
     else:
         requested = "oko-cold"
     observed = task.get("observedCacheState")
-    if observed in {"cold", "warm", "disk", "memory", "native"}:
-        observed = "oko-" + observed if observed in {"cold", "warm", "disk", "memory"} else observed
+    if observed not in {"cold", "disk", "memory", "refresh", "disabled", "native", None}:
+        observed = None
     return requested, observed
 
 
@@ -198,10 +223,72 @@ def _contains_absolute_path(value: str) -> bool:
 
 
 def _agent_usage(row: Mapping[str, Any]) -> dict[str, int | None] | None:
-    usage = row.get("usage")
+    usage = row.get("agentUsage") or row.get("usage")
     if isinstance(usage, Mapping):
         return normalize_usage(usage)
+    tokens = row.get("tokens")
+    if isinstance(tokens, Mapping):
+        return normalize_usage(tokens)
     return None
+
+
+def _agent_usage_steps(row: Mapping[str, Any]) -> list[dict[str, int | None]] | None:
+    steps = row.get("agentUsageSteps")
+    if not isinstance(steps, list):
+        usage = row.get("usage")
+        steps = usage if isinstance(usage, list) else []
+    normalized = [normalize_usage(step.get("tokens") if isinstance(step, Mapping) else step)
+                  for step in steps]
+    normalized = [step for step in normalized if step is not None]
+    return normalized or None
+
+
+def _safe_fields(value: Any, fields: Sequence[str]) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result = {}
+    for field in fields:
+        if field not in value:
+            continue
+        item = value[field]
+        if item is None or isinstance(item, (bool, str)):
+            result[field] = item
+        else:
+            number = _number(item)
+            if number is not None:
+                result[field] = number
+    return result or None
+
+
+def _safe_phase_metrics(value: Any) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    if isinstance(value, Mapping):
+        timings = _safe_fields(value.get("timings"), _TIMING_FIELDS)
+        cache = _safe_fields(
+            value.get("timings", {}).get("cache")
+            if isinstance(value.get("timings"), Mapping)
+            else value.get("cache"),
+            _CACHE_FIELDS,
+        )
+        retrieval = _safe_fields(value.get("retrieval"), _RETRIEVAL_FIELDS)
+        investigation = _safe_fields(value.get("investigation"), _INVESTIGATION_FIELDS)
+        metric = {}
+        if timings:
+            metric["timings"] = timings
+        if cache:
+            metric["cache"] = cache
+        if retrieval:
+            metric["retrieval"] = retrieval
+        if investigation:
+            metric["investigation"] = investigation
+        if metric and metric not in found:
+            found.append(metric)
+        for child in value.values():
+            found.extend(_safe_phase_metrics(child))
+    elif isinstance(value, list):
+        for child in value:
+            found.extend(_safe_phase_metrics(child))
+    return found
 
 
 def _find_safe_provider_calls(value: Any) -> list[dict[str, Any]]:
@@ -213,8 +300,10 @@ def _find_safe_provider_calls(value: Any) -> list[dict[str, Any]]:
 
     calls: list[dict[str, Any]] = []
     if isinstance(value, Mapping):
-        candidates = value.get("providerCalls") or value.get("jevCalls")
-        if isinstance(candidates, list):
+        for field in ("providerCalls", "jevCalls"):
+            candidates = value.get(field)
+            if not isinstance(candidates, list):
+                continue
             for call in candidates:
                 if not isinstance(call, Mapping):
                     continue
@@ -239,7 +328,19 @@ def _find_safe_provider_calls(value: Any) -> list[dict[str, Any]]:
 
 
 def _provider_calls(row: Mapping[str, Any]) -> list[dict[str, Any]]:
-    return _find_safe_provider_calls(row.get("tools", []))
+    calls = _find_safe_provider_calls(row.get("tools", []))
+    unique = []
+    seen: dict[str, dict[str, Any]] = {}
+    for call in calls:
+        identity = {key: value for key, value in call.items() if key != "usage"}
+        marker = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+        existing = seen.get(marker)
+        if existing is None:
+            seen[marker] = call
+            unique.append(call)
+        elif existing.get("usage") is None and call.get("usage") is not None:
+            existing["usage"] = call["usage"]
+    return unique
 
 
 def _correctness(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -282,12 +383,30 @@ def make_record(
     requested_condition, observed_condition = _condition(condition_task, enabled)
     provider_calls = _provider_calls(row)
     usage = _agent_usage(row)
+    usage_steps = _agent_usage_steps(row)
+    phase_metrics = _safe_phase_metrics(row.get("tools", []))
+    oko_wall_ns = next(
+        (
+            metric.get("timings", {}).get("totalWallNs")
+            for metric in phase_metrics
+            if isinstance(metric.get("timings"), Mapping)
+            and metric["timings"].get("totalWallNs") is not None
+        ),
+        None,
+    )
+    task_kind = str(task.get("kind") or task.get("taskKind") or row.get("kind") or "unknown")
+    requested_condition = row.get("condition") or requested_condition
+    if requested_condition not in {"native", "oko-cold", "oko-warm"}:
+        requested_condition, observed_condition = _condition(condition_task, enabled)
+    else:
+        observed_condition = row.get("observedCacheState")
     status = "succeeded" if not row.get("error") else "timeout" if "Timeout" in str(row.get("error")) else "failed"
     record = {
         "format": FORMAT,
         "runId": run_id,
         "recordId": record_id,
         "task": {"idHash": hashlib.sha256(task_id.encode()).hexdigest()},
+        "taskKind": task_kind,
         "target": {"commit": target_commit},
         "oko": {"commit": oko_commit, "version": oko_version},
         "client": {"name": client, "version": client_version, "model": model, "effort": effort},
@@ -297,7 +416,7 @@ def make_record(
         "timing": {
             "totalWallNs": total_wall_ns if total_wall_ns is not None else _number(row.get("durationNs")),
             "agentWallNs": _number(row.get("durationNs")),
-            "okoWallNs": None,
+            "okoWallNs": oko_wall_ns,
             "monotonic": True,
         },
         "correctness": dict(correctness or _correctness(row)),
@@ -307,7 +426,9 @@ def make_record(
             "jevCalls": 0 if not enabled else len(provider_calls) if provider_calls else None,
         },
         "agentUsage": usage,
+        "agentUsageSteps": usage_steps,
         "okoUsage": {
+            "phaseMetrics": phase_metrics,
             "providerCalls": provider_calls,
             "tokenUsage": [call["usage"] for call in provider_calls if call.get("usage") is not None] or None,
         },
@@ -364,11 +485,12 @@ def aggregate(records: Sequence[Mapping[str, Any]], *, run_id: str, generated_at
             r["client"].get("effort"),
             r["condition"]["requested"],
             r["condition"].get("observedCacheState"),
+            r["taskKind"],
         )
         for r in records
     }
     keys = sorted(keys, key=lambda key: tuple("" if value is None else str(value) for value in key))
-    for client, model, effort, requested_condition, observed_cache_state in keys:
+    for client, model, effort, requested_condition, observed_cache_state, task_kind in keys:
         group = [
             r
             for r in records
@@ -378,8 +500,9 @@ def aggregate(records: Sequence[Mapping[str, Any]], *, run_id: str, generated_at
                 r["client"].get("effort"),
                 r["condition"]["requested"],
                 r["condition"].get("observedCacheState"),
+                r["taskKind"],
             )
-            == (client, model, effort, requested_condition, observed_cache_state)
+            == (client, model, effort, requested_condition, observed_cache_state, task_kind)
         ]
         successful = [r for r in group if r["status"] == "succeeded"]
         durations = [v for v in _values(successful, "timing", "totalWallNs") if isinstance(v, int)]
@@ -388,6 +511,7 @@ def aggregate(records: Sequence[Mapping[str, Any]], *, run_id: str, generated_at
             {
                 "client": {"name": client, "model": model, "effort": effort},
                 "condition": {"requested": requested_condition, "observedCacheState": observed_cache_state},
+                "taskKind": task_kind,
                 "attempted": len(group),
                 "succeeded": len(successful),
                 "failed": len(group) - len(successful),
@@ -403,7 +527,7 @@ def aggregate(records: Sequence[Mapping[str, Any]], *, run_id: str, generated_at
                 },
                 "agentUsage": {
                     key: _sum_if_complete(_values(group, "agentUsage", key))
-                    for key in ("inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens", "totalTokens")
+                    for key in ("inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens", "totalTokens", "reasoningTokens")
                 },
                 "jevUsage": {
                     "calls": sum(len(r.get("okoUsage", {}).get("providerCalls", [])) for r in group),
@@ -412,6 +536,7 @@ def aggregate(records: Sequence[Mapping[str, Any]], *, run_id: str, generated_at
                     "cacheReadTokens": _jev_usage(group, "cacheReadTokens"),
                     "cacheWriteTokens": _jev_usage(group, "cacheWriteTokens"),
                     "totalTokens": _jev_usage(group, "totalTokens"),
+                    "reasoningTokens": _jev_usage(group, "reasoningTokens"),
                 },
             }
         )
@@ -432,8 +557,8 @@ def report_markdown(summary: Mapping[str, Any]) -> str:
         f"Format: `{summary['format']}`",
         f"Records: {summary['records']['succeeded']}/{summary['records']['attempted']} succeeded; {summary['records']['failed']} failed.",
         "",
-        "| Client | Model | Effort | Requested | Observed cache | Succeeded / attempted | Median ms | p95 ms | Correct / known | Agent tokens | Jev calls |",
-        "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Client | Model | Effort | Task kind | Requested | Observed cache | Succeeded / attempted | Median ms | p95 ms | Correct / known | Agent tokens | Jev calls |",
+        "|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for group in summary["groups"]:
         latency = group["latencyNs"]
@@ -442,7 +567,7 @@ def report_markdown(summary: Mapping[str, Any]) -> str:
         usage = group["agentUsage"]["totalTokens"]
         usage = "—" if usage is None else str(usage)
         lines.append(
-            f"| {group['client']['name']} | {group['client']['model'] or '—'} | {group['client']['effort'] or '—'} | {group['condition']['requested']} | {group['condition']['observedCacheState'] or '—'} | {group['succeeded']}/{group['attempted']} | {median} | {p95} | {group['correctness']['correct']}/{group['correctness']['known']} | {usage} | {group['jevUsage']['calls']} |"
+            f"| {group['client']['name']} | {group['client']['model'] or '—'} | {group['client']['effort'] or '—'} | {group['taskKind']} | {group['condition']['requested']} | {group['condition']['observedCacheState'] or '—'} | {group['succeeded']}/{group['attempted']} | {median} | {p95} | {group['correctness']['correct']}/{group['correctness']['known']} | {usage} | {group['jevUsage']['calls']} |"
         )
     lines += [
         "",
@@ -552,7 +677,67 @@ def validate_schema(schema: Mapping[str, Any], value: Any) -> None:
     validate_shareable(value)
 
 
-def write_bundle(directory: Path, manifest: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def build_envelope(
+    manifest: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+    *,
+    settings: Mapping[str, Any] | None = None,
+    canary: Mapping[str, Any] | None = None,
+    report: str | None = None,
+) -> dict[str, Any]:
+    summary = aggregate(records, run_id=str(manifest["runId"]))
+    envelope_settings = settings or {
+        "preset": "pilot",
+        "clients": [],
+        "conditions": [],
+        "repeats": 1,
+        "taskIds": [],
+        "models": {},
+        "effort": "unknown",
+        "timeoutSeconds": 0,
+        "isolation": "unspecified",
+        "cachePolicy": "unspecified",
+    }
+    return {
+        "format": FORMAT,
+        "formatVersion": FORMAT_VERSION,
+        "manifest": dict(manifest),
+        "settings": dict(envelope_settings),
+        "canary": dict(canary) if canary is not None else None,
+        "records": [dict(record) for record in records],
+        "summary": summary,
+        "report": report if report is not None else report_markdown(summary),
+        "privacy": dict(PRIVACY_ASSERTIONS),
+    }
+
+
+def validate_benchmark(envelope: Mapping[str, Any]) -> None:
+    schema_root = Path(__file__).resolve().parent.parent / "benchmarks/oko-benchmark/v1"
+    schemas = {
+        name: json.loads((schema_root / name).read_text())
+        for name in (
+            "benchmark.schema.json",
+            "run-manifest.schema.json",
+            "record.schema.json",
+            "summary.schema.json",
+        )
+    }
+    validate_schema(schemas["benchmark.schema.json"], envelope)
+    validate_schema(schemas["run-manifest.schema.json"], envelope["manifest"])
+    for record in envelope["records"]:
+        validate_schema(schemas["record.schema.json"], record)
+    validate_schema(schemas["summary.schema.json"], envelope["summary"])
+
+
+def write_bundle(
+    directory: Path,
+    manifest: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+    *,
+    settings: Mapping[str, Any] | None = None,
+    canary: Mapping[str, Any] | None = None,
+    report: str | None = None,
+) -> dict[str, Any]:
     schema_root = Path(__file__).resolve().parent.parent / "benchmarks/oko-benchmark/v1"
     schemas = {
         name: json.loads((schema_root / name).read_text())
@@ -563,20 +748,30 @@ def write_bundle(directory: Path, manifest: Mapping[str, Any], records: Sequence
         validate_schema(schemas["record.schema.json"], record)
     summary = aggregate(records, run_id=str(manifest["runId"]))
     validate_schema(schemas["summary.schema.json"], summary)
+    envelope = build_envelope(
+        manifest,
+        records,
+        settings=settings,
+        canary=canary,
+        report=report or report_markdown(summary),
+    )
+    validate_benchmark(envelope)
 
     directory.mkdir(parents=True, exist_ok=True)
+    (directory / "benchmark.json").write_text(json.dumps(envelope, indent=2) + "\n")
     (directory / "run-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     with (directory / "records.jsonl").open("w") as stream:
         for record in records:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (directory / "report.md").write_text(report_markdown(summary))
+    (directory / "report.md").write_text(envelope["report"])
     return summary
 
 
 def manifest(*, run_id: str, target: Mapping[str, Any], oko: Mapping[str, Any], clients: Sequence[Mapping[str, Any]], runner_version: str = "benchmark-twenty") -> dict[str, Any]:
     value = {
         "format": FORMAT,
+        "formatVersion": FORMAT_VERSION,
         "runId": run_id,
         "runner": {"name": runner_version, "version": "1"},
         "target": dict(target),

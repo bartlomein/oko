@@ -34,11 +34,14 @@ to preview the plan; add `--execute` to launch sessions.
 
 The [Twenty runner](../scripts/benchmark-twenty/README.md) runs 10 read-only
 questions and 5 small edits across Codex, OpenCode, and Claude Code, each with
-Oko off and on (90 sessions). It uses a frozen public checkout and a disposable
-copy per session. Add `--fast` for 3 read-only searches and 2 edits (30 sessions).
-The default command only prints the plan; `--execute` launches
-model sessions. See the [questions](../scripts/benchmark-twenty/tasks.md), setup,
-grading limits, and pilot instructions before running.
+`native`, `oko-cold`, and `oko-warm` (135 sessions). It uses a frozen public
+checkout and a disposable copy per session. Add `--fast` for 3 read-only
+searches and 2 edits (45 sessions). Paid fast/full runs gate on the 18-session
+pilot canary; `--canary-only` exposes that gate without continuing. The default
+command only prints the plan; `--execute` launches model sessions. Upload only
+`shareable/benchmark.json` from a completed run. See the
+[questions](../scripts/benchmark-twenty/tasks.md), setup, grading limits, and
+pilot instructions before running.
 
 ## Measure cache latency without model calls
 

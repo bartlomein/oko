@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Twenty benchmark (10 read-only, 5 edits). Defaults to plan-only; --execute is required for model calls."""
 import argparse, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tarfile, tempfile
+from collections.abc import Mapping
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import benchmark_observability as observability
@@ -10,9 +11,12 @@ PROJECT_NAME = 'Twenty'
 STATE = ROOT.parents[1] / 'benchmarks/results/twenty'
 SETTINGS = {}
 TASKS = json.loads((ROOT / 'tasks.json').read_text())['tasks']
-MODES = [(client, oko) for client in ('codex', 'opencode', 'claude') for oko in (False, True)]
+CONDITIONS = ('native', 'oko-cold', 'oko-warm')
+MODES = [(client, condition) for client in ('codex', 'opencode', 'claude') for condition in CONDITIONS]
 FAST_TASK_IDS = ('rich-text-preview', 'metadata-pagination', 'locale-direction', 'preview-debounce', 'email-retry-delay')
 PILOT_TASK_IDS = ('search-normalization', 'email-retry-delay')
+CANARY_REPEATS = 1
+CACHE_POLICY = 'cold-vs-prebuilt-disk-v1'
 
 ISOLATION_VERSION = 'blank-slate-v1'
 CUSTOM_DIRS = {'.agents', '.codex', '.claude', '.opencode'}
@@ -96,7 +100,23 @@ def prompt(task, enabled):
     scope = 'Do not edit any files. Return only JSON: {"results":[{"path":"relative/file","startLine":1,"endLine":2}]}, at most five results, inclusive 1-based ranges at most 120 lines.' if task['kind'] == 'search' else 'Implement the requested small edit in this disposable checkout. Preserve unrelated behavior. Do not run builds/tests or install dependencies; this fixture evaluates retrieval and a bounded patch without application dependencies. Do not commit. Finish with a concise summary of changes and checks actually performed. This is an experimental patch, not a production deployment.'
     return task['question'] + '\n\n' + scope + '\n' + mode + '\nWork only inside the current checkout. Do not inspect other repositories, benchmark fixtures or answers, saved sessions or memories. Do not run builds/tests, use the web, delegate, deploy, install dependencies, contact live product services, or change credentials/settings. This is an isolated benchmark: do not load skills, personal instructions, AGENTS.md, CLAUDE.md, or saved memory. Use only this task and the source code. Report checks you cannot complete; do not claim unrun checks passed.'
 
-def args_for(task, client, enabled, work, trial):
+def condition_name(condition):
+    if condition is True:
+        return 'oko-cold'
+    if condition is False:
+        return 'native'
+    if condition not in CONDITIONS:
+        raise ValueError(f'Unsupported benchmark condition: {condition}')
+    return condition
+
+
+def condition_enabled(condition):
+    return condition_name(condition) != 'native'
+
+
+def args_for(task, client, condition, work, trial):
+    condition = condition_name(condition)
+    enabled = condition_enabled(condition)
     env = {k: v for k, v in os.environ.items() if not k.startswith(('TYPESAFE_', 'OKO_'))}
     # Keep authentication and ordinary process essentials; discard inherited harness controls.
     for name in list(env):
@@ -156,6 +176,23 @@ def _explicit_total(usage):
     return None
 
 
+def _decode_payload(value):
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _safe_usage(value):
+    if not isinstance(value, dict):
+        return None
+    return observability.normalize_usage(value)
+
+
 def parse_events(client, events):
     tools = []
     final = ''
@@ -192,7 +229,13 @@ def parse_events(client, events):
             if e.get('type') == 'text':
                 messages.append(part)
             if e.get('type') == 'tool_use':
-                tools.append(part)
+                tool = dict(part)
+                state = tool.get('state') if isinstance(tool.get('state'), dict) else {}
+                output = state.get('output')
+                if output is not None:
+                    decoded = _decode_payload(output)
+                    tool['result'] = [] if decoded is None else [decoded]
+                tools.append(tool)
             if e.get('type') == 'error':
                 errors.append(e)
         final = ''.join((x.get('text', '') for x in messages if x.get('messageID') == final_id))
@@ -215,6 +258,9 @@ def parse_events(client, events):
             if tool.get('name') != 'mcp__oko__search' or tool.get('id') not in results:
                 continue
             content = results[tool['id']]
+            if isinstance(content, Mapping) and content.get('is_error'):
+                tool['result'] = []
+                continue
             blocks = [{'type': 'text', 'text': content}] if isinstance(content, str) else content
             decoded = []
             for block in blocks if isinstance(blocks, list) else []:
@@ -236,7 +282,107 @@ def parse_events(client, events):
     elif client == 'opencode' and usage:
         steps = [x.get('tokens') or {} for x in usage]
         tokens = {'steps': steps, 'total': reported_total}
-    return dict(final=final, complete=complete, usage=usage, tokens=tokens, tools=tools, okoCalls=oko, toolCalls=len(tools), providerErrors=errors)
+    agent_usage_steps = []
+    for step in usage if isinstance(usage, list) else []:
+        token_usage = _safe_usage(step.get('tokens')) if isinstance(step, dict) else None
+        declared_usage = _safe_usage(step.get('usage')) if isinstance(step, dict) else None
+        if token_usage or declared_usage:
+            merged = dict(token_usage or {})
+            for key, value in (declared_usage or {}).items():
+                if value is not None:
+                    merged[key] = value
+            agent_usage_steps.append(merged)
+    agent_usage = _safe_usage(usage)
+    if agent_usage is None and len(agent_usage_steps) == 1:
+        agent_usage = agent_usage_steps[0]
+    return dict(final=final, complete=complete, usage=usage, tokens=tokens,
+                agentUsage=agent_usage, agentUsageSteps=agent_usage_steps or None,
+                tools=tools, okoCalls=oko, toolCalls=len(tools), providerErrors=errors)
+
+
+def cache_observations(row):
+    def packets(value):
+        if isinstance(value, str):
+            decoded = _decode_payload(value)
+            return packets(decoded) if decoded is not None else []
+        if isinstance(value, Mapping):
+            timings = value.get('timings')
+            if isinstance(timings, Mapping) and isinstance(timings.get('cache'), Mapping):
+                result = [dict(timings['cache'])]
+            else:
+                result = []
+            for child in value.values():
+                result.extend(packets(child))
+            return result
+        if isinstance(value, list):
+            result = []
+            for child in value:
+                result.extend(packets(child))
+            return result
+        return []
+
+    observations = []
+    for tool in row.get('tools', []):
+        name = tool.get('name') or tool.get('tool')
+        if tool.get('server') == 'oko' or name in ('oko_search', 'mcp__oko__search'):
+            observations.extend(packets(tool.get('result', tool)))
+    unique = []
+    seen = set()
+    for observation in observations:
+        marker = json.dumps(observation, sort_keys=True, separators=(',', ':'))
+        if marker not in seen:
+            seen.add(marker)
+            unique.append(observation)
+    return unique
+
+
+def check_condition(condition, observations, oko_calls=0):
+    condition = condition_name(condition)
+    if condition == 'native':
+        return not observations and oko_calls == 0
+    if not observations:
+        return False
+    first = observations[0]
+    if condition == 'oko-cold':
+        return first.get('status') == 'cold'
+    return (first.get('status') == 'disk'
+            and first.get('rebuiltFiles') == 0
+            and first.get('reusedFiles', 0) > 0)
+
+
+def prewarm(work, trial):
+    """Build the exact disposable workspace cache outside the timed session."""
+    cache = trial / 'cache'
+    if cache.exists():
+        raise RuntimeError('Warm condition requires a fresh cache directory')
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('TYPESAFE_', 'OKO_'))}
+    env.update(OKO_CACHE_DIR=str(cache), OKO_NO_CACHE='0', OKO_RIPGREP=SETTINGS.get('rg', ''))
+    started = observability.perf_counter_ns()
+    proc = subprocess.run(
+        [SETTINGS['oko'], 'ask', '--no-jev', '--json', 'project source overview'],
+        cwd=work,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode:
+        raise RuntimeError('Warm cache preparation failed')
+    try:
+        payload = json.loads(proc.stdout)
+        cache_metadata = payload['cache']
+    except (ValueError, KeyError, TypeError) as error:
+        raise RuntimeError('Warm cache preparation returned invalid Oko metadata') from error
+    if cache_metadata.get('status') != 'cold':
+        raise RuntimeError('Warm cache preparation did not observe cold')
+    warmup = {
+        'durationNs': observability.elapsed_ns(started),
+        'cache': cache_metadata,
+        'providerCalls': 0,
+        'method': 'Task-independent lexical query; exact disposable workspace prebuilt to disk',
+    }
+    save(trial / 'warmup.json', warmup)
+    return warmup
 
 def grade(task, work, final):
     work = work.resolve()
@@ -280,33 +426,34 @@ def summary(rows):
             r['client'],
             r.get('requestedModel'),
             r.get('requestedEffort'),
-            bool(r['oko']),
+            condition_name(r.get('condition', 'oko-cold' if r.get('oko') else 'native')),
             r.get('observedCacheState'),
-            r['kind'],
+            r.get('taskKind', r['kind']),
         )
         for r in rows
     }
     keys = sorted(keys, key=lambda key: tuple('' if value is None else str(value) for value in key))
-    for client, model, effort, enabled, observed_cache_state, kind in keys:
+    for client, model, effort, condition, observed_cache_state, task_kind in keys:
         group = [
             r for r in rows
             if (
                 r['client'],
                 r.get('requestedModel'),
                 r.get('requestedEffort'),
-                bool(r['oko']),
+                condition_name(r.get('condition', 'oko-cold' if r.get('oko') else 'native')),
                 r.get('observedCacheState'),
-                r['kind'],
-            ) == (client, model, effort, enabled, observed_cache_state, kind)
+                r.get('taskKind', r['kind']),
+            ) == (client, model, effort, condition, observed_cache_state, task_kind)
         ]
         good = [r for r in group if not r.get('error')]
         result.append(dict(
             client=client,
             model=model,
             effort=effort,
-            condition={'requested': 'oko-cold' if enabled else 'native', 'observedCacheState': observed_cache_state},
-            oko=enabled,
-            kind=kind,
+            condition={'requested': condition, 'observedCacheState': observed_cache_state},
+            oko=condition != 'native',
+            kind=task_kind,
+            taskKind=task_kind,
             attempted=len(group),
             completed=len(good),
             medianSeconds=statistics.median((r['seconds'] for r in good)) if good else None,
@@ -318,26 +465,33 @@ def summary(rows):
         ))
     return result
 
-def run_one(task, client, enabled, output, index):
-    trial = output / f"{index:03}-{task['id']}-{client}-{('oko' if enabled else 'native')}"
+def run_one(task, client, condition, output, index):
+    condition = condition_name(condition)
+    enabled = condition_enabled(condition)
+    trial = output / f"{index:03}-{task['id']}-{client}-{condition}"
     trial.mkdir()
     work = trial / 'workspace'
     checkout(work)
     baseline_commit = git(work, 'rev-parse', 'HEAD')
-    args, env = args_for(task, client, enabled, work, trial)
     row = {
         'id': task['id'],
         'kind': task['kind'],
+        'taskKind': task['kind'],
         'client': client,
         'oko': enabled,
-        'requestedCondition': 'oko-cold' if enabled else 'native',
+        'condition': condition,
+        'requestedCondition': condition,
         'observedCacheState': None,
         'requestedModel': SETTINGS['models'][client],
         'requestedEffort': SETTINGS.get('effort', 'medium'),
         'artifact': str(trial),
     }
-    started_ns = observability.perf_counter_ns()
+    started_ns = None
     try:
+        if condition == 'oko-warm':
+            row['warmup'] = prewarm(work, trial)
+        args, env = args_for(task, client, condition, work, trial)
+        started_ns = observability.perf_counter_ns()
         with (trial / 'events.jsonl').open('w') as stdout, (trial / 'stderr.txt').open('w') as stderr:
             proc = subprocess.Popen(args, cwd=work, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
             try:
@@ -356,10 +510,16 @@ def run_one(task, client, enabled, output, index):
             except ValueError:
                 pass
         row.update(parse_events(client, events))
+        row['cacheObservations'] = cache_observations(row)
+        row['observedCacheState'] = (
+            'native' if condition == 'native'
+            else row['cacheObservations'][0].get('status') if row['cacheObservations'] else None
+        )
         if proc.returncode or not row['complete'] or row['providerErrors']:
             row['error'] = 'Incomplete/failed client session; inspect logs'
-        if bool(row['okoCalls']) != enabled:
-            row['error'] = 'Oko usage did not match assigned condition'
+        if not check_condition(condition, row['cacheObservations'], row.get('okoCalls', 0)):
+            row['error'] = f'Observed Oko cache state did not match {condition}'
+            row['errorType'] = 'infrastructure'
         if git(work, 'rev-parse', 'HEAD') != baseline_commit:
             row['error'] = 'Agent changed the baseline commit'
         row['grade'] = grade(task, work, row['final'])
@@ -369,7 +529,7 @@ def run_one(task, client, enabled, output, index):
     except Exception as e:
         row['error'] = type(e).__name__ + ': ' + str(e)
     finally:
-        row.setdefault('durationNs', observability.elapsed_ns(started_ns))
+        row.setdefault('durationNs', observability.elapsed_ns(started_ns) if started_ns is not None else 0)
         row.setdefault('seconds', row['durationNs'] / 1_000_000_000)
         (trial / 'changes.patch').write_bytes(git(work, 'diff', '--binary', baseline_commit.decode().strip()))
         extras = git(work, 'ls-files', '--others', '-z').decode().split('\x00')
@@ -423,14 +583,15 @@ def make_plan(tasks, modes=MODES, repeats=1):
 
 def load_completed_runs(output, plan):
     rows = []
-    for i, (task, client, enabled, repeat) in enumerate(plan, 1):
-        trial = output / f"{i:03}-{task['id']}-{client}-{'oko' if enabled else 'native'}"
+    for i, (task, client, condition, repeat) in enumerate(plan, 1):
+        condition = condition_name(condition)
+        trial = output / f"{i:03}-{task['id']}-{client}-{condition}"
         if not trial.exists():
             break
         if not (trial / 'result.json').exists():
             raise RuntimeError(f'Incomplete session has no saved result; inspect {trial}')
         row = json.loads((trial / 'result.json').read_text())
-        if (row['id'], row['client'], row['oko'], row['kind']) != (task['id'], client, enabled, task['kind']):
+        if (row['id'], row['client'], row.get('condition'), row['kind']) != (task['id'], client, condition, task['kind']):
             raise RuntimeError('Saved session does not match the requested plan')
         if row.get('error') == row.get('grade', {}).get('gradingError') and row.get('error') and not row.get('grade', {}).get('unexpectedEdits') and row.get('exitCode') == 0 and not row.get('providerErrors'):
             row['errorType'] = 'answer'
@@ -440,16 +601,109 @@ def load_completed_runs(output, plan):
         rows.append(row)
     return rows
 
+
+def shareable_settings(preset, clients, conditions, repeats, task_ids):
+    return {
+        'preset': preset,
+        'clients': list(clients),
+        'conditions': list(conditions),
+        'repeats': repeats,
+        'taskIds': list(task_ids),
+        'models': {client: SETTINGS['models'].get(client) for client in clients},
+        'effort': SETTINGS.get('effort', 'medium'),
+        'timeoutSeconds': SETTINGS.get('timeoutSeconds'),
+        'isolation': ISOLATION_VERSION,
+        'cachePolicy': CACHE_POLICY,
+    }
+
+
+def records_for_rows(rows, tasks, versions, run_id):
+    by_id = {task['id']: task for task in tasks}
+    return [
+        observability.make_record(
+            run_id=run_id,
+            record_id=f'{index:03}',
+            task_id=row['id'],
+            client=row['client'],
+            client_version=versions.get(row['client']),
+            model=row.get('requestedModel'),
+            effort=row.get('requestedEffort'),
+            enabled=row.get('oko', False),
+            task=by_id[row['id']],
+            target_commit=SETTINGS.get('commit'),
+            oko_commit=SETTINGS.get('okoCommit'),
+            oko_version=SETTINGS.get('okoVersion'),
+            row=row,
+            total_wall_ns=row.get('durationNs'),
+        )
+        for index, row in enumerate(rows, 1)
+    ]
+
+
+def canary_result(rows, tasks, clients, versions, run_id):
+    client_runs = all(row.get('complete') and not row.get('providerErrors') for row in rows)
+    condition_match = all(not row.get('error', '').startswith('Observed Oko cache state') for row in rows)
+    records = []
+    metrics_present = True
+    try:
+        records = records_for_rows(rows, tasks, versions, run_id)
+        metrics_present = all(
+            bool(record['okoUsage']['phaseMetrics']) and bool(row.get('cacheObservations'))
+            for row, record in zip(rows, records)
+            if row.get('condition') != 'native'
+        )
+        envelope = observability.build_envelope(
+            shareable_manifest(run_id, clients, versions),
+            records,
+            settings=shareable_settings('canary', clients, sorted({row['condition'] for row in rows}), CANARY_REPEATS, [task['id'] for task in tasks]),
+            canary={
+                'status': 'pilot-run',
+                'plannedSessions': len(rows),
+                'completedSessions': sum(bool(row.get('complete')) for row in rows),
+                'checks': {
+                    'completedClientRuns': client_runs,
+                    'conditionMatch': condition_match,
+                    'okoMetrics': metrics_present,
+                    'artifactSchema': False,
+                    'credentialsAndPaths': False,
+                },
+                'taskIds': [task['id'] for task in tasks],
+                'conditions': sorted({row['condition'] for row in rows}),
+            },
+        )
+        observability.validate_benchmark(envelope)
+        schema_valid = True
+        privacy_valid = True
+    except (ValueError, observability.PrivacyError, KeyError, TypeError):
+        schema_valid = False
+        privacy_valid = False
+    passed = client_runs and condition_match and metrics_present and schema_valid and privacy_valid
+    return {
+        'status': 'passed' if passed else 'failed',
+        'plannedSessions': len(rows),
+        'completedSessions': sum(bool(row.get('complete')) for row in rows),
+        'checks': {
+            'completedClientRuns': client_runs,
+            'conditionMatch': condition_match,
+            'okoMetrics': metrics_present,
+            'artifactSchema': schema_valid,
+            'credentialsAndPaths': privacy_valid,
+        },
+        'taskIds': [task['id'] for task in tasks],
+        'conditions': sorted({row['condition'] for row in rows}),
+    }
+
 def main():
     global SETTINGS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute', action='store_true', help='Launch model sessions; default only prints the plan')
     presets = parser.add_mutually_exclusive_group()
-    presets.add_argument('--pilot', action='store_true', help='One read and one edit across six conditions: 12 sessions')
-    presets.add_argument('--fast', action='store_true', help='Three read-only searches and two edits across six conditions: 30 sessions')
+    presets.add_argument('--pilot', action='store_true', help='One read and one edit across native, cold, and warm Oko: 18 sessions')
+    presets.add_argument('--fast', action='store_true', help='Three read-only searches and two edits across native, cold, and warm Oko: 45 sessions')
+    parser.add_argument('--canary-only', action='store_true', help='Run only the cost-conscious pilot canary and write benchmark.json')
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--clients', default='codex,opencode,claude')
-    parser.add_argument('--condition', choices=['both', 'native', 'oko'], default='both')
+    parser.add_argument('--condition', choices=['both', *CONDITIONS], default='both')
     parser.add_argument('--resume', type=Path, help='Continue a saved run without repeating completed sessions')
     args = parser.parse_args()
     if not 1 <= args.repeats <= 10:
@@ -457,17 +711,20 @@ def main():
     clients = args.clients.split(',')
     if not clients or len(set(clients)) != len(clients) or any((c not in ('codex', 'opencode', 'claude') for c in clients)):
         parser.error('clients must be a unique list of codex,opencode,claude')
-    modes = [(c, o) for c, o in MODES if c in clients and (args.condition == 'both' or o == (args.condition == 'oko'))]
-    chosen = select_tasks(fast=args.fast, pilot=args.pilot)
+    if args.canary_only and (args.fast or args.pilot):
+        parser.error('--canary-only cannot be combined with --pilot or --fast')
+    selected_conditions = CONDITIONS if args.condition == 'both' else (args.condition,)
+    modes = [(c, condition) for c in clients for condition in selected_conditions]
+    chosen = select_tasks(fast=args.fast, pilot=args.pilot or args.canary_only)
     plan = make_plan(chosen, modes, args.repeats)
-    print(f'{len(chosen)} tasks, {len(plan)} sessions. Fast={args.fast}. Pilot={args.pilot}. Execution={args.execute}', flush=True)
+    print(f'{len(chosen)} tasks, {len(plan)} sessions. Fast={args.fast}. Pilot={args.pilot}. CanaryOnly={args.canary_only}. Execution={args.execute}', flush=True)
     if (STATE / 'settings.json').exists():
         SETTINGS = json.loads((STATE / 'settings.json').read_text())
         for client in clients:
             print(f"{client}: {SETTINGS['models'][client]}, effort={SETTINGS.get('effort', 'medium')}", flush=True)
     if not args.execute:
-        for i, (task, client, enabled, repeat) in enumerate(plan, 1):
-            print(f"{i:03} repeat={repeat} {task['id']}: {client} {('oko' if enabled else 'native')}")
+        for i, (task, client, condition, repeat) in enumerate(plan, 1):
+            print(f"{i:03} repeat={repeat} {task['id']}: {client} {condition}")
         return
     if not (STATE / 'settings.json').exists():
         raise RuntimeError(f'Run {ROOT / "prepare.py"} first; see {ROOT / "README.md"}')
@@ -487,61 +744,82 @@ def main():
     output.chmod(448)
     run_id = output.name
     rows = []
+    canary = None
     if args.resume:
         previous = json.loads((output / 'report.json').read_text())
         if previous.get('isolation') != ISOLATION_VERSION:
             raise RuntimeError('Cannot resume a run from a different isolation policy')
         if previous['settings'] != SETTINGS or previous['plannedSessions'] != len(plan):
             raise RuntimeError('Resume settings/plan differ from the saved run')
+        canary = previous.get('canary')
+        if not args.pilot and (not canary or canary.get('status') != 'passed'):
+            raise RuntimeError('Cannot resume a paid run without a passed canary')
         rows = load_completed_runs(output, plan)
         print(f'Resuming after {len(rows)} saved sessions; no model calls repeated.', flush=True)
-    report = {'settings': SETTINGS, 'versions': versions, 'plannedSessions': len(plan), 'runs': rows, 'complete': False, 'method': 'Fresh disposable full-repository checkout per session; rotating client/condition order; one fresh Oko cache per session. Timing excludes checkout and grading. Blank-slate-v1 excludes personal skills/instructions and repository agent configuration.', 'caveats': ['Codex/OpenCode use the same requested model; Claude uses a different model. Compare Oko on/off within each client, not harness quality across models.', 'Edit tasks are localized constant changes. Exact patch matching is not application correctness; alternative patches require review.', 'No application builds or tests are run. Tool restrictions differ by client; OpenCode permissions are not an OS sandbox.', 'Provider caches are not cleared. Raw token fields differ by provider; Jev tokens/cost are not included in agent token totals.'], 'isolation': ISOLATION_VERSION, 'promptTemplates': {kind: {str(enabled): prompt({'question': '<QUESTION>', 'kind': kind}, enabled) for enabled in (False, True)} for kind in ('search', 'edit')}}
+    elif args.execute and (not args.pilot or args.canary_only):
+        canary_tasks = select_tasks(pilot=True)
+        canary_plan = make_plan(canary_tasks, modes, CANARY_REPEATS)
+        canary_output = output / 'canary-runs'
+        canary_output.mkdir(parents=True, exist_ok=True)
+        canary_rows = []
+        for index, (task, client, condition, repeat) in enumerate(canary_plan, 1):
+            print(f"CANARY {index}/{len(canary_plan)} {task['id']} {client} {condition}", flush=True)
+            row = run_one(task, client, condition, canary_output, index)
+            row['repeat'] = repeat
+            canary_rows.append(row)
+        canary = canary_result(canary_rows, canary_tasks, clients, versions, run_id + '-canary')
+        save(output / 'canary.json', canary)
+        if canary['status'] != 'passed':
+            observability.write_bundle(
+                output / 'shareable',
+                shareable_manifest(run_id + '-canary', clients, versions),
+                records_for_rows(canary_rows, canary_tasks, versions, run_id + '-canary'),
+                settings=shareable_settings('canary', clients, sorted({condition_name(condition) for _, condition in modes}), CANARY_REPEATS, [task['id'] for task in canary_tasks]),
+                canary=canary,
+                report='# Oko benchmark canary\n\nCanary failed; the main benchmark was not started.\n',
+            )
+            raise RuntimeError('Canary failed; main benchmark was not started')
+        if args.canary_only:
+            chosen = canary_tasks
+            plan = canary_plan
+            rows = canary_rows
+    report = {'settings': SETTINGS, 'versions': versions, 'plannedSessions': len(plan), 'runs': rows, 'complete': False, 'canary': canary, 'method': 'Fresh disposable full-repository checkout per session; rotating client/condition order; native, cold Oko, and warm Oko conditions. Warm indexes are prebuilt in the exact disposable workspace and validated as disk-backed before timed client execution. Timing excludes checkout, warm preparation, and grading. Blank-slate-v1 excludes personal skills/instructions and repository agent configuration.', 'caveats': ['Codex/OpenCode use the same requested model; Claude uses a different model. Compare conditions within each client, not harness quality across models.', 'Edit tasks are localized constant changes. Exact patch matching is not application correctness; alternative patches require review.', 'No application builds or tests are run. Tool restrictions differ by client; OpenCode permissions are not an OS sandbox.', 'Provider caches are not cleared. Raw token fields differ by provider; Jev tokens/cost are not included in agent token totals.'], 'isolation': ISOLATION_VERSION, 'cachePolicy': CACHE_POLICY, 'promptTemplates': {kind: {str(condition): prompt({'question': '<QUESTION>', 'kind': kind}, condition != 'native') for condition in CONDITIONS} for kind in ('search', 'edit')}}
 
-    report['preset'] = 'fast' if args.fast else 'pilot' if args.pilot else 'full'
+    report['preset'] = 'canary' if args.canary_only else 'fast' if args.fast else 'pilot' if args.pilot else 'full'
     report['caseIds'] = [task['id'] for task in chosen]
     report['checkoutPreparation'] = 'Remove repository agent instructions, skills, and client configuration from each disposable checkout before its Git baseline. Record removed paths in isolation.json. No generated-file exclusions during grading.'
 
     def save_report():
+        nonlocal canary
         report['summary'] = summary(rows)
         save(output / 'report.json', report)
-        lines = [f'# {PROJECT_NAME} benchmark', '', f"Completed: {report['complete']}. Sessions: {len(rows)}/{len(plan)}.", '', '| Client | Model | Effort | Requested | Observed cache | Kind | Completed / attempted | First / top five | Exact patches | Review | Median seconds |', '|---|---|---|---|---|---|---|---|---|---|---|']
+        if args.pilot and rows and canary is None:
+            canary = canary_result(rows, chosen, clients, versions, run_id + '-canary')
+            report['canary'] = canary
+        lines = [f'# {PROJECT_NAME} benchmark', '', f"Completed: {report['complete']}. Sessions: {len(rows)}/{len(plan)}.", '', f"Canary: {canary['status'] if canary else 'not-run (pilot itself is the canary)'}.", '', '| Client | Model | Effort | Task kind | Requested | Observed cache | Completed / attempted | First / top five | Exact patches | Review | Median seconds |', '|---|---|---|---|---|---|---|---|---|---|---|']
         for row in report['summary']:
             seconds = f"{row['medianSeconds']:.2f}" if row['medianSeconds'] is not None else 'N/A'
-            lines.append(f"| {row['client']} | {row['model'] or '—'} | {row['effort'] or '—'} | {row['condition']['requested']} | {row['condition']['observedCacheState'] or '—'} | {row['kind']} | {row['completed']}/{row['attempted']} | {row['firstHits']}/{row['topFiveHits']} | {row['expectedPatchMatches']} | {row['reviewRequired']} | {seconds} |")
+            lines.append(f"| {row['client']} | {row['model'] or '—'} | {row['effort'] or '—'} | {row['taskKind']} | {row['condition']['requested']} | {row['condition']['observedCacheState'] or '—'} | {row['completed']}/{row['attempted']} | {row['firstHits']}/{row['topFiveHits']} | {row['expectedPatchMatches']} | {row['reviewRequired']} | {seconds} |")
         lines += ['', report['method'], '', *report['caveats']]
         (output / 'report.md').write_text('\n'.join(lines) + '\n')
-        records = [
-            observability.make_record(
-                run_id=run_id,
-                record_id=f'{index:03}',
-                task_id=row['id'],
-                client=row['client'],
-                client_version=versions.get(row['client']),
-                model=row.get('requestedModel'),
-                effort=row.get('requestedEffort'),
-                enabled=row.get('oko', False),
-                task=next(task for task in chosen if task['id'] == row['id']),
-                target_commit=SETTINGS.get('commit'),
-                oko_commit=SETTINGS.get('okoCommit'),
-                oko_version=SETTINGS.get('okoVersion'),
-                row=row,
-                total_wall_ns=row.get('durationNs'),
-            )
-            for index, row in enumerate(rows, 1)
-        ]
+        report_text = '\n'.join(lines) + '\n'
+        records = records_for_rows(rows, chosen, versions, run_id)
         observability.write_bundle(
             output / 'shareable',
             shareable_manifest(run_id, clients, versions),
             records,
+            settings=shareable_settings(report['preset'], clients, sorted({condition_name(condition) for _, condition in modes}), args.repeats, [task['id'] for task in chosen]),
+            canary=canary,
+            report=report_text,
         )
     save_report()
     completed_count = len(rows)
     try:
-        for i, (task, client, enabled, repeat) in enumerate(plan, 1):
+        for i, (task, client, condition, repeat) in enumerate(plan, 1):
             if i <= completed_count:
                 continue
-            print(f"START {i}/{len(plan)} {task['id']} {client} oko={enabled}", flush=True)
-            row = run_one(task, client, enabled, output, i)
+            print(f"START {i}/{len(plan)} {task['id']} {client} condition={condition}", flush=True)
+            row = run_one(task, client, condition, output, i)
             row['repeat'] = repeat
             rows.append(row)
             save_report()

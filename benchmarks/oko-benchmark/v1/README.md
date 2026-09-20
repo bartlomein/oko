@@ -6,20 +6,20 @@ write with the standard library.
 
 ## Bundle
 
-Each shareable bundle contains:
+`benchmark.json` is the one self-contained, Slack-shareable artifact. It contains
+the format/version envelope, pinned manifest, sanitized runner settings, canary
+result, records, grouped summary, human-readable report, and explicit privacy
+assertions. Upload this file only. Runners may keep `run-manifest.json`,
+`records.jsonl`, `summary.json`, and `report.md` beside it as local compatibility
+artifacts, but those files are not needed to interpret the shared result.
 
-- `run-manifest.json`: pinned target and Oko commits/versions, client/model/
-  effort metadata, standards references, and explicit privacy assertions.
-- `records.jsonl`: one attempt per line. Task identity is an opaque SHA-256
-  hash; prompts, source bodies, snippets, tool arguments, raw events, stderr,
-  headers, keys, and absolute paths are not allowed.
-- `summary.json`: grouped denominators, failures, correctness counts, median
-  and p95 successful wall time, and separate agent/Jev token sections. Groups
-  are separated by client name, requested model, requested effort, requested
-  condition, and observed cache state. An observed cache state is `null` when
-  the runner did not receive a trustworthy observation; it is never inferred
-  from the requested condition.
-- `report.md`: a human-readable rendering of `summary.json`.
+Each record is one attempt. Task identity is an opaque SHA-256 hash and
+`taskKind` is explicitly `search`, `edit`, or `unknown`, so retrieval and edit
+results cannot be merged accidentally. Conditions are `native`, `oko-cold`, and
+`oko-warm`; `condition.observedCacheState` is copied from Oko output and remains
+`null` when no trustworthy observation exists. It is never inferred from the
+requested condition. Summary groups include client, model, effort, requested and
+observed condition, and task kind.
 
 Use the JSON Schema files in this directory with JSON Schema draft 2020-12.
 The repository's offline Python test also validates the checked-in examples
@@ -41,6 +41,18 @@ Missing usage is `null`; no token estimator is used. Input, output, and cache
 fields may be present without a total. A total is copied only from a provider's
 explicit aggregate total field; it is never reconstructed by adding partial
 fields or summing per-step values.
+
+The OpenCode adapter must correlate each `tool_use` event with its own
+`part.state.output` payload. Decode only that existing event field; do not invent
+aliases. Preserve provider-reported per-step usage and Oko/Jev metadata from the
+correlated result. If the same provider call appears in multiple metadata paths,
+deduplicate it by its safe serialized call fields before aggregation.
+
+For `oko-cold`, a timed client run is valid only when Oko reports cache status
+`cold`. For `oko-warm`, the runner must prebuild the exact disposable workspace
+cache before starting the timed client process and the timed result must report
+status `disk`, with reused files and no rebuilt files. A `memory` result is not a
+warm disk result. Missing or mismatched observations invalidate the run.
 
 The standard-library writer validates the manifest, every record, and the
 generated summary against the checked-in schemas before creating any bundle
@@ -73,7 +85,7 @@ record = obs.make_record(
     model="example-model",
     effort="medium",
     enabled=True,
-    task={"cacheCondition": "cold"},
+    task={"kind": "search", "cacheCondition": "cold"},
     target_commit="0123456789abcdef0123456789abcdef01234567",
     oko_commit="89abcdef0123456789abcdef0123456789abcdef",
     oko_version="0.2.1",
@@ -92,7 +104,24 @@ manifest = obs.manifest(
     oko={"repository": "bartlomein/oko", "commit": "89abcdef0123456789abcdef0123456789abcdef", "version": "0.2.1", "binarySha256": None},
     clients=[{"name": "codex", "version": "example-version", "model": "example-model", "effort": "medium"}],
 )
-obs.write_bundle(Path("shareable"), manifest, [record])
+obs.write_bundle(
+    Path("shareable"),
+    manifest,
+    [record],
+    settings={
+        "preset": "pilot",
+        "clients": ["codex"],
+        "conditions": ["oko-cold"],
+        "repeats": 1,
+        "taskIds": ["opaque-task-name"],
+        "models": {"codex": "example-model"},
+        "effort": "medium",
+        "timeoutSeconds": 300,
+        "isolation": "example",
+        "cachePolicy": "cold-vs-prebuilt-disk-v1",
+    },
+    canary=None,
+)
 ```
 
 Import `scripts/benchmark_observability.py` directly; runners in a nested

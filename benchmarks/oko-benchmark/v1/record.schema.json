@@ -4,7 +4,7 @@
   "title": "Oko benchmark v1 record",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "runId", "recordId", "task", "target", "oko", "client", "condition", "status", "failure", "timing", "correctness", "calls", "agentUsage", "okoUsage", "privacy"],
+  "required": ["format", "runId", "recordId", "task", "taskKind", "target", "oko", "client", "condition", "status", "failure", "timing", "correctness", "calls", "agentUsage", "agentUsageSteps", "okoUsage", "privacy"],
   "properties": {
     "format": {"const": "oko-benchmark/v1"},
     "runId": {"type": "string"},
@@ -13,6 +13,7 @@
       "type": "object", "additionalProperties": false, "required": ["idHash"],
       "properties": {"idHash": {"type": "string"}}
     },
+    "taskKind": {"enum": ["search", "edit", "unknown"]},
     "target": {
       "type": "object", "additionalProperties": false, "required": ["commit"],
       "properties": {"commit": {"type": ["string", "null"]}}
@@ -71,9 +72,11 @@
       }
     },
     "agentUsage": {"$ref": "#/$defs/usage"},
+    "agentUsageSteps": {"type": ["array", "null"], "items": {"$ref": "#/$defs/usage"}},
     "okoUsage": {
-      "type": "object", "additionalProperties": false, "required": ["providerCalls", "tokenUsage"],
+      "type": "object", "additionalProperties": false, "required": ["phaseMetrics", "providerCalls", "tokenUsage"],
       "properties": {
+        "phaseMetrics": {"type": "array", "items": {"$ref": "#/$defs/phaseMetric"}},
         "providerCalls": {"type": "array", "items": {"$ref": "#/$defs/providerCall"}},
         "tokenUsage": {"type": ["array", "null"], "items": {"$ref": "#/$defs/usage"}}
       }
@@ -102,8 +105,22 @@
         "outputTokens": {"type": ["integer", "null"]},
         "cacheReadTokens": {"type": ["integer", "null"]},
         "cacheWriteTokens": {"type": ["integer", "null"]},
-        "totalTokens": {"type": ["integer", "null"]}
+        "totalTokens": {"type": ["integer", "null"]},
+        "reasoningTokens": {"type": ["integer", "null"]}
       }
+    },
+    "phaseMetric": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "timings": {"$ref": "#/$defs/safeMetrics"},
+        "cache": {"$ref": "#/$defs/safeMetrics"},
+        "retrieval": {"$ref": "#/$defs/safeMetrics"},
+        "investigation": {"$ref": "#/$defs/safeMetrics"}
+      }
+    },
+    "safeMetrics": {
+      "type": "object",
+      "additionalProperties": {"type": ["integer", "boolean", "string", "null"]}
     },
     "providerCall": {
       "type": "object", "additionalProperties": false,

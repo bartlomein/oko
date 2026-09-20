@@ -78,13 +78,13 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(sum(t['kind'] == 'search' for t in r.TASKS), 10)
         self.assertEqual(sum(t['kind'] == 'edit' for t in r.TASKS), 5)
         plan = r.make_plan(r.TASKS)
-        self.assertEqual(len(plan), 90)
+        self.assertEqual(len(plan), 135)
         for task in r.TASKS:
             self.assertEqual({(c, o) for t, c, o, _ in plan if t['id'] == task['id']}, set(r.MODES))
-        self.assertEqual(len(r.make_plan(r.TASKS, repeats=3)), 270)
-        for flags, expected in [([], '15 tasks, 90 sessions'), (['--pilot'], '2 tasks, 12 sessions'),
-                                (['--fast'], '5 tasks, 30 sessions'),
-                                (['--fast', '--clients', 'codex,claude'], '5 tasks, 20 sessions'),
+        self.assertEqual(len(r.make_plan(r.TASKS, repeats=3)), 405)
+        for flags, expected in [([], '15 tasks, 135 sessions'), (['--pilot'], '2 tasks, 18 sessions'),
+                                (['--fast'], '5 tasks, 45 sessions'),
+                                (['--fast', '--clients', 'codex,claude'], '5 tasks, 30 sessions'),
                                 (['--clients', 'claude', '--condition', 'native'], '15 tasks, 15 sessions')]:
             output = subprocess.check_output([sys.executable, str(r.ROOT / 'runner.py'), *flags], text=True)
             self.assertIn(expected, output)
@@ -96,7 +96,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(sum(task['kind'] == 'edit' for task in tasks), 2)
         self.assertEqual([task['id'] for task in tasks], list(r.FAST_TASK_IDS))
         plan = r.make_plan(tasks)
-        self.assertEqual(len(plan), 30)
+        self.assertEqual(len(plan), 45)
         for task in tasks:
             self.assertEqual({(c, o) for t, c, o, _ in plan if t['id'] == task['id']}, set(r.MODES))
         result = subprocess.run([sys.executable, str(r.ROOT / 'runner.py'), '--fast', '--pilot'], capture_output=True)
@@ -104,8 +104,9 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_commands_keep_conditions_and_edit_permissions_separate(self):
         for task in r.TASKS:
-            for client, enabled in r.MODES:
-                args, env = r.args_for(task, client, enabled, self.work, Path(self.temp.name))
+            for client, condition in r.MODES:
+                enabled = r.condition_enabled(condition)
+                args, env = r.args_for(task, client, condition, self.work, Path(self.temp.name))
                 self.assertIn(task['question'], args[-1])
                 self.assertNotIn('TYPESAFE_API_KEY', env)
                 self.assertNotIn('expected', args[-1])
@@ -126,7 +127,7 @@ class BenchmarkTests(unittest.TestCase):
             for client in ('codex', 'opencode', 'claude'):
                 for task in (self.read, self.edit):
                     for enabled in (False, True):
-                        args, _ = r.args_for(task, client, enabled, self.work, Path(self.temp.name))
+                        args, _ = r.args_for(task, client, 'oko-cold' if enabled else 'native', self.work, Path(self.temp.name))
                         if client == 'codex':
                             self.assertIn('model_reasoning_effort=' + json.dumps(effort), args)
                         else:
@@ -171,7 +172,7 @@ class BenchmarkTests(unittest.TestCase):
             'codex': [dict(type='item.completed', item=dict(type='mcp_tool_call', server='oko')),
                       dict(type='item.completed', item=dict(type='agent_message', text=self.answer)),
                       dict(type='turn.completed', usage=dict(input_tokens=10, cached_input_tokens=4, output_tokens=2))],
-            'opencode': [dict(type='tool_use', part=dict(tool='oko_search')),
+            'opencode': [dict(type='tool_use', part=dict(tool='oko_search', state=dict(output=json.dumps({'timings': {'cache': {'status': 'cold'}}, 'providerCalls': []})))),
                          dict(type='text', part=dict(messageID='old', text='not final')),
                          dict(type='text', part=dict(messageID='last', text=self.answer)),
                          dict(type='step_finish', part=dict(reason='stop', messageID='last', tokens=dict(total=12)))],
@@ -186,6 +187,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(parsed['okoCalls'], 1)
             self.assertIsNone(parsed['tokens']['total'])
             self.assertFalse(r.parse_events(client, [])['complete'])
+        opencode = r.parse_events('opencode', streams['opencode'])
+        self.assertEqual(opencode['tools'][0]['result'][0]['timings']['cache']['status'], 'cold')
         self.assertTrue(r.parse_events('claude', [dict(type='result', is_error=True)])['providerErrors'])
         self.assertTrue(r.parse_events('codex', [dict(type='turn.failed')])['providerErrors'])
         self.assertTrue(r.parse_events('opencode', [dict(type='error')])['providerErrors'])
@@ -267,7 +270,7 @@ class BenchmarkTests(unittest.TestCase):
             row('model-a', 'low', None),
             row('model-b', 'low', None),
             row('model-a', 'high', None),
-            row('model-a', 'low', 'oko-warm'),
+            row('model-a', 'low', 'disk'),
         ])
         self.assertEqual(len(result), 4)
         self.assertEqual(
@@ -279,9 +282,28 @@ class BenchmarkTests(unittest.TestCase):
                 ('codex', 'model-a', 'low', 'oko-cold', None),
                 ('codex', 'model-b', 'low', 'oko-cold', None),
                 ('codex', 'model-a', 'high', 'oko-cold', None),
-                ('codex', 'model-a', 'low', 'oko-cold', 'oko-warm'),
+                ('codex', 'model-a', 'low', 'oko-cold', 'disk'),
             },
         )
+
+    def test_cache_conditions_require_observed_disk_or_cold(self):
+        self.assertTrue(r.check_condition('native', []))
+        self.assertFalse(r.check_condition('native', [], oko_calls=1))
+        self.assertTrue(r.check_condition('oko-cold', [{'status': 'cold'}]))
+        self.assertFalse(r.check_condition('oko-cold', [{'status': 'disk'}]))
+        self.assertTrue(r.check_condition('oko-warm', [{'status': 'disk', 'rebuiltFiles': 0, 'reusedFiles': 4}]))
+        self.assertFalse(r.check_condition('oko-warm', [{'status': 'memory', 'rebuiltFiles': 0, 'reusedFiles': 4}]))
+
+    def test_canary_failure_is_explicit(self):
+        row = dict(
+            id='read', kind='search', taskKind='search', client='codex', oko=False,
+            condition='native', complete=False, providerErrors=[{'type': 'error'}],
+            error='client failed', durationNs=1, seconds=0.000000001, tokens=None,
+            tools=[], okoCalls=0, toolCalls=0, final='', grade={},
+        )
+        result = r.canary_result([row], [self.read], ['codex'], {'codex': 'test'}, 'canary')
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['checks']['completedClientRuns'])
 
     def test_process_run_saves_artifacts_and_rejects_wrong_condition(self):
         def minimal_checkout(work):
@@ -298,8 +320,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertTrue((trial / 'result.json').exists())
             self.assertTrue((trial / 'changes.patch').exists())
             self.assertFalse((trial / 'workspace').exists())
-            row = r.run_one(self.read, 'codex', True, Path(self.temp.name), 2)
-            self.assertIn('Oko usage', row['error'])
+            row = r.run_one(self.read, 'codex', 'oko-cold', Path(self.temp.name), 2)
+            self.assertIn('Observed Oko cache state', row['error'])
 
     def test_timeout_is_failure(self):
         def minimal_checkout(work):
@@ -316,7 +338,7 @@ class BenchmarkTests(unittest.TestCase):
         output = Path(self.temp.name) / 'results'
         trial = output / '001-read-codex-native'
         trial.mkdir(parents=True)
-        row = dict(id='read', kind='search', client='codex', oko=False, complete=True)
+        row = dict(id='read', kind='search', taskKind='search', client='codex', oko=False, condition='native', complete=True)
         r.save(trial / 'result.json', row)
         plan = [(self.read, 'codex', False, 1), (self.edit, 'codex', False, 1)]
         recovered = r.load_completed_runs(output, plan)

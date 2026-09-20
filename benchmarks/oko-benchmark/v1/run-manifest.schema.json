@@ -4,9 +4,10 @@
   "title": "Oko benchmark v1 run manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "runId", "runner", "target", "oko", "clients", "privacy", "standards"],
+  "required": ["format", "formatVersion", "runId", "runner", "target", "oko", "clients", "privacy", "standards"],
   "properties": {
     "format": {"const": "oko-benchmark/v1"},
+    "formatVersion": {"const": 1},
     "runId": {"type": "string", "minLength": 1},
     "runner": {
       "type": "object", "additionalProperties": false, "required": ["name", "version"],

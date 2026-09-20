@@ -1,5 +1,6 @@
 {
   "format": "oko-benchmark/v1",
+  "formatVersion": 1,
   "runId": "run-example-001",
   "runner": {"name": "benchmark-twenty", "version": "1"},
   "target": {"repository": "example-repository", "commit": "0123456789abcdef0123456789abcdef01234567", "version": null},

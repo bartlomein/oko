@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bartlomein/oko/blob/main/benchmarks/oko-benchmark/v1/benchmark.schema.json",
+  "title": "Oko benchmark v1 shareable envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "formatVersion", "manifest", "settings", "canary", "records", "summary", "report", "privacy"],
+  "properties": {
+    "format": {"const": "oko-benchmark/v1"},
+    "formatVersion": {"const": 1},
+    "manifest": {"type": "object"},
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preset", "clients", "conditions", "repeats", "taskIds", "models", "effort", "timeoutSeconds", "isolation", "cachePolicy"],
+      "properties": {
+        "preset": {"enum": ["canary", "pilot", "fast", "full"]},
+        "clients": {"type": "array", "items": {"enum": ["codex", "opencode", "claude"]}},
+        "conditions": {"type": "array", "items": {"enum": ["native", "oko-cold", "oko-warm"]}},
+        "repeats": {"type": "integer", "minimum": 1},
+        "taskIds": {"type": "array", "items": {"type": "string"}},
+        "models": {"type": "object", "additionalProperties": {"type": "string"}},
+        "effort": {"type": "string"},
+        "timeoutSeconds": {"type": "number", "minimum": 0},
+        "isolation": {"type": "string"},
+        "cachePolicy": {"type": "string"}
+      }
+    },
+    "canary": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["status", "plannedSessions", "completedSessions", "checks", "taskIds", "conditions"],
+      "properties": {
+        "status": {"enum": ["passed", "failed", "pilot-run"]},
+        "plannedSessions": {"type": "integer"},
+        "completedSessions": {"type": "integer"},
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["completedClientRuns", "conditionMatch", "okoMetrics", "artifactSchema", "credentialsAndPaths"],
+          "properties": {
+            "completedClientRuns": {"type": "boolean"},
+            "conditionMatch": {"type": "boolean"},
+            "okoMetrics": {"type": "boolean"},
+            "artifactSchema": {"type": "boolean"},
+            "credentialsAndPaths": {"type": "boolean"}
+          }
+        },
+        "taskIds": {"type": "array", "items": {"type": "string"}},
+        "conditions": {"type": "array", "items": {"enum": ["native", "oko-cold", "oko-warm"]}}
+      }
+    },
+    "records": {"type": "array", "items": {"type": "object"}},
+    "summary": {"type": "object"},
+    "report": {"type": "string"},
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["promptRecorded", "sourceBodiesRecorded", "rawEventLogsRecorded", "headersRecorded", "keysRecorded", "toolArgumentsRecorded", "evidenceBodiesRecorded", "stderrRecorded", "absolutePathsRecorded"],
+      "properties": {
+        "promptRecorded": {"const": false},
+        "sourceBodiesRecorded": {"const": false},
+        "rawEventLogsRecorded": {"const": false},
+        "headersRecorded": {"const": false},
+        "keysRecorded": {"const": false},
+        "toolArgumentsRecorded": {"const": false},
+        "evidenceBodiesRecorded": {"const": false},
+        "stderrRecorded": {"const": false},
+        "absolutePathsRecorded": {"const": false}
+      }
+    }
+  }
+}
