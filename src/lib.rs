@@ -8,5 +8,6 @@ pub mod search_cache;
 pub mod stemmer;
 
 pub use ranking::{
-    ItemRanking, RankItem, RankOptions, RankedItem, RankingIntent, parse_items, rank_items,
+    ItemRanking, JevCallStats, JevUsage, RankItem, RankOptions, RankedItem, RankingIntent,
+    parse_items, rank_items,
 };

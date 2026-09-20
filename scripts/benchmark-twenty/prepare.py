@@ -17,6 +17,21 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def oko_metadata(binary):
+    version = subprocess.check_output([str(binary), '--version'], text=True).strip()
+    try:
+        repository = binary.parent.parent.parent
+        commit = subprocess.check_output(
+            ['git', '-c', 'core.hooksPath=/dev/null', 'rev-parse', 'HEAD'],
+            cwd=repository,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = None
+    return commit, version
+
+
 def main(project_name='Twenty', repository_name='twenty'):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('repository', nargs='?', default=str(Path.home() / 'dev' / repository_name))
@@ -52,13 +67,16 @@ def main(project_name='Twenty', repository_name='twenty'):
     if not rg:
         raise RuntimeError('ripgrep must be on PATH')
     oko = Path(args.oko).expanduser().resolve()
+    oko_commit, oko_version = oko_metadata(oko)
     versions = {name: subprocess.check_output([exe, '--version'], text=True).strip() for name, exe in clients.items()}
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     archive = STATE / 'baseline.tar'
     subprocess.run(['git', 'archive', '--format=tar', '--output', str(archive), fixture['commit']], cwd=repo, check=True)
-    settings = dict(repository=str(repo), commit=fixture['commit'], timeoutSeconds=args.timeout,
+    settings = dict(project=project_name, repository=str(repo), commit=fixture['commit'], targetVersion=None,
+                    timeoutSeconds=args.timeout,
                     models={name: getattr(args, name + '_model') for name in clients}, effort=args.effort,
                     clients=clients, versions=versions, oko=str(oko), rg=rg, jevModel='jev-1.13.0',
+                    okoCommit=oko_commit, okoVersion=oko_version,
                     archiveSha256=digest(archive), okoSha256=digest(oko), tasksSha256=digest(ROOT / 'tasks.json'))
     (STATE / 'settings.json').write_text(json.dumps(settings, indent=2) + '\n')
     print(f'Prepared {len(fixture["tasks"])} tasks at {fixture["commit"]}; snapshot {archive.stat().st_size // 1024 // 1024} MiB')

@@ -1,0 +1,81 @@
+{
+  "format": "oko-benchmark/v1",
+  "formatVersion": 1,
+  "manifest": {
+    "format": "oko-benchmark/v1",
+    "formatVersion": 1,
+    "runId": "run-example-001",
+    "runner": {"name": "benchmark-twenty", "version": "1"},
+    "target": {"repository": "example-repository", "commit": "0123456789abcdef0123456789abcdef01234567", "version": null},
+    "oko": {"repository": "bartlomein/oko", "commit": "89abcdef0123456789abcdef0123456789abcdef", "version": "0.2.1", "binarySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "clients": [{"name": "codex", "version": "example-client-1", "model": "example-model", "effort": "medium"}],
+    "privacy": {"promptRecorded": false, "sourceBodiesRecorded": false, "rawEventLogsRecorded": false, "headersRecorded": false, "keysRecorded": false, "toolArgumentsRecorded": false, "evidenceBodiesRecorded": false, "stderrRecorded": false, "absolutePathsRecorded": false},
+    "standards": {"pythonPerfCounterNs": "https://docs.python.org/3/library/time.html#time.perf_counter_ns", "httpSemantics": "https://www.rfc-editor.org/rfc/rfc9110.html"}
+  },
+  "settings": {
+    "preset": "pilot",
+    "clients": ["codex"],
+    "conditions": ["oko-cold"],
+    "repeats": 1,
+    "taskIds": ["task-example"],
+    "models": {"codex": "example-model"},
+    "effort": "medium",
+    "timeoutSeconds": 300,
+    "isolation": "example",
+    "cachePolicy": "cold-vs-prebuilt-disk-v1"
+  },
+  "canary": {
+    "status": "passed",
+    "plannedSessions": 1,
+    "completedSessions": 1,
+    "checks": {"completedClientRuns": true, "conditionMatch": true, "okoMetrics": true, "artifactSchema": true, "credentialsAndPaths": true},
+    "taskIds": ["task-example"],
+    "conditions": ["oko-cold"]
+  },
+  "records": [{
+    "format": "oko-benchmark/v1",
+    "runId": "run-example-001",
+    "recordId": "001",
+    "task": {"idHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "taskKind": "search",
+    "target": {"commit": "0123456789abcdef0123456789abcdef01234567"},
+    "oko": {"commit": "89abcdef0123456789abcdef0123456789abcdef", "version": "0.2.1"},
+    "client": {"name": "codex", "version": "example-client-1", "model": "example-model", "effort": "medium"},
+    "condition": {"requested": "oko-cold", "observedCacheState": "cold"},
+    "status": "succeeded",
+    "failure": {"class": null},
+    "timing": {"totalWallNs": 1200000000, "agentWallNs": 1200000000, "okoWallNs": 420000000, "monotonic": true},
+    "correctness": {"correctFirst": true, "correctTopFive": true, "expectedPatchMatch": null, "passed": null, "known": true, "quality": "correct"},
+    "calls": {"agentToolCalls": 3, "okoCalls": 1, "jevCalls": 1},
+    "agentUsage": {"inputTokens": 120, "outputTokens": 40, "cacheReadTokens": null, "cacheWriteTokens": null, "totalTokens": null},
+    "agentUsageSteps": null,
+    "okoUsage": {
+      "phaseMetrics": [{"timings": {"totalWallNs": 420000000, "totalMs": 420}, "cache": {"status": "cold", "scanMs": 4, "loadMs": 1, "prepareMs": 5, "saveMs": 2, "totalMs": 12}, "retrieval": {"shortlistedCandidates": 8, "rankedCandidates": 5, "requestBytes": 2400, "previewMs": 20, "rerankMs": 380, "recoveryCandidates": 0, "recovered": false}}],
+      "providerCalls": [{"phase": "normal", "durationNs": 400000000, "requestBytes": 2400, "responseBytes": 700, "httpStatus": 200, "success": true, "errorClass": null, "usage": null}],
+      "tokenUsage": null
+    },
+    "privacy": {"promptRecorded": false, "sourceBodiesRecorded": false, "rawEventLogsRecorded": false, "headersRecorded": false, "keysRecorded": false, "toolArgumentsRecorded": false, "evidenceBodiesRecorded": false, "stderrRecorded": false, "absolutePathsRecorded": false}
+  }],
+  "summary": {
+    "format": "oko-benchmark/v1",
+    "runId": "run-example-001",
+    "generatedAt": null,
+    "records": {"attempted": 1, "succeeded": 1, "failed": 0},
+    "groups": [{
+      "client": {"name": "codex", "model": "example-model", "effort": "medium"},
+      "condition": {"requested": "oko-cold", "observedCacheState": "cold"},
+      "taskKind": "search",
+      "attempted": 1,
+      "succeeded": 1,
+      "failed": 0,
+      "denominator": 1,
+      "latencyNs": {"observed": 1, "median": 1200000000, "p95": 1200000000},
+      "correctness": {"known": 1, "correct": 1},
+      "agentUsage": {"inputTokens": 120, "outputTokens": 40, "cacheReadTokens": null, "cacheWriteTokens": null, "totalTokens": null, "reasoningTokens": null},
+      "jevUsage": {"calls": 1, "inputTokens": null, "outputTokens": null, "cacheReadTokens": null, "cacheWriteTokens": null, "totalTokens": null, "reasoningTokens": null}
+    }],
+    "privacy": {"promptRecorded": false, "sourceBodiesRecorded": false, "rawEventLogsRecorded": false, "headersRecorded": false, "keysRecorded": false, "toolArgumentsRecorded": false, "evidenceBodiesRecorded": false, "stderrRecorded": false, "absolutePathsRecorded": false}
+  },
+  "report": "# Oko benchmark report\n\nExample sanitized report.\n",
+  "privacy": {"promptRecorded": false, "sourceBodiesRecorded": false, "rawEventLogsRecorded": false, "headersRecorded": false, "keysRecorded": false, "toolArgumentsRecorded": false, "evidenceBodiesRecorded": false, "stderrRecorded": false, "absolutePathsRecorded": false}
+}

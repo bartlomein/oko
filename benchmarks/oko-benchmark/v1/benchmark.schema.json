@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bartlomein/oko/blob/main/benchmarks/oko-benchmark/v1/benchmark.schema.json",
+  "title": "Oko benchmark v1 shareable envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "formatVersion", "manifest", "settings", "canary", "records", "summary", "report", "privacy"],
+  "properties": {
+    "format": {"const": "oko-benchmark/v1"},
+    "formatVersion": {"const": 1},
+    "manifest": {"$ref": "#/$defs/manifest"},
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preset", "clients", "conditions", "repeats", "taskIds", "models", "effort", "timeoutSeconds", "isolation", "cachePolicy"],
+      "properties": {
+        "preset": {"enum": ["canary", "pilot", "fast", "full"]},
+        "clients": {"type": "array", "items": {"enum": ["codex", "opencode", "claude"]}},
+        "conditions": {"type": "array", "items": {"enum": ["native", "oko-cold", "oko-warm"]}},
+        "repeats": {"type": "integer", "minimum": 1},
+        "taskIds": {"type": "array", "items": {"type": "string"}},
+        "models": {"type": "object", "additionalProperties": {"type": "string"}},
+        "effort": {"type": "string"},
+        "timeoutSeconds": {"type": "number", "minimum": 0},
+        "isolation": {"type": "string"},
+        "cachePolicy": {"type": "string"}
+      }
+    },
+    "canary": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["status", "plannedSessions", "completedSessions", "checks", "taskIds", "conditions"],
+      "properties": {
+        "status": {"enum": ["passed", "failed", "pilot-run"]},
+        "plannedSessions": {"type": "integer"},
+        "completedSessions": {"type": "integer"},
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["completedClientRuns", "conditionMatch", "okoMetrics", "artifactSchema", "credentialsAndPaths"],
+          "properties": {
+            "completedClientRuns": {"type": "boolean"},
+            "conditionMatch": {"type": "boolean"},
+            "okoMetrics": {"type": "boolean"},
+            "artifactSchema": {"type": "boolean"},
+            "credentialsAndPaths": {"type": "boolean"}
+          }
+        },
+        "taskIds": {"type": "array", "items": {"type": "string"}},
+        "conditions": {"type": "array", "items": {"enum": ["native", "oko-cold", "oko-warm"]}}
+      }
+    },
+    "records": {"type": "array", "items": {"$ref": "#/$defs/record"}},
+    "summary": {"$ref": "#/$defs/summary"},
+    "report": {"type": "string"},
+    "privacy": {"$ref": "#/$defs/privacy"}
+  },
+  "$defs": {
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["promptRecorded", "sourceBodiesRecorded", "rawEventLogsRecorded", "headersRecorded", "keysRecorded", "toolArgumentsRecorded", "evidenceBodiesRecorded", "stderrRecorded", "absolutePathsRecorded"],
+      "properties": {
+        "promptRecorded": {"const": false},
+        "sourceBodiesRecorded": {"const": false},
+        "rawEventLogsRecorded": {"const": false},
+        "headersRecorded": {"const": false},
+        "keysRecorded": {"const": false},
+        "toolArgumentsRecorded": {"const": false},
+        "evidenceBodiesRecorded": {"const": false},
+        "stderrRecorded": {"const": false},
+        "absolutePathsRecorded": {"const": false}
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "formatVersion", "runId", "runner", "target", "oko", "clients", "privacy", "standards"],
+      "properties": {
+        "format": {"const": "oko-benchmark/v1"},
+        "formatVersion": {"const": 1},
+        "runId": {"type": "string", "minLength": 1},
+        "runner": {
+          "type": "object", "additionalProperties": false, "required": ["name", "version"],
+          "properties": {"name": {"type": "string"}, "version": {"type": "string"}}
+        },
+        "target": {
+          "type": "object", "additionalProperties": false, "required": ["repository", "commit", "version"],
+          "properties": {
+            "repository": {"type": "string"},
+            "commit": {"type": ["string", "null"]},
+            "version": {"type": ["string", "null"]}
+          }
+        },
+        "oko": {
+          "type": "object", "additionalProperties": false, "required": ["repository", "commit", "version", "binarySha256"],
+          "properties": {
+            "repository": {"type": "string"},
+            "commit": {"type": ["string", "null"]},
+            "version": {"type": ["string", "null"]},
+            "binarySha256": {"type": ["string", "null"]}
+          }
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["name", "version", "model", "effort"],
+            "properties": {
+              "name": {"type": "string"},
+              "version": {"type": ["string", "null"]},
+              "model": {"type": ["string", "null"]},
+              "effort": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "privacy": {"$ref": "#/$defs/privacy"},
+        "standards": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "usage": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "inputTokens": {"type": ["integer", "null"]},
+        "outputTokens": {"type": ["integer", "null"]},
+        "cacheReadTokens": {"type": ["integer", "null"]},
+        "cacheWriteTokens": {"type": ["integer", "null"]},
+        "totalTokens": {"type": ["integer", "null"]},
+        "reasoningTokens": {"type": ["integer", "null"]}
+      }
+    },
+    "safeMetrics": {
+      "type": "object",
+      "additionalProperties": {"type": ["integer", "boolean", "string", "null"]}
+    },
+    "phaseMetric": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "timings": {"$ref": "#/$defs/safeMetrics"},
+        "cache": {"$ref": "#/$defs/safeMetrics"},
+        "retrieval": {"$ref": "#/$defs/safeMetrics"},
+        "investigation": {"$ref": "#/$defs/safeMetrics"}
+      }
+    },
+    "providerCall": {
+      "type": "object", "additionalProperties": false,
+      "required": ["phase", "durationNs", "requestBytes", "responseBytes", "httpStatus", "success", "errorClass", "usage"],
+      "properties": {
+        "phase": {"type": "string"},
+        "durationNs": {"type": ["integer", "null"]},
+        "requestBytes": {"type": ["integer", "null"]},
+        "responseBytes": {"type": ["integer", "null"]},
+        "httpStatus": {"type": ["integer", "null"]},
+        "success": {"type": "boolean"},
+        "errorClass": {"type": ["string", "null"]},
+        "usage": {"$ref": "#/$defs/usage"}
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "runId", "recordId", "task", "taskKind", "target", "oko", "client", "condition", "status", "failure", "timing", "correctness", "calls", "agentUsage", "agentUsageSteps", "okoUsage", "privacy"],
+      "properties": {
+        "format": {"const": "oko-benchmark/v1"},
+        "runId": {"type": "string"},
+        "recordId": {"type": "string"},
+        "task": {
+          "type": "object", "additionalProperties": false, "required": ["idHash"],
+          "properties": {"idHash": {"type": "string"}}
+        },
+        "taskKind": {"enum": ["search", "edit", "unknown"]},
+        "target": {
+          "type": "object", "additionalProperties": false, "required": ["commit"],
+          "properties": {"commit": {"type": ["string", "null"]}}
+        },
+        "oko": {
+          "type": "object", "additionalProperties": false, "required": ["commit", "version"],
+          "properties": {"commit": {"type": ["string", "null"]}, "version": {"type": ["string", "null"]}}
+        },
+        "client": {
+          "type": "object", "additionalProperties": false, "required": ["name", "version", "model", "effort"],
+          "properties": {
+            "name": {"type": "string"},
+            "version": {"type": ["string", "null"]},
+            "model": {"type": ["string", "null"]},
+            "effort": {"type": ["string", "null"]}
+          }
+        },
+        "condition": {
+          "type": "object", "additionalProperties": false, "required": ["requested", "observedCacheState"],
+          "properties": {
+            "requested": {"enum": ["native", "oko-cold", "oko-warm"]},
+            "observedCacheState": {"type": ["string", "null"]}
+          }
+        },
+        "status": {"enum": ["succeeded", "failed", "timeout"]},
+        "failure": {
+          "type": "object", "additionalProperties": false, "required": ["class"],
+          "properties": {"class": {"type": ["string", "null"]}}
+        },
+        "timing": {
+          "type": "object", "additionalProperties": false, "required": ["totalWallNs", "agentWallNs", "okoWallNs", "monotonic"],
+          "properties": {
+            "totalWallNs": {"type": ["integer", "null"]},
+            "agentWallNs": {"type": ["integer", "null"]},
+            "okoWallNs": {"type": ["integer", "null"]},
+            "monotonic": {"const": true}
+          }
+        },
+        "correctness": {
+          "type": "object", "additionalProperties": false, "required": ["correctFirst", "correctTopFive", "expectedPatchMatch", "passed", "known", "quality"],
+          "properties": {
+            "correctFirst": {"type": ["boolean", "null"]},
+            "correctTopFive": {"type": ["boolean", "null"]},
+            "expectedPatchMatch": {"type": ["boolean", "null"]},
+            "passed": {"type": ["boolean", "null"]},
+            "known": {"type": "boolean"},
+            "quality": {"type": "string"}
+          }
+        },
+        "calls": {
+          "type": "object", "additionalProperties": false, "required": ["agentToolCalls", "okoCalls", "jevCalls"],
+          "properties": {
+            "agentToolCalls": {"type": ["integer", "null"]},
+            "okoCalls": {"type": ["integer", "null"]},
+            "jevCalls": {"type": ["integer", "null"]}
+          }
+        },
+        "agentUsage": {"$ref": "#/$defs/usage"},
+        "agentUsageSteps": {"type": ["array", "null"], "items": {"$ref": "#/$defs/usage"}},
+        "okoUsage": {
+          "type": "object", "additionalProperties": false, "required": ["phaseMetrics", "providerCalls", "tokenUsage"],
+          "properties": {
+            "phaseMetrics": {"type": "array", "items": {"$ref": "#/$defs/phaseMetric"}},
+            "providerCalls": {"type": "array", "items": {"$ref": "#/$defs/providerCall"}},
+            "tokenUsage": {"type": ["array", "null"], "items": {"$ref": "#/$defs/usage"}}
+          }
+        },
+        "privacy": {"$ref": "#/$defs/privacy"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "runId", "generatedAt", "records", "groups", "privacy"],
+      "properties": {
+        "format": {"const": "oko-benchmark/v1"},
+        "runId": {"type": "string"},
+        "generatedAt": {"type": ["string", "null"]},
+        "records": {
+          "type": "object", "additionalProperties": false, "required": ["attempted", "succeeded", "failed"],
+          "properties": {"attempted": {"type": "integer"}, "succeeded": {"type": "integer"}, "failed": {"type": "integer"}}
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["client", "condition", "taskKind", "attempted", "succeeded", "failed", "denominator", "latencyNs", "correctness", "agentUsage", "jevUsage"],
+            "properties": {
+              "client": {
+                "type": "object", "additionalProperties": false, "required": ["name", "model", "effort"],
+                "properties": {
+                  "name": {"type": "string"},
+                  "model": {"type": ["string", "null"]},
+                  "effort": {"type": ["string", "null"]}
+                }
+              },
+              "condition": {
+                "type": "object", "additionalProperties": false, "required": ["requested", "observedCacheState"],
+                "properties": {
+                  "requested": {"enum": ["native", "oko-cold", "oko-warm"]},
+                  "observedCacheState": {"type": ["string", "null"]}
+                }
+              },
+              "taskKind": {"enum": ["search", "edit", "unknown"]},
+              "attempted": {"type": "integer"},
+              "succeeded": {"type": "integer"},
+              "failed": {"type": "integer"},
+              "denominator": {"type": "integer"},
+              "latencyNs": {
+                "type": "object", "additionalProperties": false, "required": ["observed", "median", "p95"],
+                "properties": {"observed": {"type": "integer"}, "median": {"type": ["integer", "null"]}, "p95": {"type": ["integer", "null"]}}
+              },
+              "correctness": {
+                "type": "object", "additionalProperties": false, "required": ["known", "correct"],
+                "properties": {"known": {"type": "integer"}, "correct": {"type": "integer"}}
+              },
+              "agentUsage": {"$ref": "#/$defs/usage"},
+              "jevUsage": {
+                "type": "object", "additionalProperties": false, "required": ["calls", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens", "reasoningTokens"],
+                "properties": {
+                  "calls": {"type": "integer"},
+                  "inputTokens": {"type": ["integer", "null"]},
+                  "outputTokens": {"type": ["integer", "null"]},
+                  "cacheReadTokens": {"type": ["integer", "null"]},
+                  "cacheWriteTokens": {"type": ["integer", "null"]},
+                  "totalTokens": {"type": ["integer", "null"]},
+                  "reasoningTokens": {"type": ["integer", "null"]}
+                }
+              }
+            }
+          }
+        },
+        "privacy": {"$ref": "#/$defs/privacy"}
+      }
+    }
+  }
+}

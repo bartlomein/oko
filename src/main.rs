@@ -5,8 +5,10 @@ mod mcp;
 mod setup;
 
 use anyhow::{Context, Result, bail};
+use oko::ranking::{self, JevCallStats};
 use oko::{RankOptions, RankingIntent, parse_items, rank_items, search};
 use serde::Serialize;
+use serde_json::json;
 use std::{env, fs::File, io::Read, path::Path, time::Instant};
 
 const USAGE: &str = "Usage: oko setup [--root DIRECTORY] [--no-jev]\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
@@ -156,6 +158,7 @@ pub(crate) struct CodeRankingStats {
     pub attempts: usize,
     pub recovery_candidates: usize,
     pub recovered: bool,
+    pub jev_calls: Vec<JevCallStats>,
 }
 
 pub(crate) fn rank_code_with_stats(
@@ -195,7 +198,7 @@ pub(crate) fn rank_code_with_stats(
         }
         stats.preview_ms = preview_started.elapsed().as_millis() as u64;
         let rerank_started = Instant::now();
-        let ranking = rank_items(
+        let ranking = ranking::rank_items_with_stats(
             question,
             &items,
             &RankOptions {
@@ -204,6 +207,8 @@ pub(crate) fn rank_code_with_stats(
                 no_jev: false,
                 intent,
             },
+            "normal",
+            &mut stats.jev_calls,
         )?;
         stats.rerank_ms = rerank_started.elapsed().as_millis() as u64;
         stats.ranked_candidates = items.len().saturating_sub(ranking.omitted_count);
@@ -230,7 +235,7 @@ pub(crate) fn rank_code_with_stats(
                 stats.request_bytes += serde_json::to_vec(&request)?.len();
                 stats.recovery_candidates = kept.len();
                 let started = Instant::now();
-                ranking = rank_items(
+                ranking = ranking::rank_items_with_stats(
                     question,
                     &recovery_items,
                     &RankOptions {
@@ -239,6 +244,8 @@ pub(crate) fn rank_code_with_stats(
                         no_jev: false,
                         intent,
                     },
+                    "recovery",
+                    &mut stats.jev_calls,
                 )?;
                 stats.rerank_ms += started.elapsed().as_millis() as u64;
                 stats.attempts += 1;
@@ -285,6 +292,7 @@ fn snippet(text: &str) -> String {
 }
 
 fn run() -> Result<()> {
+    let command_started = Instant::now();
     let args: Vec<String> = env::args().skip(1).collect();
     let cwd = env::current_dir()?;
     if args
@@ -379,16 +387,19 @@ fn run() -> Result<()> {
             .load(&cwd)?;
         let snapshot = workspace.snapshot;
         let mut investigation = None;
-        let results = if parsed.deep {
+        let (results, retrieval) = if parsed.deep {
             let key = key
                 .as_deref()
                 .context("TYPESAFE_API_KEY is required for --deep investigation.")?;
+            let mut provider_calls = Vec::new();
             let run = oko::investigate::investigate_snapshot_with(
                 &parsed.question,
                 &snapshot,
                 parsed.intent,
                 parsed.max_steps,
-                |request| oko::ranking::call_jev(request, key),
+                |request| {
+                    oko::ranking::call_jev_observed(request, key, "deep", &mut provider_calls)
+                },
             )?;
             let results = run
                 .results
@@ -403,19 +414,24 @@ fn run() -> Result<()> {
                 .collect();
             let mut metadata = serde_json::to_value(&run)?;
             metadata.as_object_mut().unwrap().remove("results");
+            metadata["providerCalls"] = serde_json::to_value(&provider_calls)?;
+            let retrieval = Some(json!({
+                "attempts": provider_calls.len(),
+                "jevCalls": provider_calls,
+            }));
             eprintln!(
                 "Investigation: {} steps, {} Jev calls, stopped: {}",
                 run.steps, run.jev_calls, run.stop_reason
             );
             investigation = Some(metadata);
-            results
+            (results, retrieval)
         } else {
             let shortlist = if parsed.no_jev {
                 snapshot.rank(&parsed.question)
             } else {
                 snapshot.rank_with_intent(&parsed.question, parsed.intent)
             };
-            rank_code_with_stats(
+            let (results, stats) = rank_code_with_stats(
                 &parsed.question,
                 &shortlist,
                 snapshot.chunks(),
@@ -423,8 +439,8 @@ fn run() -> Result<()> {
                 parsed.no_jev,
                 parsed.intent,
                 || Ok(snapshot.rank_excluding(&parsed.question, parsed.intent, &shortlist)),
-            )?
-            .0
+            )?;
+            (results, Some(serde_json::to_value(stats)?))
         };
         let notice = "Lexical-only ranking requested via --no-jev.";
         if parsed.no_jev {
@@ -436,6 +452,13 @@ fn run() -> Result<()> {
             if let Some(metadata) = investigation {
                 output["investigation"] = metadata;
             }
+            if let Some(stats) = retrieval {
+                output["retrieval"] = stats;
+            }
+            output["timings"] = json!({
+                "totalWallNs": command_started.elapsed().as_nanos() as u64,
+                "totalMs": command_started.elapsed().as_millis() as u64,
+            });
             if parsed.no_jev {
                 output["notice"] = notice.into();
             }

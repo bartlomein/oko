@@ -1,0 +1,20 @@
+{
+  "format": "oko-benchmark/v1",
+  "runId": "run-example-001",
+  "generatedAt": null,
+  "records": {"attempted": 1, "succeeded": 1, "failed": 0},
+  "groups": [{
+    "client": {"name": "codex", "model": "example-model", "effort": "medium"},
+    "condition": {"requested": "oko-cold", "observedCacheState": "cold"},
+    "taskKind": "search",
+    "attempted": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "denominator": 1,
+    "latencyNs": {"observed": 1, "median": 1200000000, "p95": 1200000000},
+    "correctness": {"known": 1, "correct": 1},
+    "agentUsage": {"inputTokens": 120, "outputTokens": 40, "cacheReadTokens": null, "cacheWriteTokens": null, "totalTokens": null},
+    "jevUsage": {"calls": 1, "inputTokens": null, "outputTokens": null, "cacheReadTokens": null, "cacheWriteTokens": null, "totalTokens": null, "reasoningTokens": null}
+  }],
+  "privacy": {"promptRecorded": false, "sourceBodiesRecorded": false, "rawEventLogsRecorded": false, "headersRecorded": false, "keysRecorded": false, "toolArgumentsRecorded": false, "evidenceBodiesRecorded": false, "stderrRecorded": false, "absolutePathsRecorded": false}
+}

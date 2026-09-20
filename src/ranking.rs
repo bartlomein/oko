@@ -2,7 +2,10 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 pub const MAX_ITEMS: usize = 30;
 pub const MAX_JEV_REQUEST_BYTES: usize = 32_000;
@@ -99,6 +102,29 @@ impl Default for RankOptions {
             intent: RankingIntent::General,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JevUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JevCallStats {
+    pub phase: String,
+    pub duration_ns: u64,
+    pub request_bytes: usize,
+    pub response_bytes: usize,
+    pub http_status: Option<u16>,
+    pub success: bool,
+    pub error_class: Option<String>,
+    pub usage: Option<JevUsage>,
 }
 
 // ECMAScript String.trim uses this set, which differs from Rust's is_whitespace.
@@ -284,6 +310,20 @@ fn env_value(name: &str) -> Option<String> {
 
 /// One request, no application retries, with the SDK's ten-second total timeout.
 pub fn call_jev(request: &Value, api_key: &str) -> Result<Value> {
+    let mut ignored = Vec::new();
+    call_jev_observed(request, api_key, "normal", &mut ignored)
+}
+
+/// Perform one Jev request and append only transport/usage metadata to
+/// `observations`. Request and response bodies are deliberately never stored
+/// in the observation. The returned JSON remains available to the existing
+/// ranking flow and is not part of the shareable stats contract.
+pub fn call_jev_observed(
+    request: &Value,
+    api_key: &str,
+    phase: &str,
+    observations: &mut Vec<JevCallStats>,
+) -> Result<Value> {
     let base = env_value("TYPESAFE_BASE_URL").unwrap_or_else(|| "https://api.typesafe.ai".into());
     let mut body = request.clone();
     body.as_object_mut()
@@ -292,30 +332,171 @@ pub fn call_jev(request: &Value, api_key: &str) -> Result<Value> {
             "model".into(),
             json!(env_value("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| "jev-latest".into())),
         );
-    let client = reqwest::blocking::Client::builder()
+    let request_bytes = serde_json::to_vec(&body)?.len();
+    let started = Instant::now();
+    let client = match reqwest::blocking::Client::builder()
         .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(10))
-        .build()?;
-    let response = client
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            observations.push(JevCallStats {
+                phase: phase.into(),
+                duration_ns: started.elapsed().as_nanos() as u64,
+                request_bytes,
+                response_bytes: 0,
+                http_status: None,
+                success: false,
+                error_class: Some("client_build".into()),
+                usage: None,
+            });
+            return Err(error.into());
+        }
+    };
+    let response = match client
         .post(format!("{}/v1/systemone", base.trim_end_matches('/')))
         .bearer_auth(api_key)
         .header(reqwest::header::ACCEPT, "application/json")
         .json(&body)
         .send()
-        .context("Jev request failed")?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            observations.push(JevCallStats {
+                phase: phase.into(),
+                duration_ns: started.elapsed().as_nanos() as u64,
+                request_bytes,
+                response_bytes: 0,
+                http_status: None,
+                success: false,
+                error_class: Some("transport".into()),
+                usage: None,
+            });
+            return Err(error).context("Jev request failed");
+        }
+    };
     let status = response.status();
     // Consume the body while the request timeout is still enforced.
-    let bytes = response.bytes().context("Could not read Jev response")?;
+    let bytes = match response.bytes() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            observations.push(JevCallStats {
+                phase: phase.into(),
+                duration_ns: started.elapsed().as_nanos() as u64,
+                request_bytes,
+                response_bytes: 0,
+                http_status: Some(status.as_u16()),
+                success: false,
+                error_class: Some("response_read".into()),
+                usage: None,
+            });
+            return Err(error).context("Could not read Jev response");
+        }
+    };
+    let response_bytes = bytes.len();
     if !status.is_success() {
+        observations.push(JevCallStats {
+            phase: phase.into(),
+            duration_ns: started.elapsed().as_nanos() as u64,
+            request_bytes,
+            response_bytes,
+            http_status: Some(status.as_u16()),
+            success: false,
+            error_class: Some("http_status".into()),
+            usage: None,
+        });
         bail!("Jev returned HTTP {}.", status.as_u16());
     }
-    serde_json::from_slice(&bytes).context("Jev returned invalid JSON.")
+    let value: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            observations.push(JevCallStats {
+                phase: phase.into(),
+                duration_ns: started.elapsed().as_nanos() as u64,
+                request_bytes,
+                response_bytes,
+                http_status: Some(status.as_u16()),
+                success: false,
+                error_class: Some("invalid_json".into()),
+                usage: None,
+            });
+            return Err(error).context("Jev returned invalid JSON.");
+        }
+    };
+    observations.push(JevCallStats {
+        phase: phase.into(),
+        duration_ns: started.elapsed().as_nanos() as u64,
+        request_bytes,
+        response_bytes,
+        http_status: Some(status.as_u16()),
+        success: true,
+        error_class: None,
+        usage: jev_usage(&value),
+    });
+    Ok(value)
+}
+
+fn numeric(object: &Map<String, Value>, names: &[&str]) -> Option<u64> {
+    names
+        .iter()
+        .find_map(|name| object.get(*name).and_then(Value::as_u64))
+}
+
+fn jev_usage(value: &Value) -> Option<JevUsage> {
+    let usage = value.get("usage")?.as_object()?;
+    let result = JevUsage {
+        input_tokens: numeric(usage, &["input_tokens", "inputTokens", "prompt_tokens"]),
+        output_tokens: numeric(
+            usage,
+            &["output_tokens", "outputTokens", "completion_tokens"],
+        ),
+        cache_read_tokens: numeric(
+            usage,
+            &[
+                "cache_read_input_tokens",
+                "cacheReadTokens",
+                "cached_input_tokens",
+                "cache_read_tokens",
+            ],
+        ),
+        cache_write_tokens: numeric(
+            usage,
+            &[
+                "cache_creation_input_tokens",
+                "cacheWriteTokens",
+                "cache_write_tokens",
+            ],
+        ),
+        total_tokens: numeric(usage, &["total_tokens", "totalTokens"]),
+    };
+    if result.input_tokens.is_none()
+        && result.output_tokens.is_none()
+        && result.cache_read_tokens.is_none()
+        && result.cache_write_tokens.is_none()
+        && result.total_tokens.is_none()
+    {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 pub fn rank_items(
     question: &str,
     input: &[RankItem],
     options: &RankOptions,
+) -> Result<ItemRanking> {
+    let mut ignored = Vec::new();
+    rank_items_with_stats(question, input, options, "normal", &mut ignored)
+}
+
+pub fn rank_items_with_stats(
+    question: &str,
+    input: &[RankItem],
+    options: &RankOptions,
+    phase: &str,
+    observations: &mut Vec<JevCallStats>,
 ) -> Result<ItemRanking> {
     if trim(question).is_empty() {
         bail!("A non-empty question is required.");
@@ -348,11 +529,11 @@ pub fn rank_items(
             omitted_count: 0,
         });
     }
-    let run = || -> Result<ItemRanking> {
+    let mut run = || -> Result<ItemRanking> {
         let (request, candidates) = prepare_request_with_intent(question, &items, options.intent)?;
         rank_response(
             &candidates,
-            &call_jev(&request, api_key)?,
+            &call_jev_observed(&request, api_key, phase, observations)?,
             options.limit,
             items.len(),
         )
@@ -756,9 +937,45 @@ mod tests {
             return;
         }
         let (request, _) = prepare_request("refund", &items()).unwrap();
-        let result = call_jev(&request, "local-test-key");
+        let mut observations = Vec::new();
+        let observed = std::env::var("OKO_HTTP_OBSERVED_CHILD").is_ok();
+        let result = if observed {
+            call_jev_observed(&request, "local-test-key", "normal", &mut observations)
+        } else {
+            call_jev(&request, "local-test-key")
+        };
+        if observed {
+            assert_eq!(observations.len(), 1);
+            let stats = &observations[0];
+            assert!(stats.duration_ns > 0);
+            assert!(stats.request_bytes > 0);
+            assert_eq!(stats.phase, "normal");
+            assert!(stats.response_bytes > 0);
+            if std::env::var("OKO_HTTP_EXPECT_ERROR").is_ok() {
+                assert_eq!(stats.http_status, Some(503));
+                assert!(!stats.success);
+                assert_eq!(stats.error_class.as_deref(), Some("http_status"));
+                assert!(stats.usage.is_none());
+            } else if std::env::var("OKO_HTTP_NO_USAGE").is_ok() {
+                assert_eq!(stats.http_status, Some(200));
+                assert!(stats.success);
+                assert!(stats.usage.is_none());
+            } else {
+                assert_eq!(stats.http_status, Some(200));
+                assert!(stats.success);
+                assert_eq!(
+                    stats.usage.as_ref().and_then(|usage| usage.input_tokens),
+                    Some(11)
+                );
+                assert_eq!(
+                    stats.usage.as_ref().and_then(|usage| usage.total_tokens),
+                    Some(18)
+                );
+            }
+        }
         match std::env::var("OKO_HTTP_EXPECT_ERROR") {
             Ok(expected) => assert!(format!("{:#}", result.unwrap_err()).contains(&expected)),
+            Err(_) if observed => assert!(result.unwrap()["ok"].as_bool().unwrap()),
             Err(_) => assert_eq!(result.unwrap(), json!({"ok": true})),
         }
     }
@@ -768,6 +985,7 @@ mod tests {
         body: &str,
         model: Option<&str>,
         error: Option<&str>,
+        observed: bool,
     ) -> Vec<Vec<u8>> {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -781,6 +999,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let done = Arc::new(AtomicBool::new(false));
         let server_done = done.clone();
+        let no_usage = body == r#"{"ok":true}"#;
         let body = body.to_owned();
         let server = thread::spawn(move || {
             let mut requests = Vec::new();
@@ -827,7 +1046,14 @@ mod tests {
             .env("OKO_HTTP_TEST_CHILD", "1")
             .env("TYPESAFE_BASE_URL", format!(" http://{address}/// "))
             .env_remove("TYPESAFE_DEFAULT_MODEL")
+            .env_remove("OKO_HTTP_NO_USAGE")
             .env_remove("OKO_HTTP_EXPECT_ERROR");
+        if observed {
+            command.env("OKO_HTTP_OBSERVED_CHILD", "1");
+            if no_usage {
+                command.env("OKO_HTTP_NO_USAGE", "1");
+            }
+        }
         if let Some(model) = model {
             command.env("TYPESAFE_DEFAULT_MODEL", model);
         }
@@ -853,7 +1079,7 @@ mod tests {
             (Some(" \u{feff} "), "jev-latest"),
             (Some(" custom-model "), "custom-model"),
         ] {
-            let requests = mock_http(200, r#"{"ok":true}"#, model, None);
+            let requests = mock_http(200, r#"{"ok":true}"#, model, None, false);
             assert_eq!(requests.len(), 1);
             let request = &requests[0];
             let end = request
@@ -884,7 +1110,25 @@ mod tests {
             (500, "{}", "HTTP 500"),
             (200, "broken", "invalid JSON"),
         ] {
-            assert_eq!(mock_http(status, body, None, Some(error)).len(), 1);
+            assert_eq!(mock_http(status, body, None, Some(error), false).len(), 1);
         }
+    }
+
+    #[test]
+    fn observed_http_stats_capture_bytes_status_duration_and_optional_usage() {
+        let response = mock_http(
+            200,
+            r#"{"ok":true,"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}"#,
+            None,
+            None,
+            true,
+        );
+        assert_eq!(response.len(), 1);
+
+        let absent = mock_http(200, r#"{"ok":true}"#, None, None, true);
+        assert_eq!(absent.len(), 1);
+
+        let failed = mock_http(503, "{}", None, Some("HTTP 503"), true);
+        assert_eq!(failed.len(), 1);
     }
 }

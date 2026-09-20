@@ -124,9 +124,9 @@ impl OkoServer {
         }
         let mut shortlist_ms = None;
         let mut investigate_ms = None;
-        let mut retrieval = None;
         let winners = if input.deep {
             let investigation_started = Instant::now();
+            let mut provider_calls = Vec::new();
             let run = oko::investigate::investigate_snapshot_with(
                 &input.question,
                 &snapshot,
@@ -136,7 +136,12 @@ impl OkoServer {
                     if cancelled() {
                         bail!("Search cancelled.");
                     }
-                    oko::ranking::call_jev(request, key.as_deref().expect("key checked above"))
+                    oko::ranking::call_jev_observed(
+                        request,
+                        key.as_deref().expect("key checked above"),
+                        "deep",
+                        &mut provider_calls,
+                    )
                 },
             )?;
             investigate_ms = Some(investigation_started.elapsed().as_millis() as u64);
@@ -147,7 +152,12 @@ impl OkoServer {
                 .collect();
             let mut metadata = serde_json::to_value(&run)?;
             metadata.as_object_mut().unwrap().remove("results");
-            (results, Some(metadata))
+            metadata["providerCalls"] = serde_json::to_value(&provider_calls)?;
+            let retrieval = Some(json!({
+                "attempts": provider_calls.len(),
+                "jevCalls": provider_calls,
+            }));
+            (results, Some(metadata), retrieval)
         } else {
             let shortlist_started = Instant::now();
             let shortlist = if self.no_jev {
@@ -170,7 +180,7 @@ impl OkoServer {
                     Ok(snapshot.rank_excluding(&input.question, input.intent.into(), &shortlist))
                 },
             )?;
-            retrieval = Some(stats);
+            let retrieval = Some(serde_json::to_value(stats)?);
             let winners = results
                 .into_iter()
                 .map(|r| {
@@ -186,13 +196,13 @@ impl OkoServer {
                     )
                 })
                 .collect();
-            (winners, None)
+            (winners, None, retrieval)
         };
         if cancelled() {
             bail!("Search cancelled.");
         }
         let context_started = Instant::now();
-        let (winners, mut investigation) = winners;
+        let (winners, mut investigation, retrieval) = winners;
         // Source evidence has priority over repeated question/action text.
         let mut trace_truncated = false;
         if let Some(trace) = investigation
@@ -256,6 +266,7 @@ fn packet_result(
     let mut packet_budget = serde_json::to_vec(&packet)?.len().min(MAX_MCP_RESULT_BYTES);
     loop {
         metadata["timings"]["contextMs"] = json!(context_started.elapsed().as_millis() as u64);
+        metadata["timings"]["totalWallNs"] = json!(started.elapsed().as_nanos() as u64);
         metadata["timings"]["totalMs"] = json!(started.elapsed().as_millis() as u64);
         let mut value = metadata.clone();
         value.as_object_mut().expect("metadata object").extend(

@@ -63,11 +63,14 @@ fn ask_reuses_preparation_across_processes_and_refreshes_changed_source() {
     let cold = run();
     assert_eq!(cold["cache"]["status"], "cold");
     assert_eq!(cold["cache"]["rebuiltFiles"], 1);
+    assert!(cold["timings"]["totalWallNs"].as_u64().unwrap() > 0);
+    assert!(cold["retrieval"]["jevCalls"].as_array().unwrap().is_empty());
     let restarted = run();
     assert_eq!(restarted["cache"]["status"], "disk");
     assert_eq!(restarted["cache"]["rebuiltFiles"], 0);
     assert_eq!(restarted["cache"]["reusedFiles"], 1);
     assert_eq!(cold["results"], restarted["results"]);
+    assert!(restarted["timings"]["totalWallNs"].as_u64().unwrap() > 0);
     fs::write(&source, "fn repair_archive_checksum() {}\n").unwrap();
     let changed = run();
     assert_eq!(changed["cache"]["rebuiltFiles"], 1);
