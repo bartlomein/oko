@@ -78,6 +78,10 @@ They are disposable: missing, incompatible, damaged, or
 unwritable caches fall back to preparing current files. Caching does not change
 ranking or remove Jev requests.
 
+An MCP server prepares its root in the background at startup so the first search
+is a memory hit; set `OKO_NO_PREWARM=1` to defer that work to the first search.
+See [startup preparation](mcp.md#startup-preparation).
+
 Set `OKO_METRICS_FILE` for an MCP server to append one JSON line per completed
 search with timings, retrieval metadata, and the structured result packet; see the
 [MCP reference](mcp.md#timings-and-retrieval-metadata). The agent-visible tool

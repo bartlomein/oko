@@ -19,7 +19,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
-const USAGE: &str = "Usage: oko mcp [--root DIRECTORY] [--no-jev]\n\nStarts a local MCP server over stdin/stdout. Root defaults to the current directory.\nSearches are restricted to that workspace. Credentials come from the server environment,\nthe root's .env, or the OS credential store. --no-jev is local-only mode.\nSet OKO_METRICS_FILE to append per-search timings and retrieval metadata as JSON lines.";
+const USAGE: &str = "Usage: oko mcp [--root DIRECTORY] [--no-jev]\n\nStarts a local MCP server over stdin/stdout. Root defaults to the current directory.\nSearches are restricted to that workspace. Credentials come from the server environment,\nthe root's .env, or the OS credential store. --no-jev is local-only mode.\nThe workspace is prepared in the background at startup; set OKO_NO_PREWARM=1 to wait for the first search.\nSet OKO_METRICS_FILE to append per-search timings and retrieval metadata as JSON lines.";
 // The serialized tool result, including JSON escaping of the text, before the
 // small JSON-RPC id/envelope added by rmcp.
 const MAX_MCP_RESULT_BYTES: usize = 16_000;
@@ -116,11 +116,16 @@ impl OkoServer {
         let preparation_ms = started.elapsed().as_millis() as u64;
         // Only snapshot refresh is synchronized. The immutable snapshot remains
         // alive for this request without holding a lock during Jev calls.
-        let workspace = self
+        // An unfinished startup preparation holds this lock; waiting for it is
+        // never slower than repeating its work.
+        let wait_started = Instant::now();
+        let mut cache = self
             .cache
             .lock()
-            .map_err(|_| anyhow::anyhow!("Search cache worker failed. Restart the server."))?
-            .load(&directory)?;
+            .map_err(|_| anyhow::anyhow!("Search cache worker failed. Restart the server."))?;
+        let cache_wait_ms = wait_started.elapsed().as_millis() as u64;
+        let workspace = cache.load(&directory)?;
+        drop(cache);
         let snapshot = workspace.snapshot;
         let corpus = snapshot.chunks();
         let scan_ms = workspace.timings.scan_ms;
@@ -244,7 +249,7 @@ impl OkoServer {
         let metadata = json!({"question":question, "questionTruncated":question.len() < input.question.len(), "directory":directory,
             "ranking":if self.no_jev {"lexical"} else {"jev"},
             "investigation":investigation, "retrieval":retrieval,
-            "timings":{"preparationMs":preparation_ms,"scanMs":scan_ms,
+            "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
         let packet = oko::context::build_packet_with_navigation(
@@ -305,7 +310,7 @@ fn packet_result(
             metadata["timings"]["totalMs"] = json!(started.elapsed().as_millis() as u64);
             metadata["responseBytes"] = json!(size);
             metadata["responseLimitBytes"] = json!(MAX_MCP_RESULT_BYTES);
-            record_metrics(metadata, &packet);
+            record_search(metadata, &packet);
             return Ok(result);
         }
         if packet_budget <= 128 {
@@ -322,32 +327,74 @@ fn packet_result(
 }
 
 /// Append this search's metadata and structured packet as one JSON line.
-/// Measurement must never fail a search.
-fn record_metrics(mut metadata: Value, packet: &oko::context::ContextPacket) {
-    let Some(path) = std::env::var_os(METRICS_FILE).filter(|path| !path.is_empty()) else {
-        return;
-    };
-    let written = serde_json::to_value(packet)
-        .map_err(anyhow::Error::from)
-        .and_then(|packet| {
+fn record_search(mut metadata: Value, packet: &oko::context::ContextPacket) {
+    match serde_json::to_value(packet) {
+        Ok(packet) => {
             metadata
                 .as_object_mut()
                 .expect("metadata object")
                 .extend(packet.as_object().expect("packet object").clone());
-            if let Some(parent) = Path::new(&path).parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)?;
-            // One write per line keeps concurrent appenders from interleaving.
-            file.write_all(format!("{metadata}\n").as_bytes())?;
-            Ok(())
-        });
+            record_metrics(&metadata);
+        }
+        Err(error) => eprintln!("oko: cannot write {METRICS_FILE}: {error}"),
+    }
+}
+
+/// Measurement must never fail a search.
+fn record_metrics(line: &Value) {
+    let Some(path) = std::env::var_os(METRICS_FILE).filter(|path| !path.is_empty()) else {
+        return;
+    };
+    let written = (|| -> Result<()> {
+        if let Some(parent) = Path::new(&path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        // One write per line keeps concurrent appenders from interleaving.
+        file.write_all(format!("{line}\n").as_bytes())?;
+        Ok(())
+    })();
     if let Err(error) = written {
         eprintln!("oko: cannot write {METRICS_FILE}: {error}");
     }
+}
+
+/// Prepare the workspace while the client is still starting and the model is
+/// composing its first request, so that search finds the snapshot in memory
+/// and only reconciles changes. Never on the async runtime: shutdown must not
+/// wait for a repository scan.
+fn prewarm(server: &OkoServer) {
+    let disabled = std::env::var("OKO_NO_PREWARM").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    if disabled {
+        return;
+    }
+    let (cache, root) = (server.cache.clone(), server.root.clone());
+    std::thread::spawn(move || {
+        let Ok(mut cache) = cache.lock() else {
+            return;
+        };
+        // Without retained snapshots the first search would repeat this work.
+        if !cache.retains_snapshots() {
+            return;
+        }
+        // A failure here is reported by the search that repeats the load.
+        if let Ok(workspace) = cache.load(&root)
+            // A search that arrived first has already prepared and reported it.
+            && workspace.timings.status != "memory"
+        {
+            // Recorded before the lock is released, so this line precedes
+            // that of any search using the snapshot.
+            record_metrics(&json!({"event":"prewarm", "cache":workspace.timings}));
+        }
+    });
 }
 
 #[tool_router]
@@ -426,6 +473,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         gate: Arc::new(Semaphore::new(1)),
         cache: Arc::new(Mutex::new(WorkspaceCache::new())),
     };
+    prewarm(&server);
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

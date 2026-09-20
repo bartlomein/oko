@@ -309,6 +309,8 @@ def cache_observations(row):
             timings = value.get('timings')
             if isinstance(timings, Mapping) and isinstance(timings.get('cache'), Mapping):
                 result = [dict(timings['cache'])]
+            elif value.get('event') == 'prewarm' and isinstance(value.get('cache'), Mapping):
+                result = [dict(value['cache'])]
             else:
                 result = []
             for child in value.values():
@@ -324,8 +326,10 @@ def cache_observations(row):
     observations = []
     for tool in row.get('tools', []):
         if observability.is_oko_tool(tool):
-            # Current Oko reports through okoMetrics; older results embedded it.
-            observations.extend(packets(tool))
+            # Startup preparation decides the session's cache state; the search
+            # that follows it is a memory hit. Older results embedded metadata.
+            observations.extend(packets(tool.get('okoPrewarm')))
+            observations.extend(packets({k: v for k, v in tool.items() if k != 'okoPrewarm'}))
     unique = []
     seen = set()
     for observation in observations:

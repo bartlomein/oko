@@ -197,7 +197,28 @@ excerpts and the question; keep it private. It is not read from `.env`, failed
 searches record nothing, and a write failure is reported on stderr without
 failing the search. The benchmark launchers set it per trial.
 
-Each line includes `timings` for preparation (including credential lookup),
+### Startup preparation
+
+The server starts preparing the configured root in a background thread as soon
+as it launches, before the client has finished connecting. A coding agent
+usually spends several seconds starting up and composing its first request, so
+the first search normally finds the snapshot in memory and only reconciles
+changes, instead of paying for a disk load or a cold build. It still rescans
+current files: preparation never makes a search return older source. A search
+that arrives while preparation is running waits for it rather than repeating it
+(`timings.cacheWaitMs`), which costs one extra reconciliation compared with
+doing the work itself. Preparation failures are left for the first search to
+report. Set `OKO_NO_PREWARM=1` to prepare on the first search instead, for
+example when many servers are started for sessions that rarely search;
+preparation is also skipped with `OKO_NO_CACHE=1`, because nothing would be
+retained. A search of a subdirectory prepares that scope separately.
+
+When `OKO_METRICS_FILE` is set, finished preparation is recorded as
+`{"event":"prewarm","cache":{...}}` with the same fields as `timings.cache`,
+always before the line of any search that uses it. That search reports
+`memory`; the event shows whether the session started `cold` or from `disk`.
+
+Each search line includes `timings` for preparation (including credential lookup),
 scan, shortlist, context building, and total server work. Normal `retrieval`
 metadata reports candidate counts, budgeted request bytes (before the transport
 adds its model field), preview building, and client-side reranking time

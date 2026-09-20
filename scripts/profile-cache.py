@@ -21,7 +21,7 @@ import time
 
 class Client:
     def __init__(self, binary, root, cache, timeout, *, live=False, api_key=None, model=None,
-                 command=None, metrics=None):
+                 command=None, metrics=None, prewarm=False):
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("TYPESAFE_", "OKO_"))}
         # Oko's tool result is agent-facing text. Timings, retrieval metadata and
@@ -30,6 +30,10 @@ class Client:
         self.metrics = Path(metrics or Path(cache) / "oko-metrics.jsonl")
         env.update(OKO_CACHE_DIR=str(cache), OKO_NO_CACHE="0", TYPESAFE_API_KEY="",
                    OKO_METRICS_FILE=str(self.metrics))
+        if not prewarm:
+            # Cache measurements attribute cold and disk preparation to the first
+            # search; startup preparation would turn that search into a memory hit.
+            env["OKO_NO_PREWARM"] = "1"
         if live:
             env.pop("TYPESAFE_API_KEY")
             if api_key:
@@ -47,15 +51,24 @@ class Client:
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
 
-    def last_metrics(self):
-        """Metadata and structured packet of the most recent completed search."""
+    def recorded(self):
         try:
             lines = self.metrics.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
             lines = []
-        if not lines:
+        return [json.loads(line) for line in lines]
+
+    def last_metrics(self):
+        """Metadata and structured packet of the most recent completed search."""
+        searches = [line for line in self.recorded() if "event" not in line]
+        if not searches:
             raise RuntimeError("Oko recorded no search metrics")
-        return json.loads(lines[-1])
+        return searches[-1]
+
+    def prewarm(self):
+        """Cache timings of the server's startup preparation, once it has finished."""
+        events = [line for line in self.recorded() if line.get("event") == "prewarm"]
+        return events[-1]["cache"] if events else None
 
     def read(self):
         try:

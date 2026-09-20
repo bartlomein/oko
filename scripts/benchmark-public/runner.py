@@ -205,7 +205,11 @@ def cache_observations(row):
     for tool in row.get('tools', []):
         name = tool.get('name') or tool.get('tool')
         if tool.get('server') == 'oko' or name in ('oko_search', 'mcp__oko__search'):
-            found = packet(tool)
+            # Startup preparation, not the memory hit after it, shows the session's cache state.
+            for event in tool.get('okoPrewarm') or []:
+                if isinstance(event.get('cache'), dict):
+                    observations.append(event['cache'])
+            found = packet({k: v for k, v in tool.items() if k != 'okoPrewarm'})
             if found is not None:
                 observations.append(found)
     # Claude's tool_use events contain only inputs. Match their tool_result IDs

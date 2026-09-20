@@ -325,10 +325,19 @@ def attach_oko_metrics(tools: Sequence[dict[str, Any]], path: Any) -> int:
 
     A failed search records nothing, so surplus lines stay with the last Oko
     call rather than being dropped. Returns the number of recorded searches.
+
+    The server prepares its workspace at startup and records that as a
+    ``prewarm`` event before any search that uses it. The first search then
+    reports a memory hit, so the event (``okoPrewarm`` on the first Oko call)
+    is what shows whether the session began with a cold or a disk cache.
     """
 
-    metrics = read_oko_metrics(path)
+    lines = read_oko_metrics(path)
+    metrics = [line for line in lines if "event" not in line]
+    prewarm = [line for line in lines if line.get("event") == "prewarm"]
     calls = [tool for tool in tools if is_oko_tool(tool)]
+    if calls and prewarm:
+        calls[0]["okoPrewarm"] = prewarm
     for tool, metric in zip(calls, metrics):
         tool["okoMetrics"] = [metric]
     if calls and len(metrics) > len(calls):

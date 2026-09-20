@@ -190,6 +190,31 @@ class BenchmarkTests(unittest.TestCase):
                 self.assertTrue(r.check_condition('oko-warm', observations, row['okoCalls']))
                 self.assertFalse(r.check_condition('oko-cold', observations, row['okoCalls']))
 
+    def test_startup_preparation_decides_the_session_cache_state(self):
+        events = [dict(type='tool_use', part=dict(tool='oko_search', state=dict(output='auth.rs:1-1 (whole file)'))),
+                  dict(type='tool_use', part=dict(tool='oko_search', state=dict(output='auth.rs:1-1 (whole file)')))]
+        memory = {'timings': {'totalMs': 1, 'cache': {'status': 'memory', 'rebuiltFiles': 0, 'reusedFiles': 7}}}
+        for condition, other, prepared in (
+                ('oko-cold', 'oko-warm', {'status': 'cold', 'rebuiltFiles': 7, 'reusedFiles': 0}),
+                ('oko-warm', 'oko-cold', {'status': 'disk', 'rebuiltFiles': 0, 'reusedFiles': 7})):
+            with tempfile.TemporaryDirectory() as directory:
+                metrics = Path(directory) / 'oko-metrics.jsonl'
+                lines = [{'event': 'prewarm', 'cache': prepared}, memory, memory]
+                metrics.write_text(''.join(json.dumps(line) + '\n' for line in lines))
+                row = r.parse_events('opencode', events)
+                self.assertEqual(r.observability.attach_oko_metrics(row['tools'], metrics), 2)
+            self.assertNotIn('okoPrewarm', row['tools'][1])
+            self.assertEqual([len(tool['okoMetrics']) for tool in row['tools']], [1, 1])
+            observations = r.cache_observations(row)
+            self.assertEqual([o['status'] for o in observations], [prepared['status'], 'memory'])
+            self.assertTrue(r.check_condition(condition, observations, row['okoCalls']))
+            self.assertFalse(r.check_condition(other, observations, row['okoCalls']))
+            record = r.observability.make_record(
+                run_id='test', record_id='prewarm', task_id='task', client='opencode', client_version='v',
+                model='m', effort='low', enabled=True, task={'cacheCondition': condition.removeprefix('oko-')},
+                row={**row, 'durationNs': 10, 'grade': {'passed': True}}, total_wall_ns=10)
+            self.assertIn({'cache': prepared}, record['okoUsage']['phaseMetrics'])
+
     def test_three_event_formats_and_errors(self):
         streams = {
             'codex': [dict(type='item.completed', item=dict(type='mcp_tool_call', server='oko')),

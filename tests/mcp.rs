@@ -26,6 +26,15 @@ impl Client {
         client
     }
     fn start_with_cache(root: &Path, offline: bool, endpoint: Option<&str>, cache: &Path) -> Self {
+        Self::start_with_env(root, offline, endpoint, cache, &[])
+    }
+    fn start_with_env(
+        root: &Path,
+        offline: bool,
+        endpoint: Option<&str>,
+        cache: &Path,
+        env: &[(&str, &str)],
+    ) -> Self {
         let metrics = tempfile::tempdir().unwrap();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_oko"));
         cmd.args(["mcp", "--root"])
@@ -38,6 +47,7 @@ impl Client {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        cmd.envs(env.iter().copied());
         if offline {
             cmd.arg("--no-jev");
         }
@@ -90,23 +100,36 @@ impl Client {
         assert!(response["result"]["capabilities"]["tools"].is_object());
         self.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     }
+    /// Search lines, or startup preparation events, from `OKO_METRICS_FILE`.
+    fn recorded(&self, events: bool) -> Vec<Value> {
+        fs::read_to_string(self.metrics.path().join("metrics.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|line| line.get("event").is_some() == events)
+            .collect()
+    }
+    /// Startup preparation holds the cache lock until its event is recorded.
+    fn wait_for_prewarm(&self) -> Value {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(event) = self.recorded(true).pop() {
+                assert_eq!(event["event"], "prewarm");
+                return event;
+            }
+            assert!(std::time::Instant::now() < deadline, "no prewarm event");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
     /// The agent-visible result, plus the operator's `OKO_METRICS_FILE` line
     /// for a completed search under the test-only `metrics` key.
     fn search(&mut self, args: Value) -> Value {
-        let path = self.metrics.path().join("metrics.jsonl");
-        let lines = |path: &Path| {
-            fs::read_to_string(path)
-                .unwrap_or_default()
-                .lines()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        };
-        let before = lines(&path).len();
+        let before = self.recorded(false).len();
         let mut response = self.request("tools/call", json!({"name":"search","arguments":args}));
-        let recorded = lines(&path);
+        let recorded = self.recorded(false);
         if response["result"]["isError"] == false {
             assert_eq!(recorded.len(), before + 1, "one metrics line per search");
-            response["metrics"] = serde_json::from_str(recorded.last().unwrap()).unwrap();
+            response["metrics"] = recorded.last().unwrap().clone();
         } else {
             assert_eq!(recorded.len(), before, "failed searches record nothing");
         }
@@ -120,10 +143,15 @@ fn stdio_search_reuses_memory_and_disk_preparation_across_server_restarts() {
     let cache = tempfile::tempdir().unwrap();
     let mut client = Client::start_with_cache(root.path(), true, None, cache.path());
     client.initialize();
+    // Startup preparation pays for the cold build; the first search does not.
+    let prewarm = client.wait_for_prewarm();
+    assert_eq!(prewarm["cache"]["status"], "cold");
+    assert_eq!(prewarm["cache"]["rebuiltFiles"], 1);
     let cold = client.search(json!({"question":"authentication token"}));
     let cold_packet = assert_packet_envelope(&cold);
-    assert_eq!(cold_packet["timings"]["cache"]["status"], "cold");
-    assert_eq!(cold_packet["timings"]["cache"]["rebuiltFiles"], 1);
+    assert_eq!(cold_packet["timings"]["cache"]["status"], "memory");
+    assert_eq!(cold_packet["timings"]["cache"]["rebuiltFiles"], 0);
+    assert!(cold_packet["timings"]["cacheWaitMs"].is_u64());
 
     let warm = client.search(json!({"question":"authentication token"}));
     let warm_packet = assert_packet_envelope(&warm);
@@ -135,11 +163,14 @@ fn stdio_search_reuses_memory_and_disk_preparation_across_server_restarts() {
 
     let mut client = Client::start_with_cache(root.path(), true, None, cache.path());
     client.initialize();
+    let prewarm = client.wait_for_prewarm();
+    assert_eq!(prewarm["cache"]["status"], "disk");
+    assert_eq!(prewarm["cache"]["rebuiltFiles"], 0);
     let restarted = client.search(json!({"question":"authentication token"}));
     let restarted_packet = assert_packet_envelope(&restarted);
-    assert_eq!(restarted_packet["timings"]["cache"]["status"], "disk");
-    assert_eq!(restarted_packet["timings"]["cache"]["rebuiltFiles"], 0);
+    assert_eq!(restarted_packet["timings"]["cache"]["status"], "memory");
     assert_eq!(cold_packet["results"], restarted_packet["results"]);
+    assert_eq!(client.recorded(true).len(), 1, "one event per server");
 
     fs::write(
         root.path().join("auth.rs"),
@@ -156,6 +187,42 @@ fn stdio_search_reuses_memory_and_disk_preparation_across_server_restarts() {
             .contains("revoke_authentication")
     );
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+}
+#[test]
+fn without_startup_preparation_the_first_search_does_the_work_itself() {
+    let root = fixture();
+    let cache = tempfile::tempdir().unwrap();
+    let mut client = Client::start_with_env(
+        root.path(),
+        true,
+        None,
+        cache.path(),
+        &[("OKO_NO_PREWARM", "1")],
+    );
+    client.initialize();
+    let first = client.search(json!({"question":"authentication token"}));
+    assert_eq!(
+        assert_packet_envelope(&first)["timings"]["cache"]["status"],
+        "cold"
+    );
+    assert!(client.recorded(true).is_empty());
+    drop(client);
+
+    // Without retained snapshots preparation would only be repeated.
+    let mut client = Client::start_with_env(
+        root.path(),
+        true,
+        None,
+        cache.path(),
+        &[("OKO_NO_CACHE", "1")],
+    );
+    client.initialize();
+    let uncached = client.search(json!({"question":"authentication token"}));
+    assert_eq!(
+        assert_packet_envelope(&uncached)["timings"]["cache"]["status"],
+        "disabled"
+    );
+    assert!(client.recorded(true).is_empty());
 }
 impl Drop for Client {
     fn drop(&mut self) {
