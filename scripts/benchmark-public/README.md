@@ -1,4 +1,158 @@
-# Public-repository pilot
+# Public-repository benchmarks
+
+## Branch comparison: next run
+
+The `branch` suite compares **native search, previous Oko, and current Oko** on
+**nine new tasks × three clients × three repetitions = 243 timed sessions**.
+Six additional short memory-canary sessions run first. Preparation and checks
+make no paid calls; only `--execute` starts client/Jev requests.
+
+```sh
+python3 scripts/benchmark-public/runner.py --suite branch --prepare
+python3 scripts/benchmark-public/selftest.py
+python3 scripts/benchmark-public/runner.py --suite branch --check
+# Start only when ready for the paid run:
+python3 scripts/benchmark-public/runner.py --suite branch --execute
+```
+
+Preparation builds immutable Git snapshots with `cargo build --release --locked
+--offline`, leaving the working checkout untouched. The default previous ref is
+`main`; the current ref is `HEAD`. At setup these resolved to `f08c98b` and
+`887043a`, respectively: this comparison measures compact responses plus startup
+preparation together. Use `--baseline-ref perf/slim-mcp-response` during preparation
+to isolate just the startup-preparation change. Full commit IDs, executable hashes,
+compiler versions, fixtures, validator dependency, runner code, and CLI versions
+are frozen. A cached build is verified, never silently overwritten.
+
+Both Oko versions use **warm disk cache** by default: each session gets its own
+cache built by that session's exact binary, outside the agent timer. No index is
+shared between builds. For a cold comparison, prepare and execute with
+`--cache-policy cold`. `--repeats` defaults to three for this suite. Conditions
+rotate so each occupies every position once for each task/client across three
+repetitions; repository/client order is interleaved. `--clients codex` selects
+81 timed sessions plus two canary sessions. Preparation/execute are mutually
+locked, and changed frozen settings stop execution.
+
+### New tasks
+
+| Repository | Cross-file search 1 | Cross-file search 2 | Edit |
+|---|---|---|---|
+| Astro | Image probing authorization before/after redirects and shared allowlist | Action-path decoding, own-property and forbidden-key guards | Empty first forwarded-header value returns undefined |
+| HTTPX | Content-Encoding selection and reversed decoder chain | Async auth generator lifecycle and conditional body reads | Unknown status reason-phrase fallback |
+| ripgrep | Capture slicing, dollar escaping, named expansion | Per-search printed-byte accounting | Hyphens in replacement capture names |
+
+These are hypothetical, bounded edits, not upstream bug claims. Each edit contract
+must fail on the original and pass on the reference change. Rust validation compiles
+the complete real interpolation module (including existing tests) against the actual
+`memchr` library produced by the pinned Oko build. Its hash and rustc version are
+checked before execution. Source anchors cover the requested decisions, not unrelated
+surrounding lines. The new suite is saved separately as `tasks-branch.json` and
+`benchmarks/results/public-branch/`; old run artifacts are not rewritten.
+
+### Memory isolation and its limits
+
+Every timed session has a fresh checkout and conversation. Codex gets a fresh CLI
+state directory with memories disabled. OpenCode gets separate config, data, state,
+and cache directories; only its login file is linked. Claude auto-memory and session
+persistence are disabled. Repository instructions/skills are stripped from temporary
+checkouts; personal memory is never deleted.
+
+Offline preparation captures Codex/Claude startup requests at a localhost mock
+provider and checks for planted instruction/skill markers; it checks OpenCode's
+resolved configuration. This is a startup/configuration check, not a live recall test.
+Before paid timed tasks, each client receives a random private code in one fresh
+conversation. A second fresh conversation must answer `NO_MEMORY` when asked for the
+previous code. Any leak, tool use, provider error, or unexpected reply blocks the run.
+The six canary sessions and their usage are reported separately. This tests automatic
+carryover, not hostile attempts to read unrelated host files. Provider prompt caches
+remain enabled and are **not** conversational memory.
+
+### Measurements and grading
+
+The report separates uncached input, cache reads, cache writes, output, and additional
+Jev input/output usage. Agent totals are explicitly derived from components when
+providers omit a total; raw provider fields are retained. Unknown values remain
+unavailable. These counts are not dollar costs. Oko search, Jev, startup preparation,
+offline warm-up, tool-call counts, and observable model-round counts are recorded
+separately; nested durations must not be added together. Codex model-round counts are
+unavailable from its current JSON events.
+
+Failed attempts remain in timing/usage summaries. Per-task timing tables use medians
+across repetitions, and JSON keeps every paired task/repetition. The legacy hidden-file
+anchor now covers the actual wiring line; its lowercase-size edit explicitly allows
+updating the error message as well as parser docs. Archived grades remain unchanged.
+
+After a clean interruption, resume with the same suite/cache/repeat/client options:
+
+```sh
+python3 scripts/benchmark-public/runner.py --suite branch --execute \
+  --resume benchmarks/results/public-branch/results-EXAMPLE
+```
+
+Saved infrastructure failures, incomplete canaries, or existing unrecorded sessions
+require inspection; they are never automatically retried.
+
+## Retrieval replay: what Oko returns, without agents
+
+Agent sessions are fast only when one Oko call returns all the code a task
+needs; otherwise the agent keeps searching. `replay/replay.py` measures that directly.
+It collects the distinct questions agents really sent to Oko in earlier
+branch-suite runs (about 170), sends each to every build, and scores the share
+of the task's expected locations inside one response, plus response size and
+Oko/Jev time. No agent sessions run.
+
+```sh
+python3 scripts/benchmark-public/replay/replay.py                 # plan and Jev-call count; sends nothing
+python3 scripts/benchmark-public/replay/replay.py --no-jev        # free, offline: keyword ranking only
+python3 scripts/benchmark-public/replay/replay.py --execute       # paid: one Jev call per question per build
+python3 scripts/benchmark-public/replay/replay.py --execute --build old=PATH --build new=target/release/oko
+python3 scripts/benchmark-public/replay/selftest.py
+```
+
+- Builds default to those frozen by the last branch or smoke `--prepare`; the
+  first build is the baseline. `--tasks` and `--limit N` (questions per task)
+  reduce cost. Results go to `benchmarks/results/public-replay`.
+- Search tasks are scored against their expected anchors, edit tasks against the
+  lines the edit must change. An anchor counts only if one excerpt contains all
+  of it.
+- `--no-jev` checks packaging (excerpt sizes, result counts, response bytes), not
+  relevance.
+- Jev is not deterministic, so compare means over many questions and the
+  difference between gained and lost coverage, not single rows.
+- This cannot show how an agent reacts: turns, trust, or final answers. Use the
+  smoke or branch suite for that.
+
+## Smoke suite: minutes, not hours
+
+The branch suite is 243 sessions. While iterating on a change, use the smoke
+suite instead: the same frozen builds, graders, isolation, and report, reduced to
+the previous and current Oko builds on four branch tasks with Claude alone
+(24 sessions at three repeats).
+
+```sh
+python3 scripts/benchmark-public/runner.py --suite smoke --prepare
+python3 scripts/benchmark-public/runner.py --suite smoke --check
+# Paid calls:
+python3 scripts/benchmark-public/runner.py --suite smoke --execute
+```
+
+- Native search is not rerun. It does not change between Oko builds; take it
+  from the latest branch-suite run.
+- Default tasks are `astro-image-probe-authorization` and
+  `ripgrep-capture-expansion` (where a build lost expected anchors),
+  `astro-action-key-guards` (where Oko clearly helps), and the edit
+  `ripgrep-capture-hyphen` as a control. Choose others with
+  `--tasks id,id`; add clients with `--clients claude,codex`.
+- Builds and the validator dependency are shared with the branch suite under
+  `benchmarks/results/public-branch`, so only a new commit is compiled. Results
+  go to `benchmarks/results/public-smoke`.
+- The two-session memory canary is skipped; the offline isolation preflight
+  still runs during `--prepare`.
+- These tasks were picked because they separated builds before. The suite shows
+  direction and catches regressions; it supports no speed or quality claim.
+  Run the branch suite before reporting anything.
+
+## Legacy cold/warm pilot
 
 Compare Codex, OpenCode, and Claude Code without Oko, with cold Oko, and with warm Oko on **12 tasks / 108 sessions**. This is a small navigation-and-edit benchmark, not a general coding leaderboard. No model calls happen unless `--execute` is supplied.
 

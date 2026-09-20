@@ -47,7 +47,7 @@ class RunnerTests(unittest.TestCase):
             self.assertFalse(r.grade(task,Path('.'),wrong)['passed'])
 
     def test_repo_is_passed_to_the_mcp_launcher(self):
-        with patch.object(r,'original_args',return_value=(['client'],{})):
+        with patch.object(r,'save'), patch.object(r,'original_args',return_value=(['client'],{})):
             _,env=r.args_for({'repositoryName':'astro'},'codex',True,Path('.'),Path('.'))
             self.assertEqual(env['OKO_PUBLIC_BENCH_REPO'],'astro')
 
@@ -109,6 +109,57 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(r.check_cache('warm',[]))
         self.assertTrue(r.check_cache('native',[]))
 
+    def test_execute_preserves_conditions_and_existing_session_guard(self):
+        from types import SimpleNamespace
+        disk = {'status':'disk','rebuiltFiles':0,'reusedFiles':10}
+        settings = dict(repository='source', commit='commit', clients={'codex':'codex'},
+                        versions={'codex':'v'}, oko='oko', archiveSha256='hash',
+                        okoSha256='hash', tasksSha256='hash', implementationSha256='hash',
+                        isolation=r.engine.ISOLATION_VERSION)
+        for condition in r.CONDITIONS:
+            with self.subTest(condition=condition), tempfile.TemporaryDirectory() as temp:
+                root=Path(temp)
+                r.save(root/'astro/settings.json',settings)
+                args=SimpleNamespace(clients=['codex'],resume=None)
+                task={'id':'example','kind':'search'}
+                expected=r.ENGINE_CONDITIONS[condition]
+                observations=[] if condition=='native' else [disk if condition=='warm' else {'status':'cold'}]
+                def run_one(task,client,requested,trials,index):
+                    self.assertEqual(requested,expected)
+                    trial=trials/f'{index:03}-{task["id"]}-{client}-{requested}'
+                    trial.mkdir()
+                    if condition=='warm':
+                        r.save(trial/'warmup.json',{'providerCalls':0,'seconds':0.1})
+                    return dict(id=task['id'],client=client,artifact=str(trial),seconds=1,
+                                grade={'passed':True},oko=condition!='native')
+                with patch.object(r,'STATE',root), patch.object(r.engine,'STATE',root), \
+                     patch.object(r.engine,'SETTINGS',settings), patch.object(r,'digest',return_value='hash'), \
+                     patch.object(r,'implementation_digest',return_value='hash'), \
+                     patch.object(r,'state',return_value={'commit':'commit','status':''}), \
+                     patch.object(r.subprocess,'check_output',return_value='v'), \
+                     patch.object(r,'cache_observations',return_value=observations), \
+                     patch.object(r.engine,'run_one',side_effect=run_one) as run:
+                    schedule=[('astro',task,'codex',condition)]
+                    r.execute(args,schedule)
+                    output=next(root.glob('results-*'))
+                    report=json.loads((output/'report.json').read_text())
+                    self.assertTrue(report['complete'])
+                    # A session without a saved report row must never be paid for twice.
+                    report['runs']=[]
+                    r.save(output/'report.json',report)
+                    args.resume=output
+                    with self.assertRaisesRegex(RuntimeError,'Existing unrecorded session'):
+                        r.execute(args,schedule)
+                    self.assertEqual(run.call_count,1)
+
+    def test_warmup_is_owned_by_shared_session_lifecycle(self):
+        with patch.object(r,'save'), patch.object(r,'prewarm',return_value={'providerCalls':0}) as warmup, \
+             patch.object(r,'original_args',return_value=(['client'],{})):
+            r.engine.prewarm(Path('work'),Path('trial'))
+            r.args_for({'repositoryName':'astro','cacheCondition':'warm'},
+                       'codex','oko-warm',Path('work'),Path('trial'))
+            warmup.assert_called_once_with(Path('work'),Path('trial'),r.engine.SETTINGS)
+
     def test_cache_metadata_parsing_for_three_clients(self):
         packet = {'timings':{'cache':{'status':'disk','rebuiltFiles':0,'reusedFiles':10}}}
         for tool in [
@@ -152,6 +203,242 @@ class RunnerTests(unittest.TestCase):
                 self.assertNotIn('500',snippets)
             finally:
                 client.close()
+
+    def test_branch_plan_pairs_versions_and_balances_each_task(self):
+        from collections import Counter
+        repos=json.loads((r.ROOT/'tasks-branch.json').read_text())['repositories']
+        with patch.object(r,'CONDITIONS',('native','previous','current')):
+            plan=r.plan(repos,list(r.CLIENTS),3)
+        self.assertEqual(len(plan),243)
+        self.assertEqual(len({(n,t['id'],c,k,t['repetition']) for n,t,c,k in plan}),243)
+        for repo in repos:
+            for task in repo['tasks']:
+                for client in r.CLIENTS:
+                    groups=[plan[i:i+3] for i in range(0,len(plan),3)
+                            if plan[i][1]['id']==task['id'] and plan[i][2]==client]
+                    self.assertEqual(len(groups),3)
+                    for position in range(3):
+                        self.assertEqual(Counter(g[position][3] for g in groups),
+                                         {'native':1,'previous':1,'current':1})
+        old={t['id'] for repo in r.REPOSITORIES for t in repo['tasks']}
+        self.assertFalse(old & {t['id'] for repo in repos for t in repo['tasks']})
+
+    def test_token_components_work_without_provider_total(self):
+        for row,expected in [
+            ({'client':'codex','tokens':{'input':100,'cachedInput':70,'output':20,'total':None}},120),
+            ({'client':'claude','tokens':{'input':10,'cacheRead':70,'cacheWrite':20,'output':20,'total':None}},120),
+            ({'client':'opencode','tokens':{'steps':[{'input':30,'output':15,'reasoning':5,'cache':{'read':70,'write':0}}],'total':None}},120),
+        ]:
+            self.assertEqual(r.token_breakdown(row)['total'],expected)
+            self.assertEqual(r.token_breakdown(row)['totalSource'],'derived-from-components')
+        self.assertIsNone(r.token_breakdown({'client':'codex','tokens':{'input':100,'cachedInput':None,'output':2}}))
+        self.assertIsNone(r.token_breakdown({'client':'codex','tokens':{'input':10,'cachedInput':20,'output':2}}))
+        self.assertIsNone(r.measurements({'oko':True})['jev']['inputTokens'])
+        self.assertIsNone(r.measurements({'oko':True})['okoSearchSeconds'])
+
+    def test_jev_measurements_support_both_build_formats_without_double_counting(self):
+        packet={'timings':{'totalMs':600},'retrieval':{'jevCalls':[{'durationNs':500000000,'usage':{'inputTokens':100,'outputTokens':20}}]}}
+        for tool in [
+            {'result':{'structuredContent':packet,'content':[{'text':json.dumps(packet)}]}},
+            {'okoMetrics':[packet]},
+        ]:
+            result=r.measurements({'oko':True,'tools':[tool]})
+            self.assertEqual(result['jev']['inputTokens'],100)
+            self.assertEqual(result['jev']['calls'],1)
+            self.assertEqual(result['okoSearchSeconds'],0.6)
+            self.assertIsNone(result['jev']['cacheReadTokens'])
+
+    def test_new_fixtures_fail_before_and_pass_after(self):
+        repos=json.loads((r.ROOT/'tasks-branch.json').read_text())['repositories']
+        for repo in repos:
+            for task in repo['tasks']:
+                with self.subTest(task=task['id']):
+                    result=r.fixture_check(Path.home()/'dev'/repo['name'],task)
+                    if task['kind']=='edit':
+                        self.assertFalse(result['baseline']['passed'])
+                        self.assertTrue(result['reference']['passed'])
+
+    def test_legacy_anchor_accepts_precise_hidden_wiring(self):
+        task=next(t for repo in r.REPOSITORIES for t in repo['tasks'] if t['id']=='ripgrep-hidden-walk')
+        self.assertEqual(task['expected'][0]['startLine'],906)
+        self.assertEqual(task['expected'][0]['endLine'],906)
+        with patch.object(r,'original_grade',return_value={'correctFirst':True}):
+            answer=json.dumps({'results':[{k:v for k,v in e.items() if k!='sha256'} for e in task['expected']]})
+            self.assertTrue(r.grade(task,Path('.'),answer)['passed'])
+        self.assertTrue(r.within_edit_scope('a\nb\nc\nd\n','A\nb\nc\nD\n',[[1,1],[4,4]]))
+        self.assertFalse(r.within_edit_scope('a\nb\nc\nd\n','A\nB\nc\nD\n',[[1,1],[4,4]]))
+
+    def test_session_settings_and_opencode_state_are_private(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(r,'SUITE','branch'), \
+             patch.object(r,'original_args',return_value=(['client'],{})), \
+             patch.object(r.engine,'SETTINGS',{'oko':'selected-build'}):
+            root=Path(tmp)
+            for label in ('seed','probe'):
+                trial=root/label;trial.mkdir();work=trial/'workspace';work.mkdir()
+                _,env=r.args_for({'repositoryName':'astro'},'opencode','native',work,trial)
+                self.assertEqual(json.loads((trial/'settings.json').read_text())['oko'],'selected-build')
+                for name in ('DATA','STATE','CACHE'):
+                    self.assertTrue(Path(env['XDG_'+name+'_HOME']).is_relative_to(trial))
+
+    def test_memory_canary_fails_closed_on_leakage(self):
+        import isolation_check
+        from unittest.mock import Mock
+        fake=Mock()
+        fake.engine.SETTINGS={}
+        fake.args_for.return_value=(['fake'],{})
+        fake.save=r.save
+        def run(secret_recalled):
+            fake.engine.parse_events.side_effect=[
+                dict(complete=True,providerErrors=[],tools=[],final='READY'),
+                dict(complete=True,providerErrors=[],tools=[],final=secret_recalled)]
+            with tempfile.TemporaryDirectory() as tmp, patch.object(isolation_check.subprocess,'Popen') as proc:
+                proc.return_value.returncode=0
+                return isolation_check.memory_canary(fake,{'timeoutSeconds':1},Path(tmp),['codex'])
+        self.assertTrue(run('NO_MEMORY')['passed'])
+        with self.assertRaisesRegex(RuntimeError,'Memory canary failed'):
+            run('CANARY_leaked_from_previous_session')
+
+    def test_launcher_uses_trial_binary_not_repository_settings(self):
+        import os
+        import subprocess
+        import sys
+        state=r.PROJECT/'benchmarks/results/public-branch/astro'
+        state.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='results-launcher-',dir=state) as tmp:
+            for label in ('previous','current'):
+                trial=Path(tmp)/label/'trial';work=trial/'workspace';work.mkdir(parents=True)
+                binary=trial/'fake-oko'
+                binary.write_text('#!'+sys.executable+'\nprint('+repr(label)+')\n')
+                binary.chmod(0o700)
+                r.save(trial/'settings.json',dict(oko=str(binary),rg='rg',jevModel='offline'))
+                result=subprocess.run([sys.executable,str(r.ROOT/'oko-server.py'),str(work),str(trial/'cache')],
+                                      env=dict(os.environ,TYPESAFE_API_KEY='offline-test'),capture_output=True,text=True,check=True)
+                self.assertEqual(result.stdout.strip(),label)
+
+    def test_both_built_versions_observe_assigned_cache_offline(self):
+        import importlib.util
+        import shutil
+        spec=importlib.util.spec_from_file_location('cache_probe',r.ROOT.parent/'profile-cache.py')
+        profiler=importlib.util.module_from_spec(spec);spec.loader.exec_module(profiler)
+        builds=list((r.PROJECT/'benchmarks/results/public-branch/builds').glob('*/build.json'))
+        self.assertGreaterEqual(len(builds),2,'Prepare the branch builds first')
+        for record in builds:
+            binary=Path(json.loads(record.read_text())['path'])
+            for condition in ('cold','warm'):
+                with self.subTest(build=binary.parent.name,condition=condition),tempfile.TemporaryDirectory() as tmp:
+                    trial=Path(tmp);work=trial/'workspace';work.mkdir()
+                    (work/'sample.rs').write_text('pub fn retry_delay() -> u32 { 123 }\n')
+                    if condition=='warm':
+                        r.prewarm(work,trial,dict(oko=str(binary),rg=shutil.which('rg')))
+                    client=profiler.Client(binary,work,trial/'cache',30,prewarm=True)
+                    try:
+                        client.initialize()
+                        result=client.request('tools/call',{'name':'search','arguments':{'question':'retry_delay','intent':'implementation'}})
+                        self.assertFalse(result.get('isError'))
+                        observed=client.prewarm()
+                        if observed is None:
+                            packet=result.get('structuredContent') or client.last_metrics()
+                            observed=packet['timings']['cache']
+                        self.assertEqual(observed['status'],'cold' if condition=='cold' else 'disk')
+                        if condition=='warm':
+                            self.assertEqual(observed['rebuiltFiles'],0)
+                            self.assertGreater(observed['reusedFiles'],0)
+                    finally:client.close()
+
+    def test_branch_execution_selects_each_binary_with_same_cache_policy(self):
+        from types import SimpleNamespace
+        import isolation_check
+        settings=dict(builds={label:{'path':label,'sha256':'hash'} for label in ('previous','current')})
+        seen=[]
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            task=dict(id='task',kind='search',repetition=1)
+            args=SimpleNamespace(clients=['codex'],resume=None,repeats=1)
+            def one(task,client,condition,trials,index):
+                seen.append((condition,r.engine.SETTINGS['oko']))
+                trial=trials/f'{index:03}-task-{client}-{condition}';trial.mkdir()
+                if condition=='oko-warm':r.save(trial/'warmup.json',{'seconds':0.1})
+                return dict(id='task',client=client,artifact=str(trial),seconds=1,grade={'passed':True})
+            # Exercise the real execution loop. Frozen-state verification is tested separately.
+            settings.update(repository='source',commit='commit',archiveSha256='hash',oko='current',okoSha256='hash',tasksSha256='hash')
+            with patch.object(r,'SUITE','branch'),patch.object(r,'STATE',root), \
+                 patch.object(r.engine,'STATE',root),patch.object(r.engine,'SETTINGS',{}), \
+                 patch.object(r,'CONDITIONS',('native','previous','current')), \
+                 patch.object(r,'ENGINE_CONDITIONS',{'native':'native','previous':'oko-warm','current':'oko-warm'}), \
+                 patch.object(r,'verify_settings',return_value={'astro':settings}), \
+                 patch.object(r,'state',return_value={'commit':'commit','status':''}), \
+                 patch.object(r,'digest',return_value='hash'), \
+                 patch.object(r,'cache_observations',return_value=[]), \
+                 patch.object(r,'check_cache',return_value=True), \
+                 patch.object(isolation_check,'memory_canary',return_value={'passed':True,'complete':True}), \
+                 patch.object(r.engine,'run_one',side_effect=one):
+                r.execute(args,[('astro',task,'codex',c) for c in ('native','previous','current')])
+            self.assertEqual(seen,[('native','current'),('oko-warm','previous'),('oko-warm','current')])
+
+    def test_frozen_branch_verification_rejects_modified_binary(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            state=Path(tmp)
+            settings=dict(repository='source',commit='commit',oko='current',archiveSha256='hash',
+                          okoSha256='hash',tasksSha256='hash',implementationSha256='hash',
+                          isolation=r.engine.ISOLATION_VERSION,repeats=3,cachePolicy='warm',
+                          builds={'previous':{'path':'previous','sha256':'expected'},'current':{'path':'current','sha256':'hash'}})
+            r.save(state/'astro/settings.json',settings)
+            with patch.object(r,'STATE',state),patch.object(r,'SUITE','branch'), \
+                 patch.object(r,'digest',return_value='hash'),patch.object(r,'implementation_digest',return_value='hash'):
+                with self.assertRaisesRegex(RuntimeError,'Frozen build changed'):
+                    r.verify_settings(SimpleNamespace(repeats=3,cache_policy='warm'),[('astro',{},'codex','previous')])
+
+    def test_branch_report_uses_all_repetitions_and_paired_differences(self):
+        from reporting import render
+        rows=[]
+        for repeat,old,new in [(1,10,5),(2,20,10),(3,30,15)]:
+            for condition,seconds in [('native',old),('previous',old),('current',new)]:
+                rows.append(dict(repository='astro',id='task',client='codex',condition=condition,
+                                 repetition=repeat,seconds=seconds,grade={'passed':True}))
+        text=render(dict(runs=rows,plan=rows,complete=True,suite='branch',repeats=3),['codex'],['native','previous','current'])
+        self.assertIn('20.00s | 20.00s | 10.00s',text)
+        self.assertIn('| codex | previous | 3 | -10.00 | -50.0% |',text)
+        self.assertIn('unavailable',text)
+
+    def test_smoke_suite_is_a_short_build_comparison_without_native_or_memory_canary(self):
+        import subprocess, sys
+        def run(*extra):
+            return subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','smoke',*extra],capture_output=True,text=True)
+        listed=run()
+        self.assertEqual(listed.returncode,0,listed.stderr)
+        lines=listed.stdout.splitlines()
+        self.assertIn("24 sessions; suite=smoke; repeats=3; conditions=('previous', 'current')",lines[0])
+        sessions=[line.split() for line in lines[1:]]
+        self.assertEqual({s[-2] for s in sessions},{'claude'})
+        self.assertEqual({s[-3] for s in sessions},set(r.SMOKE_TASKS))
+        # Every task and repetition compares both builds, and neither build always runs first.
+        pairs={}
+        for s in sessions:pairs.setdefault((s[1],s[-3]),[]).append(s[-1])
+        self.assertTrue(all(sorted(v)==['current','previous'] for v in pairs.values()))
+        self.assertEqual({v[0] for v in pairs.values()},{'current','previous'})
+        self.assertEqual({t for repo in json.loads((r.ROOT/'tasks-branch.json').read_text())['repositories']
+                          for t in [x['kind'] for x in repo['tasks'] if x['id'] in r.SMOKE_TASKS]},{'search','edit'})
+        chosen=run('--tasks','httpx-decoder-chain','--clients','claude,codex','--repeats','1')
+        self.assertIn('4 sessions',chosen.stdout.splitlines()[0])
+        self.assertNotEqual(run('--tasks','not-a-task').returncode,0)
+        self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--tasks','httpx-decoder-chain'],
+                                           capture_output=True).returncode,0)
+        with patch.object(r,'SUITE','smoke'):
+            self.assertTrue(r.compares_builds())
+        self.assertFalse(r.compares_builds())
+
+    def test_smoke_report_pairs_builds_and_states_its_limits(self):
+        from reporting import render
+        rows=[dict(repository='astro',id='task',client='claude',condition=condition,repetition=repeat,
+                   seconds=seconds,grade={'passed':condition=='current'})
+              for repeat in (1,2,3) for condition,seconds in (('previous',10),('current',8))]
+        text=render(dict(runs=rows,plan=rows,complete=True,suite='smoke',repeats=3),['claude'],['previous','current'])
+        self.assertIn('| claude | previous | 0/3 | 10.00 |',text)
+        self.assertIn('| claude | current | 3/3 | 8.00 |',text)
+        self.assertIn('| claude | previous | 3 | -2.00 | -20.0% |',text)
+        self.assertNotIn('| claude | native |',text)
+        self.assertIn('supports no speed or quality claim',text)
 
     def test_report_includes_failed_attempts(self):
         with tempfile.TemporaryDirectory() as temp:

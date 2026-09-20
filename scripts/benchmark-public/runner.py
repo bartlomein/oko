@@ -13,6 +13,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import contextlib
+import fcntl
+from measurements import token_breakdown, measurements
 
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT.parents[1]
@@ -21,7 +24,22 @@ FIXTURE = ROOT / 'tasks.json'
 REPOSITORIES = json.loads(FIXTURE.read_text())['repositories']
 CLIENTS = ('codex', 'opencode', 'claude')
 CONDITIONS = ('native', 'cold', 'warm')
+ENGINE_CONDITIONS = {'native': 'native', 'cold': 'oko-cold', 'warm': 'oko-warm'}
 CACHE_POLICY = 'cold-vs-prebuilt-disk-v1'
+SUITE = 'legacy'
+# Frozen per-commit builds and the validator dependency are shared by every
+# suite that compares builds, so a smoke run never rebuilds what branch built.
+BUILD_STATE = PROJECT / 'benchmarks/results/public-branch'
+# Minutes instead of hours: tasks that separated builds in full runs (a missed
+# anchor behind a short excerpt, a partly covered trace), one that Oko clearly
+# helps, and one edit as a control. Too few tasks for any claim; use the branch
+# suite before reporting results.
+SMOKE_TASKS = ('astro-image-probe-authorization', 'astro-action-key-guards',
+               'ripgrep-capture-expansion', 'ripgrep-capture-hyphen')
+
+
+def compares_builds():
+    return SUITE in ('branch', 'smoke')
 SPEC = importlib.util.spec_from_file_location('public_engine', ROOT.parent / 'benchmark-twenty/runner.py')
 engine = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(engine)
@@ -43,7 +61,7 @@ def digest(path):
 
 
 def implementation_digest():
-    paths = sorted(ROOT.glob('*.py')) + [ROOT.parent / 'benchmark-twenty' / f for f in ('runner.py', 'oko-server.py')]
+    paths = sorted(ROOT.glob('*.py')) + [ROOT.parent / 'benchmark-twenty' / f for f in ('runner.py', 'oko-server.py', 'isolation-smoke.py')] + [ROOT.parent / 'benchmark_observability.py']
     return hashlib.sha256(''.join(digest(p) for p in paths).encode()).hexdigest()
 
 
@@ -87,7 +105,7 @@ def fixture_check(repo, task):
         return {'id': task['id'], 'anchorsVerified': True}
     with tempfile.TemporaryDirectory(prefix='oko-contract-') as temp:
         work = Path(temp)
-        files = [task['path']]
+        files = [task['path'], *task.get('dependencies', [])]
         if task['id'].startswith('httpx-'):
             files.append('httpx/_types.py')
         for name in files:
@@ -103,6 +121,12 @@ def fixture_check(repo, task):
 
 
 def prepare(args):
+    if compares_builds():
+        from builds import prepare_builds
+        builds = prepare_builds(PROJECT, BUILD_STATE, args.baseline_ref, args.current_ref)
+        args.oko = Path(builds['current']['path'])
+        from isolation_check import check_isolation
+        isolation = check_isolation(ROOT, STATE)
     clients = {c: shutil.which(c) for c in CLIENTS}
     if not all(clients.values()):
         raise RuntimeError('Install the three clients before preparing')
@@ -125,27 +149,46 @@ def prepare(args):
                         rg=shutil.which('rg'), jevModel='jev-1.13.0', archiveSha256=digest(archive),
                         okoSha256=digest(args.oko), tasksSha256=digest(FIXTURE), implementationSha256=implementation_digest(),
                         isolation=engine.ISOLATION_VERSION)
+        if compares_builds():
+            settings.update(builds=builds, suite=SUITE, repeats=args.repeats,
+                            cachePolicy=args.cache_policy, isolationCheck=isolation,
+                            tasks=[t['id'] for t in item['tasks']],
+                            validatorLibrarySha256=digest(BUILD_STATE/'libmemchr.rlib'),
+                            runtimeVersions={name: subprocess.check_output([name, '--version'], text=True).strip()
+                                             for name in ('node', 'rustc')}, pythonVersion=sys.version)
         if state(repo) != initial:
             raise RuntimeError('Source changed during preparation')
         save(dest / 'settings.json', settings)
         save(dest / 'preflight.json', {'checks': checks, 'sourceUnchanged': True})
-        print(f"Prepared {item['name']}: 2 searches, 2 edits; executable edit checks fail before/pass after", flush=True)
+        print(f"Prepared {item['name']}: {len(item['tasks'])} tasks; executable edit checks fail before/pass after", flush=True)
+    save(STATE/'plan.json',{
+        'suite':SUITE,'repeats':args.repeats,'cachePolicy':CACHE_POLICY,
+        'memoryCanarySessions':2*len(args.clients) if SUITE=='branch' else 0,
+        'sessions':[{'repository':name,'task':task['id'],'client':client,
+                     'condition':condition,'repetition':task['repetition']}
+                    for name,task,client,condition in plan(REPOSITORIES,args.clients,args.repeats)]})
 
 
-def plan(repos, clients):
+def plan(repos, clients, repeats=1):
     result = []
-    # Six permutations repeated evenly: each condition occupies each position
-    # four times per client over the twelve tasks.
+    # Rotate each task/client order across repeats: at three repeats every
+    # condition occupies every position once. Base permutations vary by task.
     import itertools
     orders = list(itertools.permutations(CONDITIONS))
-    for task_index in range(4):
-        for repo_index, item in enumerate(repos):
-            offset = (task_index + repo_index) % len(clients)
-            task_number = task_index * len(repos) + repo_index
-            for c in clients[offset:] + clients[:offset]:
-                conditions = orders[(task_number + CLIENTS.index(c)) % len(orders)]
-                for condition in conditions:
-                    result.append((item['name'], item['tasks'][task_index], c, condition))
+    for repeat in range(repeats):
+        for task_index in range(max(len(r['tasks']) for r in repos)):
+            for repo_index, item in enumerate(repos):
+                if task_index >= len(item['tasks']):
+                    continue
+                offset = (task_index + repo_index) % len(clients)
+                task_number = task_index * len(repos) + repo_index
+                for c in clients[offset:] + clients[:offset]:
+                    conditions = orders[(task_number + CLIENTS.index(c)) % len(orders)]
+                    shift = repeat % len(conditions)
+                    conditions = conditions[shift:] + conditions[:shift]
+                    for condition in conditions:
+                        task = dict(item['tasks'][task_index], repetition=repeat + 1)
+                        result.append((item['name'], task, c, condition))
     return result
 
 
@@ -171,12 +214,23 @@ def prewarm(work, trial, settings):
     return result
 
 
-def args_for(task, client, enabled, work, trial):
-    if task.get('cacheCondition') == 'warm':
-        # Shared engine starts its agent timer after args_for returns.
-        prewarm(work, trial, engine.SETTINGS)
-    args, env = original_args(task, client, enabled, work, trial)
+def args_for(task, client, condition, work, trial):
+    # Pin the selected executable per session; never read mutable repo-wide settings.
+    save(trial/'settings.json', engine.SETTINGS)
+    args, env = original_args(task, client, condition, work, trial)
     env['OKO_PUBLIC_BENCH_REPO'] = task['repositoryName']
+    if compares_builds() and client == 'opencode':
+        # Separate both conversation storage and configuration. Link login state only.
+        original_data = Path(os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share')))
+        for name in ('DATA', 'STATE', 'CACHE'):
+            folder = trial/'harness-config'/name.lower()
+            folder.mkdir(parents=True, exist_ok=True)
+            env['XDG_'+name+'_HOME'] = str(folder)
+        auth = original_data/'opencode/auth.json'
+        if auth.is_file():
+            target = Path(env['XDG_DATA_HOME'])/'opencode/auth.json'
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(auth.resolve())
     return args, env
 
 
@@ -235,11 +289,13 @@ def check_cache(condition, observations):
     if not observations:
         return False
     first = observations[0]
-    return (first.get('status') == 'cold' if condition == 'cold'
+    return (first.get('status') == 'cold' if ENGINE_CONDITIONS[condition] == 'oko-cold'
             else first.get('status') == 'disk' and first.get('rebuiltFiles') == 0 and first.get('reusedFiles', 0) > 0)
 
 
 def prompt(task, enabled):
+    if task.get('memoryCanary'):
+        return task['question']
     text = original_prompt(task, enabled)
     if task['kind'] == 'edit':
         text = text.replace('this fixture evaluates retrieval and a bounded patch without application dependencies',
@@ -249,9 +305,9 @@ def prompt(task, enabled):
 
 
 def within_edit_scope(baseline, actual, allowed):
-    start, end = allowed
+    ranges = [allowed] if isinstance(allowed[0], int) else allowed
     changes = difflib.SequenceMatcher(None, baseline.splitlines(), actual.splitlines(), autojunk=False).get_opcodes()
-    return all(tag == 'equal' or (start - 1 <= a <= b <= end) for tag, a, b, _, _ in changes)
+    return all(tag == 'equal' or any(start - 1 <= a <= b <= end for start, end in ranges) for tag, a, b, _, _ in changes)
 
 
 def grade(task, work, final):
@@ -271,7 +327,7 @@ def grade(task, work, final):
     if not path.is_file() or path.is_symlink() or unexpected:
         return {'passed': False, 'unexpectedFiles': unexpected, 'reason': 'Target missing/symlink or unrelated edits'}
     baseline = engine.git(work, 'show', 'HEAD:' + task['path']).decode()
-    if not within_edit_scope(baseline, path.read_text(), task['allowedLines']):
+    if not within_edit_scope(baseline, path.read_text(), task.get('allowedRanges', task['allowedLines'])):
         return {'passed': False, 'reason': 'Changes outside the requested implementation; review required'}
     result = validate(task, work)
     save(work.parent / 'validation.json', result)
@@ -281,55 +337,18 @@ def grade(task, work, final):
 
 
 engine.args_for = args_for
+engine.prewarm = lambda work, trial: prewarm(work, trial, engine.SETTINGS)
 engine.prompt = prompt
 engine.grade = grade
 
 
-def token_breakdown(row):
-    t = row.get('tokens') or {}
-    if not t or t.get('total') is None:
-        return None
-    if row['client'] == 'codex':
-        return dict(total=t['total'], uncachedInput=t['input']-t['cachedInput'], cacheRead=t['cachedInput'], cacheWrite=0, output=t['output'])
-    if row['client'] == 'claude':
-        return dict(total=t['total'], uncachedInput=t['input'], cacheRead=t['cacheRead'], cacheWrite=t['cacheWrite'], output=t['output'])
-    steps = t['steps']
-    return dict(total=t['total'], uncachedInput=sum(s['input'] for s in steps), cacheRead=sum(s['cache']['read'] for s in steps),
-                cacheWrite=sum(s['cache']['write'] for s in steps), output=sum(s['output']+s.get('reasoning',0) for s in steps))
-
-
 def report(output, data):
+    from reporting import render
     save(output / 'report.json', data)
-    lines = ['# Public repository pilot', '', f"Sessions: {len(data['runs'])}/{len(data['plan'])}. Complete: {data['complete']}.", '',
-             '| Client | Condition | Passed/attempted | Median seconds (all attempts) | Agent tokens |', '|---|---|---:|---:|---:|']
-    for c in CLIENTS:
-        for condition in CONDITIONS:
-            rows = [r for r in data['runs'] if r['client']==c and r['condition']==condition]
-            if not rows:
-                continue
-            tokens = [token_breakdown(r) for r in rows]
-            total = sum(t['total'] for t in tokens) if all(t is not None for t in tokens) else 'unavailable'
-            passed = sum(r.get('grade',{}).get('passed',False) and not r.get('error') for r in rows)
-            lines.append(f"| {c} | {condition} | {passed}/{len(rows)} | {statistics.median(r['seconds'] for r in rows):.2f} | {total} |")
-    lines += ['', 'Each condition has the same tasks. Failed attempts remain in the timing table; inspect success rates before claiming a speed win.',
-              'Fresh checkout and conversation per session. Cold = empty index; warm = prebuilt disk index with a fresh MCP process. Offline warm-up time is recorded separately and excluded from agent latency. Skills/custom instructions disabled.',
-              'Token totals include provider-cached input and exclude Jev; they are not cost estimates. Full token breakdowns and per-task timings are in report.json.',
-              'One repetition per task; 12 tasks across 3 repositories. Focused module checks are not full application correctness. No provider cache clearing.',
-              'Warm does not measure a persistent in-memory MCP server or a cached Jev answer. Provider requests still run normally.',
-              'Models differ across clients; compare with/without Oko within each client. All attempts, failures, and timeouts are retained.']
-    warmups = [r['warmup']['seconds'] for r in data['runs'] if r.get('warmup')]
-    if warmups:
-        lines += ['', f'Offline warm-up: median {statistics.median(warmups):.2f}s across {len(warmups)} sessions (excluded from agent timing; no provider calls).']
-    lines += ['', '| Repository | Task | Client | Without Oko | Cold Oko | Warm Oko | All passed |', '|---|---|---|---:|---:|---:|---|']
-    for name, task_id, client in dict.fromkeys((x['repository'], x['id'], x['client']) for x in data['runs']):
-        pair = [next((x for x in data['runs'] if x['repository']==name and x['id']==task_id and x['client']==client and x['condition']==condition), None) for condition in CONDITIONS]
-        times = [f"{x['seconds']:.2f}s" if x else 'pending' for x in pair]
-        passed = all(x and not x.get('error') and x.get('grade',{}).get('passed') for x in pair)
-        lines.append(f'| {name} | {task_id} | {client} | {times[0]} | {times[1]} | {times[2]} | {passed} |')
-    (output / 'report.md').write_text('\n'.join(lines)+'\n')
+    (output / 'report.md').write_text(render(data, CLIENTS, CONDITIONS))
 
 
-def execute(args, schedule):
+def verify_settings(args, schedule):
     settings = {}
     for name in dict.fromkeys(p[0] for p in schedule):
         folder = STATE / name
@@ -339,13 +358,34 @@ def execute(args, schedule):
                 raise RuntimeError('Frozen artifact changed; prepare again: '+str(path))
         if s['implementationSha256'] != implementation_digest() or s['isolation'] != engine.ISOLATION_VERSION:
             raise RuntimeError('Runner changed; prepare again')
+        if compares_builds():
+            if s['repeats'] != args.repeats or s['cachePolicy'] != args.cache_policy:
+                raise RuntimeError('Frozen repetitions/cache policy changed; prepare again')
+            selected = [t['id'] for item in REPOSITORIES if item['name'] == name for t in item['tasks']]
+            # Only the smoke suite's task list can vary between preparations.
+            if SUITE == 'smoke' and (s.get('suite') != SUITE or s.get('tasks') != selected):
+                raise RuntimeError('Frozen suite/task selection changed; prepare again')
+            for build in s['builds'].values():
+                if digest(Path(build['path'])) != build['sha256']:
+                    raise RuntimeError('Frozen build changed; prepare again')
+            if digest(BUILD_STATE/'libmemchr.rlib') != s['validatorLibrarySha256']:
+                raise RuntimeError('Validator dependency changed; prepare again')
+            if not s['isolationCheck'].get('passed'):
+                raise RuntimeError('Isolation preflight required')
+            if s['pythonVersion'] != sys.version or any(subprocess.check_output([name,'--version'],text=True).strip()!=version for name,version in s['runtimeVersions'].items()):
+                raise RuntimeError('Validation runtime changed; prepare again')
         if state(Path(s['repository'])) != {'commit':s['commit'],'status':''}:
             raise RuntimeError('Source changed; no reset performed')
         for c in args.clients:
             if subprocess.check_output([s['clients'][c],'--version'],text=True).strip()!=s['versions'][c]:
                 raise RuntimeError('CLI version changed; prepare again')
         settings[name]=s
-    ids = [{'repository':n,'task':t['id'],'client':c,'condition':condition} for n,t,c,condition in schedule]
+    return settings
+
+
+def execute(args, schedule):
+    settings = verify_settings(args, schedule)
+    ids = [{'repository':n,'task':t['id'],'client':c,'condition':condition,'repetition':t.get('repetition',1)} for n,t,c,condition in schedule]
     if args.resume:
         output=args.resume.resolve()
         if output.parent != STATE.resolve() or not output.name.startswith('results-'):
@@ -353,37 +393,54 @@ def execute(args, schedule):
         data=json.loads((output/'report.json').read_text())
         if data['plan']!=ids or data['settings']!=settings or data.get('cachePolicy')!=CACHE_POLICY:
             raise ValueError('Resume plan/settings changed')
+        if any(r.get('error') and r.get('errorType')!='answer' for r in data['runs']):
+            raise RuntimeError('Saved infrastructure failure requires inspection before resuming')
     else:
         output=Path(tempfile.mkdtemp(prefix='results-',dir=STATE))
-        data={'plan':ids,'settings':settings,'runs':[],'complete':False,'isolation':engine.ISOLATION_VERSION,'cachePolicy':CACHE_POLICY}
+        data={'plan':ids,'settings':settings,'runs':[],'complete':False,'isolation':engine.ISOLATION_VERSION,'cachePolicy':CACHE_POLICY,'repeats':getattr(args,'repeats',1),'suite':SUITE}
     print('Results: '+str(output),flush=True)
     report(output,data)
+    if SUITE == 'branch' and not data.get('memoryCanary',{}).get('complete'):
+        if (output/'memory-canary').exists():
+            raise RuntimeError('Incomplete memory canary exists; inspect before restarting paid calls')
+        from isolation_check import memory_canary
+        # Pass this module without importing a second mutable runner instance.
+        data['memoryCanary']=memory_canary(sys.modules[__name__],next(iter(settings.values())),output,args.clients)
+        report(output,data)
     try:
         for i,(name,task,client,condition) in enumerate(schedule,1):
             if i<=len(data['runs']):
                 continue
             engine.STATE=STATE/name
-            engine.SETTINGS=settings[name]
-            on = condition != 'native'
+            engine.SETTINGS=dict(settings[name])
+            if compares_builds():
+                selected = settings[name]['builds']['current' if condition=='native' else condition]
+                engine.SETTINGS.update(oko=selected['path'],okoSha256=selected['sha256'])
+            engine_condition = ENGINE_CONDITIONS[condition]
             trials=engine.STATE/output.name/condition
             trials.mkdir(parents=True,exist_ok=True,mode=0o700)
-            trial=trials/f"{i:03}-{task['id']}-{client}-{'oko' if on else 'native'}"
+            trial=trials/f"{i:03}-{task['id']}-{client}-{engine_condition}"
             if trial.exists():
                 # Never silently repeat a possibly billed interrupted session.
                 raise RuntimeError('Existing unrecorded session requires inspection: '+str(trial))
             print(f'START {i}/{len(schedule)} {name} {task["id"]} {client} condition={condition}',flush=True)
-            row=engine.run_one({**task,'repositoryName':name,'cacheCondition':condition},client,on,trials,i)
+            row=engine.run_one({**task,'repositoryName':name,'cacheCondition':condition},client,engine_condition,trials,i)
             row['repository']=name
             row['condition']=condition
+            row['repetition']=task.get('repetition',1)
+            if compares_builds():
+                row['build']=None if condition=='native' else selected
             row['cacheObservations']=cache_observations(row)
             row['cacheConditionVerified']=check_cache(condition,row['cacheObservations'])
-            if condition == 'warm':
-                row['warmup']=json.loads((Path(row['artifact'])/'warmup.json').read_text())
+            if engine_condition == 'oko-warm':
+                warmup=Path(row['artifact'])/'warmup.json'
+                if warmup.exists():row['warmup']=json.loads(warmup.read_text())
             if not row['cacheConditionVerified']:
                 row['cacheCheckError']='Observed Oko cache did not match assigned condition'
                 row.setdefault('error', row['cacheCheckError'])
                 row['errorType']='infrastructure'
             row['tokenBreakdown']=token_breakdown(row)
+            row['measurements']=measurements(row)
             save(Path(row['artifact'])/'result.json',row)
             data['runs'].append(row)
             report(output,data)
@@ -392,18 +449,22 @@ def execute(args, schedule):
     finally:
         data['sourceUnchanged']=all(state(Path(s['repository']))=={'commit':s['commit'],'status':''} for s in settings.values())
         data['artifactsUnchanged']=all(digest(STATE/n/'baseline.tar')==s['archiveSha256'] and digest(s['oko'])==s['okoSha256'] for n,s in settings.items()) and digest(FIXTURE)==next(iter(settings.values()))['tasksSha256']
+        if compares_builds():
+            data['artifactsUnchanged'] &= all(digest(Path(b['path']))==b['sha256'] for s in settings.values() for b in s['builds'].values())
         data['complete']=len(data['runs'])==len(schedule) and data['sourceUnchanged'] and data['artifactsUnchanged']
         report(output,data)
     print(output)
 
 
 def main():
+    global SUITE, STATE, FIXTURE, REPOSITORIES, CONDITIONS, ENGINE_CONDITIONS, CACHE_POLICY
     p=argparse.ArgumentParser(description=__doc__)
     action=p.add_mutually_exclusive_group()
     action.add_argument('--prepare',action='store_true',help='Freeze clones/binary/models and verify edit graders; no paid calls')
     action.add_argument('--execute',action='store_true',help='Start paid model/Jev sessions')
+    action.add_argument('--check',action='store_true',help='Verify all frozen artifacts without model calls')
     p.add_argument('--repositories',type=Path,default=Path.home()/'dev')
-    p.add_argument('--clients',default=','.join(CLIENTS))
+    p.add_argument('--clients',help='Comma-separated; default all three, or claude alone for the smoke suite')
     p.add_argument('--resume',type=Path)
     p.add_argument('--oko',type=Path,default=PROJECT/'target/release/oko')
     p.add_argument('--codex-model',default='gpt-5.6-sol')
@@ -411,17 +472,67 @@ def main():
     p.add_argument('--claude-model',default='claude-sonnet-5')
     p.add_argument('--effort',choices=('low','medium','high'),default='low')
     p.add_argument('--timeout',type=int,default=180)
-    args=p.parse_args();args.clients=args.clients.split(',')
+    p.add_argument('--suite', choices=('legacy','branch','smoke'), default='legacy',
+                   help='smoke: previous vs current build on a few branch tasks, minutes not hours; direction only')
+    p.add_argument('--tasks',help='Smoke suite only: comma-separated branch task ids (default: '+','.join(SMOKE_TASKS)+')')
+    p.add_argument('--repeats',type=int)
+    p.add_argument('--cache-policy',choices=('cold','warm'),default='warm')
+    p.add_argument('--baseline-ref',default='main')
+    p.add_argument('--current-ref',default='HEAD')
+    args=p.parse_args()
+    SUITE=args.suite
+    args.clients=(args.clients or ('claude' if SUITE=='smoke' else ','.join(CLIENTS))).split(',')
+    if args.tasks and SUITE!='smoke':p.error('--tasks requires --suite smoke')
+    args.repeats=args.repeats if args.repeats is not None else (3 if compares_builds() else 1)
+    if args.repeats<1:p.error('Repeats must be positive')
+    if SUITE=='branch':
+        STATE=PROJECT/'benchmarks/results/public-branch'
+        FIXTURE=ROOT/'tasks-branch.json'
+        REPOSITORIES=json.loads(FIXTURE.read_text())['repositories']
+        CONDITIONS=('native','previous','current')
+        ENGINE_CONDITIONS={'native':'native','previous':'oko-'+args.cache_policy,'current':'oko-'+args.cache_policy}
+        CACHE_POLICY=args.cache_policy
+    if SUITE=='smoke':
+        # Native search does not change between Oko builds; reuse a full run for it.
+        STATE=PROJECT/'benchmarks/results/public-smoke'
+        FIXTURE=ROOT/'tasks-branch.json'
+        wanted=args.tasks.split(',') if args.tasks else list(SMOKE_TASKS)
+        available={t['id'] for item in json.loads(FIXTURE.read_text())['repositories'] for t in item['tasks']}
+        if len(set(wanted))!=len(wanted) or not set(wanted)<=available:p.error('Unknown or repeated smoke task; choose from: '+', '.join(sorted(available)))
+        REPOSITORIES=[dict(item,tasks=[t for t in item['tasks'] if t['id'] in wanted])
+                      for item in json.loads(FIXTURE.read_text())['repositories']]
+        REPOSITORIES=[item for item in REPOSITORIES if item['tasks']]
+        CONDITIONS=('previous','current')
+        ENGINE_CONDITIONS={'previous':'oko-'+args.cache_policy,'current':'oko-'+args.cache_policy}
+        CACHE_POLICY=args.cache_policy
     if not args.clients or len(set(args.clients))!=len(args.clients) or any(c not in CLIENTS for c in args.clients):p.error('Invalid clients')
     if args.timeout<1:p.error('Timeout must be positive')
     if args.resume and not args.execute:p.error('--resume requires --execute')
     if args.prepare:
-        prepare(args);return
-    schedule=plan(REPOSITORIES,args.clients)
+        with suite_lock():prepare(args)
+        return
+    schedule=plan(REPOSITORIES,args.clients,args.repeats)
+    if args.check:
+        with suite_lock():
+            verify_settings(args,schedule)
+            print(f'Ready: {len(schedule)} timed sessions; '+(f'{2*len(args.clients)} memory-canary sessions; ' if SUITE=='branch' else '')+'no model calls made.')
+        return
     if args.execute:
-        execute(args,schedule);return
-    print(f'{len(schedule)} sessions; 2 searches + 2 edits per repository. No model calls.')
-    for i,(name,t,c,condition) in enumerate(schedule,1):print(f'{i:03} {name} {t["kind"]} {t["id"]} {c} {condition}')
+        with suite_lock():execute(args,schedule)
+        return
+    print(f'{len(schedule)} sessions; suite={SUITE}; repeats={args.repeats}; conditions={CONDITIONS}. No model calls.')
+    for i,(name,t,c,condition) in enumerate(schedule,1):print(f'{i:03} repeat={t["repetition"]} {name} {t["kind"]} {t["id"]} {c} {condition}')
+
+
+@contextlib.contextmanager
+def suite_lock():
+    STATE.mkdir(parents=True,exist_ok=True)
+    with (STATE/'.lock').open('w') as lock:
+        try:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('This suite is already preparing or running')
+        yield
 
 
 if __name__=='__main__':
