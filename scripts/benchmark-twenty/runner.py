@@ -818,10 +818,12 @@ def main():
     def save_report():
         nonlocal canary
         report['summary'] = summary(rows)
-        save(output / 'report.json', report)
-        if args.pilot and rows and canary is None:
-            canary = canary_result(rows, chosen, clients, versions, run_id + '-canary')
+        if args.pilot:
+            # Recompute from the full pilot, including when resuming older reports.
+            canary = (canary_result(rows, chosen, clients, versions, run_id + '-canary')
+                      if len(rows) == len(plan) else None)
             report['canary'] = canary
+        save(output / 'report.json', report)
         lines = [f'# {PROJECT_NAME} benchmark', '', f"Completed: {report['complete']}. Sessions: {len(rows)}/{len(plan)}.", '', f"Canary: {canary['status'] if canary else 'not-run (pilot itself is the canary)'}.", '', '| Client | Model | Effort | Task kind | Requested | Observed cache | Completed / attempted | First / top five | Exact patches | Review | Median seconds |', '|---|---|---|---|---|---|---|---|---|---|---|']
         for row in report['summary']:
             seconds = f"{row['medianSeconds']:.2f}" if row['medianSeconds'] is not None else 'N/A'

@@ -326,6 +326,70 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(r.check_condition('oko-warm', [{'status': 'disk', 'rebuiltFiles': 0, 'reusedFiles': 4}]))
         self.assertFalse(r.check_condition('oko-warm', [{'status': 'memory', 'rebuiltFiles': 0, 'reusedFiles': 4}]))
 
+    def test_pilot_canary_waits_for_all_sessions_and_updates_every_report(self):
+        for resume in (False, True):
+            for failed in (False, True):
+                with self.subTest(resume=resume, failed=failed):
+                    state = Path(self.temp.name).resolve() / f'pilot-{resume}-{failed}'
+                    state.mkdir()
+                    settings = dict(r.SETTINGS, commit='a' * 40, versions={'codex': 'test'},
+                                    archiveSha256='b' * 64, tasksSha256='b' * 64,
+                                    okoSha256='b' * 64, oko='unused', effort='medium')
+                    r.save(state / 'settings.json', settings)
+
+                    def row(task, complete=True):
+                        result = dict(id=task['id'], kind=task['kind'], client='codex',
+                                      condition='native', observedCacheState='native', oko=False,
+                                      complete=complete, providerErrors=[] if complete else ['failed'],
+                                      seconds=1, durationNs=1000000000, tools=[],
+                                      okoCalls=0, toolCalls=0, grade={})
+                        if not complete:
+                            result['error'] = 'client failed'
+                        return result
+
+                    argv = ['runner.py', '--pilot', '--execute', '--clients', 'codex',
+                            '--condition', 'native']
+                    if resume:
+                        output = state / 'results-resume'
+                        output.mkdir()
+                        r.save(output / 'report.json', {
+                            'settings': settings, 'plannedSessions': 2,
+                            'isolation': r.ISOLATION_VERSION,
+                            'canary': {'status': 'passed', 'plannedSessions': 1},
+                        })
+                        argv += ['--resume', str(output)]
+
+                    def run(task, client, condition, output, index):
+                        saved = json.loads((output / 'report.json').read_text())
+                        bundle = json.loads((output / 'shareable/benchmark.json').read_text())
+                        self.assertIsNone(saved['canary'])
+                        self.assertIsNone(bundle['canary'])
+                        self.assertNotIn('Canary: passed', (output / 'report.md').read_text())
+                        return row(task, complete=not (failed and index == 2))
+
+                    with patch.object(r, 'STATE', state), \
+                         patch.object(sys, 'argv', argv), \
+                         patch.object(r, 'select_tasks', return_value=[self.read, self.edit]), \
+                         patch.object(r, 'digest', return_value='b' * 64), \
+                         patch.object(r, 'source_state', return_value={'commit': 'a' * 40, 'status': ''}), \
+                         patch.object(r.subprocess, 'check_output', return_value='test'), \
+                         patch.object(r, 'load_completed_runs', return_value=[row(self.read)]), \
+                         patch.object(r, 'run_one', side_effect=run), \
+                         patch('builtins.print'):
+                        if failed:
+                            with self.assertRaises(SystemExit):
+                                r.main()
+                        else:
+                            r.main()
+                    output = next(state.glob('results-*'))
+                    saved = json.loads((output / 'report.json').read_text())
+                    bundle = json.loads((output / 'shareable/benchmark.json').read_text())
+                    self.assertEqual(saved['canary'], bundle['canary'])
+                    self.assertEqual(saved['canary']['plannedSessions'], 2)
+                    self.assertEqual(saved['canary']['status'], 'failed' if failed else 'passed')
+                    self.assertIn('Canary: ' + saved['canary']['status'],
+                                  (output / 'report.md').read_text())
+
     def test_canary_failure_is_explicit(self):
         row = dict(
             id='read', kind='search', taskKind='search', client='codex', oko=False,
