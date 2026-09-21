@@ -252,7 +252,13 @@ def parse_events(client, events):
                 complete = not e.get('is_error', False)
                 final = e.get('result', '')
                 usage = e.get('usage')
-                if e.get('is_error') or e.get('permission_denials'):
+                # A denied tool means the session did not run as configured. A
+                # read of /dev/null is a no-op the model sometimes issues beside
+                # a real call; halting a paid run for it protects nothing.
+                denials = [d for d in e.get('permission_denials') or []
+                           if not (isinstance(d, Mapping) and d.get('tool_name') == 'Read'
+                                   and (d.get('tool_input') or {}).get('file_path') == '/dev/null')]
+                if e.get('is_error') or denials:
                     errors.append(e)
         for tool in tools:
             if tool.get('name') != 'mcp__oko__search' or tool.get('id') not in results:

@@ -238,6 +238,10 @@ class BenchmarkTests(unittest.TestCase):
         opencode = r.parse_events('opencode', streams['opencode'])
         self.assertEqual(opencode['tools'][0]['result'][0]['timings']['cache']['status'], 'cold')
         self.assertTrue(r.parse_events('claude', [dict(type='result', is_error=True)])['providerErrors'])
+        denied = lambda path: r.parse_events('claude', [dict(type='result', is_error=False, result='{}', permission_denials=[
+            dict(tool_name='Read', tool_input=dict(file_path=path))])])['providerErrors']
+        self.assertTrue(denied('/etc/passwd'), 'a denied real read still fails the session')
+        self.assertFalse(denied('/dev/null'), 'a no-op read does not halt a paid run')
         self.assertTrue(r.parse_events('codex', [dict(type='turn.failed')])['providerErrors'])
         self.assertTrue(r.parse_events('opencode', [dict(type='error')])['providerErrors'])
 
