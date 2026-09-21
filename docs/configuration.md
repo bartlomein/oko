@@ -104,4 +104,5 @@ For a local release build instead of installation, run
 `target/release/oko` (`oko.exe` on Windows). Build separately for each operating
 system and architecture. Code search uses `OKO_RIPGREP`, then an `rg` binary
 beside Oko, then `rg` on PATH; supplied-item
-ranking does not. Node.js is only needed for optional developer benchmark runners.
+ranking does not. `oko setup --client claude` runs the `claude` command from PATH;
+set `OKO_CLAUDE` to use another path. Node.js is only needed for optional developer benchmark runners.

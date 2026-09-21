@@ -2,12 +2,15 @@
 
 [← Back to Oko](../README.md)
 
-## Set up Codex for a project
+## Set up a project
 
 From the project you want to search, run your Oko executable with `setup`:
 
 ```sh
-oko setup
+oko setup                          # Codex (the default)
+oko setup --client claude          # Claude Code
+oko setup --client opencode        # OpenCode 1.x
+oko setup --client claude,opencode # several, or: --client all
 # Or select a project explicitly:
 oko setup --root /absolute/path/to/project
 ```
@@ -24,11 +27,26 @@ store so GUI clients can access it. Otherwise it prompts for a key with hidden
 input. An explicitly empty key override must be removed first. Setup does not
 validate the key with TypeSafe or make paid API requests.
 
-Setup writes a project-local `.codex/config.toml` MCP entry and a managed search
-guidance section in `AGENTS.md` (or `AGENTS.override.md` when present). Existing
+What setup connects depends on the tool:
+
+| Tool | Connection | Guidance |
+| --- | --- | --- |
+| Codex | `.codex/config.toml` in the project | `AGENTS.md`, or `AGENTS.override.md` when present |
+| Claude Code | `claude mcp add --scope local`, stored by Claude Code for you and this project | `CLAUDE.md`, or `AGENTS.md` when `CLAUDE.md` imports `@AGENTS.md` |
+| OpenCode 1.x | `opencode.json` in the project | `AGENTS.md` |
+
+The guidance is a managed section between `oko:search` markers. Existing
 unrelated settings, comments, and instructions are preserved. Re-running setup
 updates its own entry without duplicating instructions. An existing Oko entry
 not created by setup is left untouched and reported as a conflict.
+
+Claude Code setup needs the `claude` command on PATH (or its path in
+`OKO_CLAUDE`). OpenCode setup rewrites `opencode.json` as formatted JSON when it
+adds the entry; it does not edit `opencode.jsonc`, a file with comments, or the
+v2 `mcp.servers` layout, and says so without changing anything. A new
+`opencode.json` is added to `.gitignore`. One that already existed is not, since
+it may be shared: it now holds this machine’s paths, so keep that change out of
+shared commits.
 
 Configuration is written atomically, with private backups of changed existing
 files under the installation's `setup-backups` directory. Setup prints backup
@@ -38,14 +56,13 @@ in the generated MCP configuration. The pinned ripgrep path works even when the
 GUI has a different PATH than your terminal.
 
 Setup launches the installed server and verifies MCP initialization and discovery
-of the search tool. **This verifies the connection, not Codex's actual selection
-of Oko or Jev accuracy.** Open the project in Codex, trust it if prompted, and
-start a new session. Check `/mcp`, then ask a code-location question.
+of the search tool. **This verifies the connection, not the agent's actual selection
+of Oko or Jev accuracy.** Start a new session (in Codex, trust the project if
+prompted). Check `/mcp` or `opencode mcp list`, then ask a code-location question.
 
-This first setup flow is **per project and for Codex**. Run setup again for another
-project. Codex desktop and CLI share project MCP configuration for trusted
-projects; setup does not require a separate Codex CLI installation. OpenCode and
-Claude Code still require manual MCP configuration. For downloads, see the [installation guide](installation.md); see [release maintenance](releasing.md).
+Setup is **per project**. Run it again for another project. Codex desktop and CLI
+share project MCP configuration for trusted projects; setup does not require a
+separate Codex CLI installation. For downloads, see the [installation guide](installation.md); see [release maintenance](releasing.md).
 
 For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
 agent instruction files untouched, and `--install-dir DIRECTORY` to choose the

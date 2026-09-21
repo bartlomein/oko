@@ -217,3 +217,255 @@ fn symlinked_config_directory_is_rejected() {
     );
     assert!(!outside.join("config.toml").exists());
 }
+#[test]
+fn opencode_setup_merges_the_connection_and_is_repeatable() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let install = temp.path().join("bin");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("opencode.json"),
+        r#"{"model":"custom","mcp":{"other":{"type":"local","command":["untouched"]}}}"#,
+    )
+    .unwrap();
+    let output = setup(
+        executable(),
+        &root,
+        &install,
+        &["--no-jev", "--client", "opencode"],
+    );
+    assert_ok(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Keep that change out of shared"));
+    let saved = fs::read_to_string(root.join("opencode.json")).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(doc["model"], "custom");
+    assert_eq!(doc["mcp"]["other"]["command"][0], "untouched");
+    let server = &doc["mcp"]["oko"];
+    assert_eq!(server["type"], "local");
+    assert_eq!(server["enabled"], true);
+    let command = server["command"].as_array().unwrap();
+    assert!(Path::new(command[0].as_str().unwrap()).is_file());
+    assert_eq!(command[1], "mcp");
+    assert_eq!(command[3], root.canonicalize().unwrap().to_str().unwrap());
+    assert_eq!(command[4], "--no-jev");
+    assert!(Path::new(server["environment"]["OKO_RIPGREP"].as_str().unwrap()).is_file());
+    assert!(
+        fs::read_to_string(root.join("AGENTS.md"))
+            .unwrap()
+            .contains("<!-- oko:search:start -->")
+    );
+    assert!(!root.join(".codex").exists());
+    assert!(!root.join("CLAUDE.md").exists());
+    // A file that was already there may be shared, so it is not ignored.
+    assert_eq!(
+        fs::read_to_string(root.join(".gitignore")).unwrap(),
+        "/.env\n"
+    );
+    assert_ok(&setup(
+        executable(),
+        &root,
+        &install,
+        &["--no-jev", "--client", "opencode"],
+    ));
+    assert_eq!(
+        fs::read_to_string(root.join("opencode.json")).unwrap(),
+        saved
+    );
+
+    let fresh = temp.path().join("fresh");
+    fs::create_dir(&fresh).unwrap();
+    assert_ok(&setup(
+        executable(),
+        &fresh,
+        &install,
+        &["--no-jev", "--client", "opencode"],
+    ));
+    assert!(
+        fs::read_to_string(fresh.join(".gitignore"))
+            .unwrap()
+            .lines()
+            .any(|line| line == "/opencode.json")
+    );
+}
+#[test]
+fn opencode_configuration_setup_cannot_own_is_not_overwritten() {
+    for (name, original) in [
+        (
+            "opencode.json",
+            "{\n  // a comment\n  \"model\": \"custom\"\n}\n",
+        ),
+        (
+            "opencode.json",
+            r#"{"mcp":{"oko":{"type":"local","command":["someone-elses-server"]}}}"#,
+        ),
+        ("opencode.json", r#"{"mcp":{"servers":{}}}"#),
+        ("opencode.jsonc", "{}"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join(name), original).unwrap();
+        let output = setup(
+            executable(),
+            &root,
+            &temp.path().join("bin"),
+            &["--no-jev", "--client", "opencode"],
+        );
+        assert!(!output.status.success(), "{name}: {original}");
+        assert_eq!(fs::read_to_string(root.join(name)).unwrap(), original);
+        assert!(!root.join("AGENTS.md").exists());
+        assert!(!root.join(".gitignore").exists());
+    }
+}
+/// A stand-in for the claude command: logs each call, and answers `mcp get`
+/// with the described connection when one is supplied.
+#[cfg(unix)]
+fn fake_claude(dir: &Path, described: Option<&str>) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("fake-claude");
+    let log = dir.join("claude.log");
+    let get = match described {
+        Some(text) => format!("printf '%s\\n' '{text}'; exit 0"),
+        None => "echo 'No MCP server named \"oko\".' >&2; exit 1".into(),
+    };
+    fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nprintf '%s|' \"$@\" >> '{}'\necho >> '{}'\nif [ \"$1 $2\" = 'mcp get' ]; then {get}; fi\nexit 0\n",
+            log.display(),
+            log.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+#[cfg(unix)]
+fn setup_claude(root: &Path, install: &Path, claude: &Path) -> Output {
+    Command::new(executable())
+        .args(["setup", "--no-jev", "--client", "claude", "--root"])
+        .arg(root)
+        .arg("--install-dir")
+        .arg(install)
+        .env("OKO_CLAUDE", claude)
+        .output()
+        .unwrap()
+}
+#[cfg(unix)]
+#[test]
+fn claude_setup_registers_a_local_connection_and_writes_its_instructions() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project with spaces");
+    let install = temp.path().join("bin");
+    fs::create_dir(&root).unwrap();
+    let claude = fake_claude(temp.path(), None);
+    assert_ok(&setup_claude(&root, &install, &claude));
+    let log = fs::read_to_string(temp.path().join("claude.log")).unwrap();
+    let added = log
+        .lines()
+        .find(|line| line.starts_with("mcp|add|"))
+        .unwrap();
+    let installed = install.canonicalize().unwrap();
+    let expected = format!(
+        "mcp|add|--transport|stdio|--scope|local|oko|--env|OKO_RIPGREP={}|--|{}|mcp|--root|{}|--no-jev|",
+        installed.join("rg").display(),
+        installed.join("oko").display(),
+        root.canonicalize().unwrap().display()
+    );
+    assert_eq!(added, expected);
+    assert!(!log.contains("mcp|remove|"));
+    assert!(
+        fs::read_to_string(root.join("CLAUDE.md"))
+            .unwrap()
+            .contains("<!-- oko:search:start -->")
+    );
+    assert!(!root.join("AGENTS.md").exists());
+    assert!(!root.join(".codex").exists());
+    assert!(!root.join("opencode.json").exists());
+}
+#[cfg(unix)]
+#[test]
+fn claude_setup_replaces_its_own_connection_and_refuses_another() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    // CLAUDE.md that imports AGENTS.md: the guidance belongs in AGENTS.md.
+    fs::write(root.join("CLAUDE.md"), "@AGENTS.md\n").unwrap();
+    let claude = fake_claude(
+        temp.path(),
+        Some("oko:\n  Type: stdio\n  Command: /old/place/oko\n  Args: mcp --root /project"),
+    );
+    assert_ok(&setup_claude(&root, &temp.path().join("bin"), &claude));
+    let log = fs::read_to_string(temp.path().join("claude.log")).unwrap();
+    let removed = log.find("mcp|remove|--scope|local|oko|").unwrap();
+    assert!(removed < log.find("mcp|add|").unwrap());
+    assert_eq!(
+        fs::read_to_string(root.join("CLAUDE.md")).unwrap(),
+        "@AGENTS.md\n"
+    );
+    assert!(root.join("AGENTS.md").exists());
+
+    let other = tempfile::tempdir().unwrap();
+    let root = other.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let claude = fake_claude(
+        other.path(),
+        Some("oko:\n  Type: stdio\n  Command: npx\n  Args: someone-elses-server"),
+    );
+    let output = setup_claude(&root, &other.path().join("bin"), &claude);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("claude mcp remove oko"));
+    assert!(
+        !fs::read_to_string(other.path().join("claude.log"))
+            .unwrap()
+            .contains("mcp|add|")
+    );
+    assert!(!root.join("CLAUDE.md").exists());
+}
+#[cfg(unix)]
+#[test]
+fn a_missing_claude_command_or_unknown_client_changes_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let output = setup_claude(&root, &temp.path().join("bin"), &temp.path().join("absent"));
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("OKO_CLAUDE"));
+    let output = setup(
+        executable(),
+        &root,
+        &temp.path().join("bin"),
+        &["--no-jev", "--client", "cursor"],
+    );
+    assert!(!output.status.success());
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+}
+#[cfg(unix)]
+#[test]
+fn all_clients_share_one_agents_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let claude = fake_claude(temp.path(), None);
+    let output = Command::new(executable())
+        .args(["setup", "--no-jev", "--client", "all", "--root"])
+        .arg(&root)
+        .arg("--install-dir")
+        .arg(temp.path().join("bin"))
+        .env("OKO_CLAUDE", &claude)
+        .output()
+        .unwrap();
+    assert_ok(&output);
+    for file in [
+        ".codex/config.toml",
+        "opencode.json",
+        "AGENTS.md",
+        "CLAUDE.md",
+    ] {
+        assert!(root.join(file).is_file(), "{file}");
+    }
+    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
+    for entry in ["/.codex/config.toml", "/opencode.json", "/.env"] {
+        assert!(ignore.lines().any(|line| line == entry), "{entry}");
+    }
+}

@@ -39,30 +39,34 @@ installer. macOS binaries are not yet signed or notarized.
 Prefer to inspect the script, install manually, or select a version?
 See [installation options](docs/installation.md).
 
-For Codex, continue with `oko setup` below—it prompts for your
-[TypeSafe AI](https://typesafe.ai/) key. For terminal use or other coding tools,
+Continue with `oko setup` below—it prompts for your
+[TypeSafe AI](https://typesafe.ai/) key. For terminal use or a manual connection,
 save the key with `oko auth login`. Oko uses your operating system’s credential
 store; headless Linux can use an environment variable or ignored `.env` instead.
 See [key configuration](docs/configuration.md).
 
 ## Connect your coding tool
 
-### Codex app or CLI
-
-Run this from the project you want to search:
+Run setup from the project you want to search, naming your coding tool:
 
 ```sh
 cd /path/to/your/project
-oko setup
+oko setup                     # Codex app or CLI
+oko setup --client claude     # Claude Code
+oko setup --client opencode   # OpenCode 1.x
+oko setup --client all        # all three
 ```
 
-Setup installs stable copies, configures the project’s MCP connection, adds search
-guidance, and checks the connection. Open that project in Codex, trust it if
-prompted, and start a new session. Repeat setup for each project.
+Setup installs stable copies, connects the tool to Oko for this project, adds
+search guidance to the instructions that tool reads, and checks the connection.
+The guidance matters: in our benchmark it is what makes Codex and OpenCode
+sessions faster, not just cheaper. Start a new session afterwards (in Codex, trust
+the project if prompted). Repeat setup for each project.
 
-For a key-free connection, use `oko setup --no-jev`.
+For a key-free connection, add `--no-jev`. See [what setup changes](docs/mcp.md#set-up-a-project).
+The manual steps below do the same by hand, without the guidance.
 
-### Claude Code
+### Claude Code by hand
 
 From the project you want to search:
 
@@ -77,7 +81,7 @@ Start a new Claude Code session and check `/mcp` for Oko. This connection is
 private to you and scoped to this project; repeat the command for other projects.
 Skip `oko auth login` if you already saved your key.
 
-### OpenCode
+### OpenCode by hand
 
 Save your key once with `oko auth login`. For **OpenCode 1.x**, add this to
 `opencode.json` in your project root. If the file already exists, merge the `oko`
