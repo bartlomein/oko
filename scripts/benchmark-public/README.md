@@ -122,6 +122,17 @@ python3 scripts/benchmark-public/replay/selftest.py
 - This cannot show how an agent reacts: turns, trust, or final answers. Use the
   smoke or branch suite for that.
 
+## Guided condition: what `oko setup`'s guidance does
+
+Blank-slate sessions strip every project instruction, including the guidance
+`oko setup` writes, so they cannot show its effect. `--guided` (branch or smoke)
+adds a condition that is the current build plus `src/guidance.md`, delivered
+through each client's own channel for standing instructions: `AGENTS.md` in the
+trial's `CODEX_HOME`, OpenCode `instructions`, Claude `--append-system-prompt`.
+The task prompt differs only in the clause that excludes `AGENTS.md`. The report
+pairs `current -> guided`. With the branch suite, `--skip-previous` runs native,
+current and guided only, which keeps a full run at 243 sessions.
+
 ## Smoke suite: minutes, not hours
 
 The branch suite is 243 sessions. While iterating on a change, use the smoke

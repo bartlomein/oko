@@ -511,6 +511,8 @@ def main():
                    help='smoke: previous vs current build on a few branch tasks, minutes not hours; direction only')
     p.add_argument('--guided',action='store_true',
                    help='Branch/smoke: add a condition that is the current build plus the agent guidance oko setup installs')
+    p.add_argument('--skip-previous',action='store_true',
+                   help='Branch suite with --guided: run native, current and guided only')
     p.add_argument('--tasks',help='Smoke suite only: comma-separated branch task ids (default: '+','.join(SMOKE_TASKS)+')')
     p.add_argument('--repeats',type=int)
     p.add_argument('--cache-policy',choices=('cold','warm'),default='warm')
@@ -546,6 +548,12 @@ def main():
         if not compares_builds():p.error('--guided requires --suite branch or smoke')
         CONDITIONS=CONDITIONS+(GUIDED,)
         ENGINE_CONDITIONS={**ENGINE_CONDITIONS,GUIDED:'oko-'+args.cache_policy}
+    if args.skip_previous:
+        # The previous build is compared often and cheaply elsewhere (replay, smoke).
+        # Dropping it keeps a guided full run the size of an ordinary one.
+        if SUITE!='branch' or not args.guided:p.error('--skip-previous requires --suite branch --guided')
+        CONDITIONS=tuple(c for c in CONDITIONS if c!='previous')
+        ENGINE_CONDITIONS={c:v for c,v in ENGINE_CONDITIONS.items() if c!='previous'}
     if not args.clients or len(set(args.clients))!=len(args.clients) or any(c not in CLIENTS for c in args.clients):p.error('Invalid clients')
     if args.timeout<1:p.error('Timeout must be positive')
     if args.resume and not args.execute:p.error('--resume requires --execute')

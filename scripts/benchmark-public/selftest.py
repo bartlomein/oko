@@ -466,6 +466,10 @@ class RunnerTests(unittest.TestCase):
         listed=subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','smoke','--guided','--repeats','1'],capture_output=True,text=True)
         self.assertIn("conditions=('previous', 'current', 'guided')",listed.stdout)
         self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--guided'],capture_output=True).returncode,0)
+        full=subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','branch','--guided','--skip-previous'],capture_output=True,text=True)
+        self.assertIn("243 sessions; suite=branch; repeats=3; conditions=('native', 'current', 'guided')",full.stdout)
+        self.assertNotIn(' previous',full.stdout)
+        self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','branch','--skip-previous'],capture_output=True).returncode,0)
 
     def test_report_includes_failed_attempts(self):
         with tempfile.TemporaryDirectory() as temp:
