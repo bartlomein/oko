@@ -2,6 +2,56 @@
 
 [← Back to Oko](../README.md#benchmarks)
 
+## Latest run: 243 sessions (September 2026)
+
+The README reports this run. Nine tasks (six code-location questions and three
+small edits across Astro, HTTPX, and ripgrep), three clients, three repeats, and
+three setups: **without Oko**, **Oko**, and **Oko with the guidance `oko setup`
+installs**. The README's "With Oko" column is the last one. Oko starts with a
+warm disk index; building it is excluded from timing. Measured on commit
+`c8934a0`; later commits before 0.4.0 change only `oko setup` and documentation.
+
+Mean seconds and mean agent tokens per session (27 sessions per cell):
+
+| Client | Without Oko | Oko | Oko + guidance |
+| --- | --- | --- | --- |
+| Codex — seconds | 25.7 | 23.2 | 21.0 |
+| Codex — agent tokens | 71,923 | 54,356 | 48,823 |
+| OpenCode — seconds | 22.8 | 23.0 | 19.3 |
+| OpenCode — agent tokens | 29,413 | 21,912 | 17,017 |
+| Claude Code — seconds | 10.6 | 8.1 | 7.3 |
+| Claude Code — agent tokens | 23,960 | 19,710 | 19,133 |
+
+Without the guidance, Oko saves Codex and OpenCode tokens but little or no time;
+the guidance, which tells the agent when it can stop searching, is what makes
+those sessions faster.
+
+Per task, Oko + guidance against without Oko (mean of three sessions; time, tokens):
+
+| Task | Codex | OpenCode | Claude Code |
+| --- | --- | --- | --- |
+| astro-image-probe-authorization | −54%, −69% | −53%, −80% | −45%, −37% |
+| astro-action-key-guards | −49%, −54% | −18%, −51% | −42%, −27% |
+| astro-forwarded-empty (edit) | +11%, −32% | −18%, −43% | −16%, −18% |
+| httpx-decoder-chain | +5%, +19% | +33%, +58% | −28%, −10% |
+| httpx-async-auth-body | −23%, −34% | +13%, +0% | −39%, −30% |
+| httpx-reason-fallback (edit) | −19%, +5% | −20%, −47% | −9%, −2% |
+| ripgrep-capture-expansion | −9%, −36% | −37%, −49% | −52%, −46% |
+| ripgrep-printed-bytes | −21%, −2% | −3%, −15% | −33%, +11% |
+| ripgrep-capture-hyphen (edit) | +3%, −27% | −11%, −51% | −28%, −17% |
+
+Automated grading passed every Oko + guidance session (81/81), 79/81 with Oko
+alone, and 75/81 without Oko. All attempts count toward the times and tokens.
+Token counts include cached input and exclude Jev. The guidance reaches each
+client as user-level instructions (Codex `AGENTS.md`, OpenCode `instructions`,
+Claude Code `--append-system-prompt`) so the graded checkout stays unmodified;
+`oko setup` writes the same text to the project's `AGENTS.md` or `CLAUDE.md`.
+Clients: Codex CLI 0.155.0 and OpenCode 1.18.31 with `gpt-5.6-sol`, Claude Code
+2.1.278 with `claude-sonnet-5`, all at low reasoning effort. Three repeats of
+nine tasks is still small: read direction, not decimals.
+
+## Earlier pilot: 108 sessions
+
 This pilot measured complete coding-agent sessions on 12 tasks: two searches and
 two small edits in each of Astro, HTTPX, and ripgrep. Three clients each ran every
 task without Oko, with cold Oko, and with warm Oko: **108 sessions**, one observation

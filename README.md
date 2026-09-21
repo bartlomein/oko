@@ -158,27 +158,42 @@ To replace, check, or remove your saved key, use `oko auth login`,
 
 ## Benchmarks
 
-In a **108-session pilot** on Astro, HTTPX, and ripgrep, we compared each coding
-tool with and without Oko on the same six search and six small editing tasks.
-These are **average seconds and agent tokens per task**, not isolated search timings.
+We give the same coding task to the same agent twice: once with only its built-in
+search tools, and once with Oko connected and set up with `oko setup`. Then we
+compare how long the whole session took and how many tokens the agent used.
 
-| Coding tool | Without Oko | Warm Oko | Cold Oko |
-| --- | --- | --- | --- |
-| Codex — time | 27.7 s | 25.7 s (**7.4% less**) | 28.9 s (**4.0% more**) |
-| Codex — tokens | 76,022 | 64,336 (**15.4% fewer**) | 61,073 (**19.7% fewer**) |
-| OpenCode — time | 25.7 s | 21.1 s (**18.0% less**) | 23.7 s (**8.0% less**) |
-| OpenCode — tokens | 35,772 | 19,252 (**46.2% fewer**) | 19,624 (**45.1% fewer**) |
-| Claude Code — time | 11.0 s | 9.1 s (**17.1% less**) | 9.1 s (**17.1% less**) |
-| Claude Code — tokens | 29,093 | 25,772 (**11.4% fewer**) | 23,274 (**20.0% fewer**) |
+The latest run is **243 sessions**: 9 tasks (6 "find this code" questions and 3
+small edits) in Astro, HTTPX, and ripgrep, each run 3 times per setup with Codex,
+OpenCode, and Claude Code.
 
-Warm means a prebuilt disk index; its preparation is excluded from timing. Cold
-starts with an empty Oko cache. Tokens include cached input and exclude Jev,
-so these percentages are not dollar savings. One observation per task and
-condition; results vary, and cold Oko was slower for Codex in this run.
+| Coding tool | | Without Oko | With Oko | Average | Best task |
+| --- | --- | --- | --- | --- | --- |
+| Codex | Time | 25.7 s | 21.0 s | **18% less** | 54% less |
+| | Tokens | 71,923 | 48,823 | **32% fewer** | 69% fewer |
+| OpenCode | Time | 22.8 s | 19.3 s | **15% less** | 53% less |
+| | Tokens | 29,413 | 17,017 | **42% fewer** | 80% fewer |
+| Claude Code | Time | 10.6 s | 7.3 s | **31% less** | 52% less |
+| | Tokens | 23,960 | 19,133 | **20% fewer** | 46% fewer |
 
-Automated grading passed 92/108 sessions. Review found correct source evidence
-and passing focused edit checks in the flagged cases, with one response-format
-violation remaining. See [results, methodology, and grading limitations](docs/benchmark-results.md)
+**Average** is the mean session across all 9 tasks. **Best task** is the task
+where Oko helped that tool most. Not every task improves: on a few, a session
+with Oko was slower or used more tokens, and those are included in the average.
+
+How we keep it fair:
+
+- **Real sessions, not search timings.** The clock covers the whole session,
+  including the agent's thinking and Oko's own search time.
+- **Same everything else.** Same task wording, model, and settings for both
+  setups, on a pinned copy of each repository, with no project instructions
+  other than Oko's guidance.
+- **The setups run back to back and take turns going first**, so a slow minute
+  at the model provider does not favor one of them.
+- **Tokens are the agent's own**, cached input included. Oko's ranking calls to
+  Jev are not counted, so these are not dollar savings.
+
+It is a small benchmark on three repositories with Codex CLI 0.155 and OpenCode
+1.18 (`gpt-5.6-sol`) and Claude Code 2.1 (`claude-sonnet-5`), all at low
+reasoning effort. Your results will vary. See [full results and methodology](docs/benchmark-results.md)
 and the [reproduction instructions](scripts/benchmark-public/README.md).
 
 ## Privacy
