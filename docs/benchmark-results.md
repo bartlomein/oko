@@ -11,16 +11,19 @@ installs**. The README's "With Oko" column is the last one. Oko starts with a
 warm disk index; building it is excluded from timing. Measured on commit
 `c8934a0`; later commits before 0.4.0 change only `oko setup` and documentation.
 
-Mean seconds and mean agent tokens per session (27 sessions per cell):
+Mean seconds, agent tokens, and tool calls per session (27 sessions per cell):
 
 | Client | Without Oko | Oko | Oko + guidance |
 | --- | --- | --- | --- |
 | Codex — seconds | 25.7 | 23.2 | 21.0 |
 | Codex — agent tokens | 71,923 | 54,356 | 48,823 |
+| Codex — tool calls | 3.41 | 2.48 | 2.04 |
 | OpenCode — seconds | 22.8 | 23.0 | 19.3 |
 | OpenCode — agent tokens | 29,413 | 21,912 | 17,017 |
+| OpenCode — tool calls | 5.81 | 3.89 | 2.56 |
 | Claude Code — seconds | 10.6 | 8.1 | 7.3 |
 | Claude Code — agent tokens | 23,960 | 19,710 | 19,133 |
+| Claude Code — tool calls | 3.67 | 1.96 | 1.59 |
 
 Without the guidance, Oko saves Codex and OpenCode tokens but little or no time;
 the guidance, which tells the agent when it can stop searching, is what makes
@@ -39,6 +42,21 @@ Per task, Oko + guidance against without Oko (mean of three sessions; time, toke
 | ripgrep-capture-expansion | −9%, −36% | −37%, −49% | −52%, −46% |
 | ripgrep-printed-bytes | −21%, −2% | −3%, −15% | −33%, +11% |
 | ripgrep-capture-hyphen (edit) | +3%, −27% | −11%, −51% | −28%, −17% |
+
+Mean tool calls per task, without Oko → Oko + guidance. An Oko search counts as
+one call. They fell on every task for every client:
+
+| Task | Codex | OpenCode | Claude Code |
+| --- | --- | --- | --- |
+| astro-image-probe-authorization | 4.7 → 1.0 | 7.7 → 1.0 | 4.3 → 1.0 |
+| astro-action-key-guards | 3.7 → 1.3 | 6.0 → 2.7 | 3.3 → 1.0 |
+| astro-forwarded-empty (edit) | 3.0 → 2.7 | 5.3 → 3.0 | 4.0 → 2.0 |
+| httpx-decoder-chain | 3.7 → 2.7 | 5.7 → 4.3 | 4.0 → 2.0 |
+| httpx-async-auth-body | 2.7 → 1.0 | 5.0 → 3.0 | 3.0 → 1.0 |
+| httpx-reason-fallback (edit) | 3.0 → 2.0 | 4.0 → 2.0 | 2.3 → 2.0 |
+| ripgrep-capture-expansion | 3.3 → 2.7 | 9.0 → 2.0 | 4.0 → 1.0 |
+| ripgrep-printed-bytes | 3.7 → 3.0 | 5.7 → 3.0 | 4.0 → 2.3 |
+| ripgrep-capture-hyphen (edit) | 3.0 → 2.0 | 4.0 → 2.0 | 4.0 → 2.0 |
 
 Automated grading passed every Oko + guidance session (81/81), 79/81 with Oko
 alone, and 75/81 without Oko. All attempts count toward the times and tokens.

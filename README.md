@@ -160,7 +160,8 @@ To replace, check, or remove your saved key, use `oko auth login`,
 
 We give the same coding task to the same agent twice: once with only its built-in
 search tools, and once with Oko connected and set up with `oko setup`. Then we
-compare how long the whole session took and how many tokens the agent used.
+compare how long the whole session took, how many tokens the agent used, and how
+many tool calls (searches, file reads, edits) it made.
 
 The tasks come from three open-source projects, each pinned to a fixed commit so
 every session sees the same code: [Astro](https://github.com/withastro/astro)
@@ -187,14 +188,20 @@ without its guidance, which is in the [full results](docs/benchmark-results.md).
 | --- | --- | --- | --- | --- | --- |
 | Codex | Time | 25.7 s | 21.0 s | **18% less** | 54% less |
 | | Tokens | 71,923 | 48,823 | **32% fewer** | 69% fewer |
+| | Tool calls | 3.4 | 2.0 | **40% fewer** | 79% fewer |
 | OpenCode | Time | 22.8 s | 19.3 s | **15% less** | 53% less |
 | | Tokens | 29,413 | 17,017 | **42% fewer** | 80% fewer |
+| | Tool calls | 5.8 | 2.6 | **56% fewer** | 87% fewer |
 | Claude Code | Time | 10.6 s | 7.3 s | **31% less** | 52% less |
 | | Tokens | 23,960 | 19,133 | **20% fewer** | 46% fewer |
+| | Tool calls | 3.7 | 1.6 | **57% fewer** | 77% fewer |
 
 **Average** is the mean session across all 9 tasks. **Best task** is the task
-where Oko helped that tool most. Not every task improves: on a few, a session
-with Oko was slower or used more tokens, and those are included in the average.
+where Oko helped that tool most. Tool calls went down on every task for every
+tool: one Oko search replaces several greps and file reads, and fewer steps is
+where the time and tokens are saved. Time and tokens did not improve on every
+task: on a few, a session with Oko was slower or used more tokens, and those are
+included in the average.
 
 How we keep it fair:
 
