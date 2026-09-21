@@ -1,5 +1,28 @@
 # Public-repository benchmarks
 
+## Reproduce the README numbers
+
+The README table comes from the `branch` suite with the guidance condition: nine
+tasks × three clients × three setups (without Oko, Oko, Oko with the guidance
+`oko setup` installs) × three repetitions = 243 timed sessions. You need Rust,
+ripgrep, Node.js, a TypeSafe key, and signed-in `codex`, `opencode`, and `claude`
+commands. The first three commands are free; `--execute` makes paid model and Jev
+calls and takes about an hour and a half.
+
+```sh
+python3 scripts/benchmark-public/runner.py --suite branch --guided --skip-previous --prepare
+python3 scripts/benchmark-public/selftest.py
+python3 scripts/benchmark-public/runner.py --suite branch --guided --skip-previous --check
+python3 scripts/benchmark-public/runner.py --suite branch --guided --skip-previous --execute
+```
+
+Results land in `benchmarks/results/public-branch/results-*/` as `report.md` and
+`report.json` (every session, with its tool calls, tokens, and timing). The tasks
+and their expected answers are in [`tasks-branch.json`](tasks-branch.json); the
+edit checks are in [`validate.py`](validate.py). To try fewer clients, add
+`--clients claude`. Models and providers are not deterministic, so expect your
+numbers to differ somewhat from ours.
+
 ## Branch comparison: next run
 
 The `branch` suite compares **native search, previous Oko, and current Oko** on
