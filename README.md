@@ -162,9 +162,26 @@ We give the same coding task to the same agent twice: once with only its built-i
 search tools, and once with Oko connected and set up with `oko setup`. Then we
 compare how long the whole session took and how many tokens the agent used.
 
-The latest run is **243 sessions**: 9 tasks (6 "find this code" questions and 3
-small edits) in Astro, HTTPX, and ripgrep, each run 3 times per setup with Codex,
-OpenCode, and Claude Code.
+The tasks come from three open-source projects, each pinned to a fixed commit so
+every session sees the same code: [Astro](https://github.com/withastro/astro)
+(TypeScript), [HTTPX](https://github.com/encode/httpx) (Python), and
+[ripgrep](https://github.com/BurntSushi/ripgrep) (Rust). Each project has three
+tasks, nine in all:
+
+- **6 search tasks**, where the agent has to find code spread over several places
+  and report the exact locations. For example, in HTTPX: *"Trace how response
+  Content-Encoding values select decoders, how multiple decoders are combined, and
+  why decoding runs in reverse application order."* The answer is checked against
+  the known locations.
+- **3 small edit tasks**, where the agent has to find the right function and
+  change it. For example, in ripgrep: *"Extend replacement capture-name parsing to
+  accept ASCII hyphens in named references, both $first-name and ${first-name}."*
+  The edit is checked by running tests against the changed file.
+
+The task wording never names the file or function, which is the situation Oko is
+built for. Every task runs 3 times per setup with Codex, OpenCode, and Claude
+Code. The latest run is **243 sessions**; it also measured a third setup, Oko
+without its guidance, which is in the [full results](docs/benchmark-results.md).
 
 | Coding tool | | Without Oko | With Oko | Average | Best task |
 | --- | --- | --- | --- | --- | --- |
