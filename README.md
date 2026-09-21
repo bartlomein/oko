@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/oko.png" alt="Oko: a pixel-art eye with a blue iris" width="280">
+</p>
+
 # Oko
 
 **Help your coding agent find code faster and use fewer tokens.**
