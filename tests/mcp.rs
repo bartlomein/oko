@@ -664,6 +664,21 @@ fn search_with_counted_provider(
     args: Value,
     response: impl Fn(&Value) -> Value + Send + 'static,
 ) -> (Value, Vec<Value>) {
+    // Most tests are about the shortlist's requests: nothing beside it is relevant.
+    let (result, requests, _) = search_with_provider(root, args, response, |request| {
+        Some(relevance_response(request, |_| 0.0))
+    });
+    (result, requests)
+}
+
+/// As above, with the requests judged beside the shortlist answered by `beside`
+/// (`None` = the provider fails) and returned separately with their phase.
+fn search_with_provider(
+    root: &Path,
+    args: Value,
+    response: impl Fn(&Value) -> Value + Send + 'static,
+    beside: impl Fn(&Value) -> Option<Value> + Send + 'static,
+) -> (Value, Vec<Value>, Vec<(String, Value)>) {
     use std::{
         io::Read,
         net::TcpListener,
@@ -681,6 +696,7 @@ fn search_with_counted_provider(
     let server = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut requests = Vec::new();
+        let mut beside_requests = Vec::new();
         while !server_done.load(Ordering::Acquire) {
             let mut stream = match listener.accept() {
                 Ok((stream, _)) => stream,
@@ -697,7 +713,7 @@ fn search_with_counted_provider(
                 .unwrap();
             let mut bytes = Vec::new();
             let mut buffer = [0; 4096];
-            let request: Value = loop {
+            let (request, headers): (Value, String) = loop {
                 let n = stream.read(&mut buffer).unwrap();
                 assert!(n > 0, "incomplete provider request");
                 bytes.extend_from_slice(&buffer[..n]);
@@ -711,22 +727,142 @@ fn search_with_counted_provider(
                         .unwrap();
                     if bytes.len() >= end + 4 + len {
                         assert!(headers.contains("authorization: bearer fake-mcp-key"));
-                        break serde_json::from_slice(&bytes[end + 4..end + 4 + len]).unwrap();
+                        let body = serde_json::from_slice(&bytes[end + 4..end + 4 + len]).unwrap();
+                        break (body, headers);
                     }
                 }
             };
+            // Candidates judged beside the shortlist arrive in requests of their
+            // own, in no fixed order. These tests are about the shortlist's.
+            let phase = ["connected", "further"]
+                .into_iter()
+                .find(|phase| headers.contains(&format!("x-oko-phase: {phase}")));
+            if let Some(phase) = phase {
+                // They arrive in no fixed order relative to the shortlist's request.
+                match beside(&request) {
+                    Some(answer) => {
+                        let body = serde_json::to_vec(&answer).unwrap();
+                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                        stream.write_all(&body).unwrap();
+                    }
+                    None => write!(stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap(),
+                }
+                beside_requests.push((phase.to_owned(), request));
+                continue;
+            }
             let body = serde_json::to_vec(&response(&request)).unwrap();
             requests.push(request);
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
             stream.write_all(&body).unwrap();
         }
-        requests
+        (requests, beside_requests)
     });
     let mut client = Client::start(root, false, Some(&endpoint));
     client.initialize();
     let result = client.search(args);
     done.store(true, Ordering::Release);
-    (result, server.join().unwrap())
+    let (requests, beside_requests) = server.join().unwrap();
+    (result, requests, beside_requests)
+}
+
+fn ledger_fixture() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("ledger.rs"),
+        "pub fn parse_ledger_rows(raw: &str) -> Vec<Row> {\n    raw.lines().map(row_from_line).collect()\n}\n",
+    )
+    .unwrap();
+    // Shares no word with the question, in its text or its path: only the
+    // file name pairing can find it.
+    fs::write(
+        root.path().join("ledger_test.rs"),
+        "#[test]\nfn keeps_trailing() {\n    assert!(verify_everything());\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("weather.rs"),
+        "pub fn forecast() -> u8 {\n    7\n}\n",
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn connected_files_are_judged_beside_the_shortlist_and_only_listed() {
+    let root = ledger_fixture();
+    let (response, requests, beside) = search_with_provider(
+        root.path(),
+        json!({"question":"where are rows parsed from raw input"}),
+        |request| relevance_response(request, |_| 0.9),
+        |request| Some(relevance_response(request, |_| 0.9)),
+    );
+    assert_eq!(requests.len(), 1, "the shortlist is still judged once");
+    let connected: Vec<_> = beside
+        .iter()
+        .filter(|(phase, _)| phase == "connected")
+        .collect();
+    assert_eq!(connected.len(), 1);
+    let state = &connected[0].1["state"];
+    assert!(
+        state.get("relatedCriteria").is_some() && state.get("implementationCriteria").is_none()
+    );
+    let sources: Vec<_> = state["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|candidate| candidate["source"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.starts_with("ledger_test.rs")),
+        "{sources:?}"
+    );
+    assert!(
+        sources
+            .iter()
+            .all(|source| !source.starts_with("weather.rs")),
+        "{sources:?}"
+    );
+    // Rated as relevant as the match itself, it still takes no excerpt.
+    let packet = assert_packet_envelope(&response);
+    let shown: Vec<_> = packet["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].clone())
+        .collect();
+    assert_eq!(shown, [json!("ledger.rs")]);
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let listed = text
+        .split("Other candidates, not shown, best first:")
+        .nth(1)
+        .unwrap_or("");
+    assert!(listed.contains("ledger_test.rs"), "{text}");
+    let recorded = packet["retrieval"]["candidates"].as_array().unwrap();
+    let test_file = recorded
+        .iter()
+        .find(|c| c["path"] == "ledger_test.rs")
+        .unwrap();
+    assert_eq!(test_file["connected"], true);
+    assert!((test_file["score"].as_f64().unwrap() - 0.9 * 0.4).abs() < 1e-9);
+}
+
+#[test]
+fn a_failing_request_beside_the_shortlist_changes_nothing_shown() {
+    let root = ledger_fixture();
+    let (response, requests, beside) = search_with_provider(
+        root.path(),
+        json!({"question":"where are rows parsed from raw input"}),
+        |request| relevance_response(request, |_| 0.9),
+        |_| None,
+    );
+    assert_eq!(requests.len(), 1);
+    assert!(!beside.is_empty());
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(packet["ranking"], "jev", "no keyword fallback");
+    assert_eq!(packet["results"][0]["path"], "ledger.rs");
+    assert!(packet["retrieval"].get("lexicalFallback").is_none());
 }
 
 fn relevance_response(request: &Value, score: impl Fn(&Value) -> f64) -> Value {

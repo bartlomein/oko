@@ -1,4 +1,4 @@
-//! EXPERIMENT: candidates one hop from the strongest keyword matches.
+//! Candidates one hop from the strongest keyword matches.
 //!
 //! Keyword search finds code that shares words with the question. The code a
 //! change also touches often shares none: the test of a file, a caller of a
@@ -53,136 +53,210 @@ fn stem(path: &str) -> String {
     base.trim_matches(|c| c == '_' || c == '-').to_owned()
 }
 
-/// Up to `CONNECTED_SLOTS` chunks from files absent from `shortlist`, best first.
-pub fn connected_to(corpus: &[Chunk], shortlist: &[Chunk], question: &str) -> Vec<Chunk> {
-    let mut files: BTreeMap<&str, Vec<&Chunk>> = BTreeMap::new();
-    for chunk in corpus {
-        files.entry(chunk.path.as_str()).or_default().push(chunk);
-    }
-    let mut definers: HashMap<&str, HashSet<&str>> = HashMap::new();
-    let mut defines: HashMap<&str, HashSet<&str>> = HashMap::new();
-    for (path, chunks) in &files {
-        for chunk in chunks {
-            for found in definition().captures_iter(&chunk.text) {
-                let name = found.get(1).or(found.get(2)).unwrap().as_str();
-                if name.len() >= MIN_NAME {
-                    definers.entry(name).or_default().insert(path);
-                    defines.entry(path).or_default().insert(name);
+/// Which files define and mention which distinctive names. Built once per
+/// workspace snapshot: it depends on the source alone, not on the question.
+pub struct Links {
+    /// Sorted, so results do not depend on corpus order.
+    paths: Vec<String>,
+    lowered: Vec<(String, String)>,
+    chunks: Vec<Vec<usize>>,
+    names: Vec<String>,
+    defines: Vec<HashSet<u32>>,
+    mentions: Vec<HashSet<u32>>,
+    mentioned_in: Vec<u32>,
+}
+
+impl Links {
+    pub fn new(corpus: &[Chunk]) -> Self {
+        let mut by_path: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (index, chunk) in corpus.iter().enumerate() {
+            by_path.entry(chunk.path.as_str()).or_default().push(index);
+        }
+        let mut definers: HashMap<&str, HashSet<usize>> = HashMap::new();
+        for (file, indices) in by_path.values().enumerate() {
+            for &index in indices {
+                for found in definition().captures_iter(&corpus[index].text) {
+                    let name = found.get(1).or(found.get(2)).unwrap().as_str();
+                    if name.len() >= MIN_NAME {
+                        definers.entry(name).or_default().insert(file);
+                    }
                 }
             }
         }
-    }
-    definers.retain(|_, paths| paths.len() <= MAX_DEFINERS);
-    // Only names with a definition can link files, so nothing else is kept.
-    let mut mentions: HashMap<&str, HashSet<&str>> = HashMap::new();
-    let mut mentioned_in: HashMap<&str, usize> = HashMap::new();
-    for (path, chunks) in &files {
-        let names: HashSet<&str> = chunks
+        definers.retain(|_, files| files.len() <= MAX_DEFINERS);
+        let mut linking: Vec<&str> = definers.keys().copied().collect();
+        linking.sort_unstable();
+        let ids: HashMap<&str, u32> = linking
             .iter()
-            .flat_map(|chunk| identifiers(&chunk.text))
-            .filter(|word| definers.contains_key(word))
+            .zip(0..)
+            .map(|(name, id)| (*name, id))
             .collect();
-        for name in &names {
-            *mentioned_in.entry(name).or_default() += 1;
+        let mut defines = vec![HashSet::new(); by_path.len()];
+        for (name, files) in &definers {
+            for &file in files {
+                defines[file].insert(ids[name]);
+            }
         }
-        mentions.insert(path, names);
+        // Only names with a definition can link files, so nothing else is kept.
+        let mut mentioned_in = vec![0; linking.len()];
+        let mentions: Vec<HashSet<u32>> = by_path
+            .values()
+            .map(|indices| {
+                let names: HashSet<u32> = indices
+                    .iter()
+                    .flat_map(|&index| identifiers(&corpus[index].text))
+                    .filter_map(|word| ids.get(word).copied())
+                    .collect();
+                for &name in &names {
+                    mentioned_in[name as usize] += 1;
+                }
+                names
+            })
+            .collect();
+        Self {
+            lowered: by_path
+                .keys()
+                .map(|path| {
+                    let path = path.to_ascii_lowercase();
+                    let file = path.rsplit('/').next().unwrap_or(&path).to_owned();
+                    (path, file)
+                })
+                .collect(),
+            paths: by_path.keys().map(|path| (*path).to_owned()).collect(),
+            chunks: by_path.into_values().collect(),
+            names: linking.into_iter().map(str::to_owned).collect(),
+            defines,
+            mentions,
+            mentioned_in,
+        }
     }
-    let total = files.len().max(1) as f64;
-    let weight = |name: &str| {
-        let rarity = (1.0 + total / mentioned_in.get(name).copied().unwrap_or(1) as f64).ln();
-        let asked = question.contains(name);
-        rarity * if asked { 3.0 } else { 1.0 } * if name.starts_with('_') { 0.3 } else { 1.0 }
-    };
 
-    let lowered = question.to_ascii_lowercase();
-    let named = |path: &str| {
-        let path = path.to_ascii_lowercase();
-        let file = path.rsplit('/').next().unwrap_or(&path);
-        lowered.contains(&path) || (file.len() >= 6 && file.contains('.') && lowered.contains(file))
-    };
-    let mut seeds: Vec<(&str, f64)> = files
-        .keys()
-        .filter(|path| named(path))
-        .map(|path| (*path, NAMED_WEIGHT))
-        .collect();
-    let mut from_keywords = 0;
-    for chunk in shortlist {
-        if from_keywords == SEED_FILES {
-            break;
+    /// Up to `CONNECTED_SLOTS` chunks from files absent from `shortlist`, best first.
+    /// `corpus` must be the one the links were built from.
+    pub fn connected_to(
+        &self,
+        corpus: &[Chunk],
+        shortlist: &[Chunk],
+        question: &str,
+    ) -> Vec<Chunk> {
+        let total = self.paths.len().max(1) as f64;
+        let weight = |name: u32| {
+            let text = &self.names[name as usize];
+            let rarity = (1.0 + total / f64::from(self.mentioned_in[name as usize].max(1))).ln();
+            let asked = question.contains(text.as_str());
+            rarity * if asked { 3.0 } else { 1.0 } * if text.starts_with('_') { 0.3 } else { 1.0 }
+        };
+        let lowered = question.to_ascii_lowercase();
+        let named = |file: usize| {
+            let (path, name) = &self.lowered[file];
+            lowered.contains(path.as_str())
+                || (name.len() >= 6 && name.contains('.') && lowered.contains(name.as_str()))
+        };
+        let index_of = |path: &str| {
+            self.paths
+                .binary_search_by(|known| known.as_str().cmp(path))
+                .ok()
+        };
+        let mut seeds: Vec<(usize, f64)> = (0..self.paths.len())
+            .filter(|&file| named(file))
+            .map(|file| (file, NAMED_WEIGHT))
+            .collect();
+        let mut from_keywords = 0;
+        for chunk in shortlist {
+            if from_keywords == SEED_FILES {
+                break;
+            }
+            let Some(file) = index_of(&chunk.path) else {
+                continue;
+            };
+            if !seeds.iter().any(|(seed, _)| *seed == file) {
+                seeds.push((file, 1.0));
+                from_keywords += 1;
+            }
         }
-        if !seeds.iter().any(|(path, _)| *path == chunk.path) {
-            seeds.push((chunk.path.as_str(), 1.0));
-            from_keywords += 1;
-        }
-    }
-    let shortlisted: HashSet<&str> = shortlist.iter().map(|chunk| chunk.path.as_str()).collect();
-    let empty = HashSet::new();
-    let mut scored: Vec<(f64, &str, HashSet<&str>)> = Vec::new();
-    for path in files.keys().copied() {
-        if shortlisted.contains(path) {
-            continue;
-        }
-        let mut score = 0.0;
-        let mut shared: HashSet<&str> = HashSet::new();
-        if named(path) {
-            // The question names this file and keyword search still missed it.
-            score += PAIR_SCORE * 2.0;
-        }
-        for (seed, seed_weight) in &seeds {
-            if *seed == path {
+        let shortlisted: HashSet<usize> = shortlist
+            .iter()
+            .filter_map(|chunk| index_of(&chunk.path))
+            .collect();
+        let mut scored: Vec<(f64, usize, HashSet<u32>)> = Vec::new();
+        for file in 0..self.paths.len() {
+            if shortlisted.contains(&file) {
                 continue;
             }
-            let uses = mentions[path].intersection(defines.get(seed).unwrap_or(&empty));
-            let provides = defines
-                .get(path)
-                .unwrap_or(&empty)
-                .intersection(&mentions[seed]);
-            for name in uses
-                .chain(provides)
-                .filter(|name| definers.contains_key(*name))
-            {
-                if shared.insert(name) {
-                    score += seed_weight * weight(name);
+            let mut score = 0.0;
+            let mut shared: HashSet<u32> = HashSet::new();
+            if named(file) {
+                // The question names this file and keyword search still missed it.
+                score += PAIR_SCORE * 2.0;
+            }
+            for &(seed, seed_weight) in &seeds {
+                if seed == file {
+                    continue;
+                }
+                let uses = self.mentions[file].intersection(&self.defines[seed]);
+                let provides = self.defines[file].intersection(&self.mentions[seed]);
+                for &name in uses.chain(provides) {
+                    if shared.insert(name) {
+                        score += seed_weight * weight(name);
+                    }
+                }
+                let (path, other) = (&self.paths[file], &self.paths[seed]);
+                let key = stem(path);
+                if key.len() >= 3 && key == stem(other) && is_test_path(path) != is_test_path(other)
+                {
+                    score += seed_weight * PAIR_SCORE;
                 }
             }
-            let key = stem(path);
-            if key.len() >= 3 && key == stem(seed) && is_test_path(path) != is_test_path(seed) {
-                score += seed_weight * PAIR_SCORE;
+            if score > 0.0 {
+                scored.push((score, file, shared));
             }
         }
-        if score > 0.0 {
-            scored.push((score, path, shared));
-        }
+        scored.sort_by(|a, b| {
+            b.0.total_cmp(&a.0)
+                .then_with(|| self.paths[a.1].cmp(&self.paths[b.1]))
+        });
+        let ids: HashMap<&str, u32> = self
+            .names
+            .iter()
+            .zip(0..)
+            .map(|(name, id)| (name.as_str(), id))
+            .collect();
+        scored
+            .into_iter()
+            .take(CONNECTED_SLOTS)
+            .map(|(_, file, shared)| {
+                // The part of the file that carries the connection.
+                let carried = |chunk: &Chunk| -> f64 {
+                    identifiers(&chunk.text)
+                        .filter_map(|word| ids.get(word).copied())
+                        .filter(|name| shared.contains(name))
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .map(weight)
+                        .sum()
+                };
+                let best = self.chunks[file]
+                    .iter()
+                    .map(|&index| &corpus[index])
+                    .max_by(|a, b| {
+                        carried(a)
+                            .total_cmp(&carried(b))
+                            .then_with(|| b.start_line.cmp(&a.start_line))
+                    })
+                    .expect("a listed file has chunks");
+                // These did not match the question; they carry no keyword score.
+                Chunk {
+                    lexical_score: 0.0,
+                    ..best.clone()
+                }
+            })
+            .collect()
     }
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
-    scored
-        .into_iter()
-        .take(CONNECTED_SLOTS)
-        .map(|(_, path, shared)| {
-            // The part of the file that carries the connection.
-            let best = files[path]
-                .iter()
-                .max_by(|a, b| {
-                    let carried = |chunk: &Chunk| -> f64 {
-                        identifiers(&chunk.text)
-                            .collect::<HashSet<_>>()
-                            .into_iter()
-                            .filter(|word| shared.contains(word))
-                            .map(weight)
-                            .sum()
-                    };
-                    carried(a)
-                        .total_cmp(&carried(b))
-                        .then_with(|| b.start_line.cmp(&a.start_line))
-                })
-                .expect("a listed file has chunks");
-            // These did not match the question; they carry no keyword score.
-            Chunk {
-                lexical_score: 0.0,
-                ..(*best).clone()
-            }
-        })
-        .collect()
+}
+
+/// `Links::connected_to` for a corpus used once.
+pub fn connected_to(corpus: &[Chunk], shortlist: &[Chunk], question: &str) -> Vec<Chunk> {
+    Links::new(corpus).connected_to(corpus, shortlist, question)
 }
 
 #[cfg(test)]

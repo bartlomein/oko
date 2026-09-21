@@ -54,6 +54,8 @@ pub struct WorkspaceSnapshot {
     chunks: Arc<[Chunk]>,
     prepared: PreparedCorpus,
     navigation: NavigationIndex,
+    /// Built by the first search that needs it, then shared by every later one.
+    links: std::sync::OnceLock<crate::connected::Links>,
 }
 impl WorkspaceSnapshot {
     pub fn chunks(&self) -> &[Chunk] {
@@ -86,6 +88,12 @@ impl WorkspaceSnapshot {
             },
             intent,
         )
+    }
+    /// Candidates one hop from the strongest of `shortlist`, from files it lacks.
+    pub fn connected_to(&self, shortlist: &[Chunk], question: &str) -> Vec<Chunk> {
+        self.links
+            .get_or_init(|| crate::connected::Links::new(&self.chunks))
+            .connected_to(&self.chunks, shortlist, question)
     }
     pub(crate) fn prepared(&self) -> &PreparedCorpus {
         &self.prepared
@@ -391,6 +399,7 @@ impl WorkspaceCache {
             chunks,
             prepared,
             navigation,
+            links: std::sync::OnceLock::new(),
         });
         let record = DiskSnapshot {
             version: FORMAT_VERSION,

@@ -210,9 +210,10 @@ client made more calls after receiving one, and Claude used the useful ones
 without a follow-up.
 
 After the excerpts, a normal search names up to six further candidates by
-`path:start-end` only, under `Other candidates, not shown, best first:`. Jev
-judges every shortlisted candidate in the same request, so these
-cost no extra call and one line each; candidates Jev rated irrelevant (below
+`path:start-end` only, under `Other candidates, not shown, best first:`. They
+come from everything Jev judged for the search: the shortlist, the files
+connected to its strongest matches, and the next keyword matches (see
+[search](search.md)). They cost one line each; candidates Jev rated irrelevant (below
 0.2) and anything overlapping a shown excerpt are left out. In keyword order the
 heading is `Other keyword matches, not shown:`. An agent that needs more can
 open one of these instead of starting a blind search. `retrieval.candidates` in
@@ -323,8 +324,10 @@ the same cache metadata in its `cache` field.
 See [context packet validation](../benchmarks/context-packet.md) for offline
 coverage checks, local overhead measurements, and validation limits.
 
-Normal mode uses one Jev ranking request for a nonempty shortlist, with an
-independent relevance judgment for each candidate. Deep mode is
+Normal mode judges a nonempty shortlist in one Jev request, with an
+independent relevance judgment for each candidate, and judges connected files
+and further keyword matches in two requests beside it. Only the shortlist's
+request decides what is shown or whether the search falls back to keyword order. Deep mode is
 bounded to five local actions in MCP, unlike the CLI's optional unbounded mode.
 A normal MCP search waits four seconds for each Jev request (`OKO_JEV_TIMEOUT_MS`,
 500–10000). Jev usually answers in about half a second; when it is slow,

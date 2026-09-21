@@ -46,8 +46,8 @@ pub fn asks_for_tests(question: &str) -> bool {
     })
 }
 
-// EXPERIMENT: for candidates proposed because they are connected to the best
-// matches. The implementation criteria exclude exactly these (tests, callers).
+// For candidates proposed because they are connected to the best matches.
+// The implementation criteria exclude exactly these (tests, callers).
 const RELATED_CRITERIA: &str = "Relevant source is closely connected to the behavior or change in `question` without having to implement it: a test that exercises that code, code that calls it or that it calls, or a definition it depends on, which a developer would read or update together with it. Exclude files that only share common names, generic utilities, documentation, and tests of unrelated behavior.";
 
 // Shared once so explanation guidance does not crowd out candidate previews.
@@ -89,7 +89,7 @@ pub enum RankingIntent {
     General,
     Implementation,
     Explanation,
-    /// EXPERIMENT, internal: never parsed from a caller's input.
+    /// Internal: for connected candidates; never parsed from a caller's input.
     Related,
 }
 
@@ -428,6 +428,9 @@ pub fn call_jev_observed_within(
         .post(format!("{}/v1/systemone", base.trim_end_matches('/')))
         .bearer_auth(api_key)
         .header(reqwest::header::ACCEPT, "application/json")
+        // Which of a search's requests this is: several run at once, and nothing
+        // in the body tells the shortlist's apart from those judged beside it.
+        .header("x-oko-phase", phase)
         .json(&body)
         .send()
     {
