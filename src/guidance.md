@@ -3,7 +3,7 @@ Use the Oko MCP `search` tool first to locate unfamiliar code or where a behavio
 
 Oko returns exact, current file contents with real line numbers: the same text a file read would print. Treat each excerpt as a file read you have already done.
 
-After an Oko search, if you can name the exact code to cite or change, act: answer or edit. Usually that is one Oko call and at most one follow-up read. Read only what Oko did not show: the rest of a `partial excerpt`, a path under `Other candidates`, or code the excerpts reference but do not include. A `possible match` was rated below the relevance cutoff.
+After an Oko search, if you can name the exact code to cite or change, act: answer or edit. If the excerpts show more than one definition that could be meant, such as copies of a helper in different packages, decide which one the request names before editing; the first result is the best match, not always the intended one. Usually that is one Oko call and at most one follow-up read. Read only what Oko did not show: the rest of a `partial excerpt`, a path under `Other candidates`, or code the excerpts reference but do not include. A `possible match` was rated below the relevance cutoff.
 
 - Good: Oko search, then answer with the returned `path:line` ranges.
 - Good: Oko search, then edit the returned lines (drop the line-number prefix).
