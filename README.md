@@ -216,8 +216,9 @@ How we keep it fair:
 
 It is a small benchmark on three repositories with Codex CLI 0.155 and OpenCode
 1.18 (`gpt-5.6-sol`) and Claude Code 2.1 (`claude-sonnet-5`), all at low
-reasoning effort. Your results will vary. See [full results and methodology](docs/benchmark-results.md)
-and the [reproduction instructions](scripts/benchmark-public/README.md).
+reasoning effort. Your results will vary. See [full results and methodology](docs/benchmark-results.md).
+The benchmark is in this repository: the [runner, tasks, and answer checks](scripts/benchmark-public/)
+are there to read, and you can [run it yourself](scripts/benchmark-public/README.md#reproduce-the-readme-numbers).
 
 ## Privacy
 
