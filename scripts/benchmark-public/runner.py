@@ -40,6 +40,30 @@ SMOKE_TASKS = ('astro-image-probe-authorization', 'astro-action-key-guards',
 
 def compares_builds():
     return SUITE in ('branch', 'smoke')
+
+
+# Blank-slate sessions strip every project instruction, including the guidance
+# `oko setup` writes, so they cannot show what it does. The guided condition is
+# the current build plus that guidance, delivered through each client's own
+# channel for standing instructions. The same file is what setup installs.
+GUIDED = 'guided'
+GUIDANCE = PROJECT / 'src/guidance.md'
+
+
+def guide(client, args, env, trial):
+    text = GUIDANCE.read_text()
+    (trial / 'oko-guidance.md').write_text(text)
+    if client == 'codex':
+        # Codex reads AGENTS.md from CODEX_HOME as user instructions, exactly
+        # as it reads a project's. The checkout stays clean for grading.
+        (Path(env['CODEX_HOME']) / 'AGENTS.md').write_text(text)
+    elif client == 'opencode':
+        config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        config['instructions'] = [str(trial / 'oko-guidance.md')]
+        env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)
+    else:
+        args[-1:-1] = ['--append-system-prompt', text]
+    return args, env
 SPEC = importlib.util.spec_from_file_location('public_engine', ROOT.parent / 'benchmark-twenty/runner.py')
 engine = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(engine)
@@ -150,7 +174,8 @@ def prepare(args):
                         okoSha256=digest(args.oko), tasksSha256=digest(FIXTURE), implementationSha256=implementation_digest(),
                         isolation=engine.ISOLATION_VERSION)
         if compares_builds():
-            settings.update(builds=builds, suite=SUITE, repeats=args.repeats,
+            settings.update(builds=builds, suite=SUITE, repeats=args.repeats, conditions=list(CONDITIONS),
+                            guidanceSha256=digest(GUIDANCE),
                             cachePolicy=args.cache_policy, isolationCheck=isolation,
                             tasks=[t['id'] for t in item['tasks']],
                             validatorLibrarySha256=digest(BUILD_STATE/'libmemchr.rlib'),
@@ -219,6 +244,8 @@ def args_for(task, client, condition, work, trial):
     save(trial/'settings.json', engine.SETTINGS)
     args, env = original_args(task, client, condition, work, trial)
     env['OKO_PUBLIC_BENCH_REPO'] = task['repositoryName']
+    if task.get('cacheCondition') == GUIDED:
+        args, env = guide(client, args, env, trial)
     if compares_builds() and client == 'opencode':
         # Separate both conversation storage and configuration. Link login state only.
         original_data = Path(os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share')))
@@ -297,6 +324,12 @@ def prompt(task, enabled):
     if task.get('memoryCanary'):
         return task['question']
     text = original_prompt(task, enabled)
+    if task.get('cacheCondition') == GUIDED:
+        excluded = 'do not load skills, personal instructions, AGENTS.md, CLAUDE.md, or saved memory.'
+        if excluded not in text:
+            raise RuntimeError('Benchmark prompt changed; update the guided condition')
+        text = text.replace(excluded, 'do not load skills, personal instructions, or saved memory. '
+                            "The project's standing instructions about Oko search apply.")
     if task['kind'] == 'edit':
         text = text.replace('this fixture evaluates retrieval and a bounded patch without application dependencies',
                             'the runner will independently execute focused behavior checks after your session')
@@ -362,6 +395,8 @@ def verify_settings(args, schedule):
             if s['repeats'] != args.repeats or s['cachePolicy'] != args.cache_policy:
                 raise RuntimeError('Frozen repetitions/cache policy changed; prepare again')
             selected = [t['id'] for item in REPOSITORIES if item['name'] == name for t in item['tasks']]
+            if s.get('conditions', list(CONDITIONS)) != list(CONDITIONS) or s.get('guidanceSha256', digest(GUIDANCE)) != digest(GUIDANCE):
+                raise RuntimeError('Frozen conditions or guidance changed; prepare again')
             # Only the smoke suite's task list can vary between preparations.
             if SUITE == 'smoke' and (s.get('suite') != SUITE or s.get('tasks') != selected):
                 raise RuntimeError('Frozen suite/task selection changed; prepare again')
@@ -414,7 +449,7 @@ def execute(args, schedule):
             engine.STATE=STATE/name
             engine.SETTINGS=dict(settings[name])
             if compares_builds():
-                selected = settings[name]['builds']['current' if condition=='native' else condition]
+                selected = settings[name]['builds']['current' if condition in ('native', GUIDED) else condition]
                 engine.SETTINGS.update(oko=selected['path'],okoSha256=selected['sha256'])
             engine_condition = ENGINE_CONDITIONS[condition]
             trials=engine.STATE/output.name/condition
@@ -474,6 +509,10 @@ def main():
     p.add_argument('--timeout',type=int,default=180)
     p.add_argument('--suite', choices=('legacy','branch','smoke'), default='legacy',
                    help='smoke: previous vs current build on a few branch tasks, minutes not hours; direction only')
+    p.add_argument('--guided',action='store_true',
+                   help='Branch/smoke: add a condition that is the current build plus the agent guidance oko setup installs')
+    p.add_argument('--skip-previous',action='store_true',
+                   help='Branch suite with --guided: run native, current and guided only')
     p.add_argument('--tasks',help='Smoke suite only: comma-separated branch task ids (default: '+','.join(SMOKE_TASKS)+')')
     p.add_argument('--repeats',type=int)
     p.add_argument('--cache-policy',choices=('cold','warm'),default='warm')
@@ -505,6 +544,16 @@ def main():
         CONDITIONS=('previous','current')
         ENGINE_CONDITIONS={'previous':'oko-'+args.cache_policy,'current':'oko-'+args.cache_policy}
         CACHE_POLICY=args.cache_policy
+    if args.guided:
+        if not compares_builds():p.error('--guided requires --suite branch or smoke')
+        CONDITIONS=CONDITIONS+(GUIDED,)
+        ENGINE_CONDITIONS={**ENGINE_CONDITIONS,GUIDED:'oko-'+args.cache_policy}
+    if args.skip_previous:
+        # The previous build is compared often and cheaply elsewhere (replay, smoke).
+        # Dropping it keeps a guided full run the size of an ordinary one.
+        if SUITE!='branch' or not args.guided:p.error('--skip-previous requires --suite branch --guided')
+        CONDITIONS=tuple(c for c in CONDITIONS if c!='previous')
+        ENGINE_CONDITIONS={c:v for c,v in ENGINE_CONDITIONS.items() if c!='previous'}
     if not args.clients or len(set(args.clients))!=len(args.clients) or any(c not in CLIENTS for c in args.clients):p.error('Invalid clients')
     if args.timeout<1:p.error('Timeout must be positive')
     if args.resume and not args.execute:p.error('--resume requires --execute')

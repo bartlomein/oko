@@ -10,19 +10,23 @@ replace them with your actual paths. `command -v oko` shows your installed binar
 Oko uses local stdio MCP: the coding tool starts the process. There is no separate
 HTTP server to deploy. Oko exposes one tool, `search`.
 
-## Codex
+## Setup
 
 ```sh
 cd /path/to/your/project
-oko setup
+oko setup                     # Codex
+oko setup --client claude     # Claude Code
+oko setup --client opencode   # OpenCode 1.x
+oko setup --client all
 ```
 
-This configures Codex for the current project and checks MCP tool discovery.
-Open the project in Codex, trust it if prompted, and start a new session.
-See [setup details](mcp.md#set-up-codex-for-a-project) for changed files, backups,
-credential handling, and optional flags.
+This connects the tool for the current project, adds Oko’s search guidance to the
+instructions that tool reads, and checks MCP tool discovery. Start a new session
+(in Codex, trust the project if prompted). See [setup details](mcp.md#set-up-a-project)
+for changed files, backups, credential handling, and optional flags. The sections
+below make the same connection by hand.
 
-## Claude Code
+## Claude Code by hand
 
 From the project directory, add a connection scoped to this project and user:
 
@@ -36,7 +40,7 @@ Quote the executable path if it contains spaces. Start a new Claude Code session
 and check `/mcp` for Oko. The `local` scope keeps this machine’s paths out of your
 shared project configuration. See [Claude Code’s MCP documentation](https://code.claude.com/docs/en/mcp).
 
-## OpenCode
+## OpenCode by hand
 
 Merge this entry into your project’s `opencode.json` (preserve existing settings):
 
@@ -68,13 +72,11 @@ Ask your agent:
 Check that it calls Oko’s `search` tool. A connected status confirms tool discovery;
 it does not validate your TypeSafe key or guarantee the agent will choose Oko.
 
-For ongoing guidance, add this to your project’s agent instructions (`AGENTS.md`
-for OpenCode, `CLAUDE.md` for Claude Code). Codex setup already adds guidance:
-
-> Use Oko first to locate unfamiliar code. Start with the user’s wording and normal
-> search. Use the returned source context when sufficient; investigate further
-> when it is incomplete. Use native grep for exact known names or literal text.
-> Fall back to native search if Oko is unavailable.
+Setup adds Oko’s guidance to your project’s agent instructions. After a manual
+connection, add the contents of [`src/guidance.md`](../src/guidance.md) yourself
+(`AGENTS.md` for Codex and OpenCode, `CLAUDE.md` for Claude Code). It says when to use Oko, that excerpts
+are exact file contents, and when to stop searching, with good and bad examples;
+project instructions are where agents look for this, not tool descriptions.
 
 For local-only operation, append `--no-jev` to the server arguments. This needs no
 TypeSafe key and disables deep mode. For server environments without a credential

@@ -56,4 +56,11 @@ def render(data, clients, conditions):
                 seconds=statistics.median(b['seconds']-a['seconds'] for a,b in pairs)
                 percent=statistics.median(100*(b['seconds']/a['seconds']-1) for a,b in pairs)
                 lines.append(f'| {c} | {baseline} | {len(pairs)} | {seconds:+.2f} | {percent:+.1f}% |')
+            # The same build with and without the agent guidance oko setup installs.
+            guided=[(current[k],r) for r in runs for k in [(r['repository'],r['id'],r.get('repetition',1))]
+                    if r['client']==c and r['condition']=='guided' and k in current and current[k]['seconds']>0]
+            if guided:
+                seconds=statistics.median(b['seconds']-a['seconds'] for a,b in guided)
+                percent=statistics.median(100*(b['seconds']/a['seconds']-1) for a,b in guided)
+                lines.append(f'| {c} | current -> guided | {len(guided)} | {seconds:+.2f} | {percent:+.1f}% |')
     return '\n'.join(lines)+'\n'

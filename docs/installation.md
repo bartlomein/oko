@@ -102,8 +102,8 @@ Rerun the installer with `OKO_VERSION` set to the new published version. For a
 manual installation, download and verify the new archive. For a source
 installation, update your checkout and rerun `cargo install`.
 
-Codex setup keeps its own stable copy: run the newly installed `oko setup` in each
-configured project to update it. Start a new agent session so it launches the
+Setup keeps its own stable copy: run the newly installed `oko setup` (with the same
+`--client`) in each configured project to update it. Start a new agent session so it launches the
 updated server. If your client keeps an old server running, reconnect its MCP
 connection or restart the client. Saved credentials are separate from the binary.
 
@@ -136,7 +136,7 @@ You can run the extracted executable directly:
 /absolute/path/to/extracted/oko setup --root /absolute/path/to/project
 ```
 
-Codex setup copies Oko and ripgrep to a stable user directory, so its connection
+Setup copies Oko and ripgrep to a stable user directory, so its connection
 survives deleting the download. Setup does not add an `oko` command to PATH.
 Manual client configurations must point to a permanent executable location.
 
