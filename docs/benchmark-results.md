@@ -7,7 +7,9 @@
 The README reports this run. Nine tasks (six code-location questions and three
 small edits across Astro, HTTPX, and ripgrep), three clients, three repeats, and
 three setups: **without Oko**, **Oko**, and **Oko with the guidance `oko setup`
-installs**. The README's "With Oko" column is the last one. Oko starts with a
+installs**. The README reports the first and last
+(162 of the 243 sessions), since `oko setup` installs the guidance; the middle one
+is what a manual connection without the guidance gets. Oko starts with a
 warm disk index; building it is excluded from timing. Measured on commit
 `c8934a0`; later commits before 0.4.0 change only `oko setup` and documentation.
 

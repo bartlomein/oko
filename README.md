@@ -181,8 +181,7 @@ tasks, nine in all:
 
 The task wording never names the file or function, which is the situation Oko is
 built for. Every task runs 3 times per setup with Codex, OpenCode, and Claude
-Code. The latest run is **243 sessions**; it also measured a third setup, Oko
-without its guidance, which is in the [full results](docs/benchmark-results.md).
+Code: **162 sessions** in the latest run.
 
 | Coding tool | | Without Oko | With Oko | Average | Best task |
 | --- | --- | --- | --- | --- | --- |
