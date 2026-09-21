@@ -210,6 +210,8 @@ How we keep it fair:
 - **Same everything else.** Same task wording, model, and settings for both
   setups, on a pinned copy of each repository, with no project instructions
   other than Oko's guidance.
+- **Every task runs 3 times** per tool and setup, and we report the average, so
+  one lucky or unlucky session does not decide the result.
 - **The setups run back to back and take turns going first**, so a slow minute
   at the model provider does not favor one of them.
 - **Tokens are the agent's own**, cached input included. Oko's ranking calls to
