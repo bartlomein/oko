@@ -18,7 +18,7 @@ Build one package locally on its native platform:
 ```sh
 cargo build --release --locked --target aarch64-apple-darwin --bin oko
 python3 scripts/release.py package --target aarch64-apple-darwin --output target/release-bundles
-python3 scripts/smoke-release.py target/release-bundles/oko-v0.3.0-aarch64-apple-darwin.tar.gz
+python3 scripts/smoke-release.py target/release-bundles/oko-v0.4.0-aarch64-apple-darwin.tar.gz
 ```
 
 Change the target and version for your platform. Maintainer scripts need Python
@@ -34,7 +34,7 @@ ranking using a project `.env`. It never touches the user's installed Oko or key
 1. Commit the reviewed code and version in `Cargo.toml`/`Cargo.lock`; set the default
    `OKO_VERSION` in `install.sh` and update installation examples for that release.
    Ensure CI passes.
-2. Push a version tag matching Cargo exactly, for example `v0.3.0`.
+2. Push a version tag matching Cargo exactly, for example `v0.4.0`.
 3. Wait for **Draft release** to finish all four native checks and package tests.
 4. Review the draft's four archives, `SHA256SUMS`, and generated release notes.
 5. Download and try the candidate with a coding client, then explicitly publish it.
