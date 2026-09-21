@@ -186,6 +186,13 @@ pub(crate) struct CandidateScore {
     pub end_line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    /// EXPERIMENT: position among the judged candidates before reranking
+    /// (keyword shortlist first, then each extra batch in its own order).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<usize>,
+    /// EXPERIMENT: proposed by the one-hop step, not by keywords.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub connected: bool,
 }
 
 fn lexical_candidates(chunks: &[search::Chunk]) -> Vec<CandidateScore> {
@@ -196,6 +203,8 @@ fn lexical_candidates(chunks: &[search::Chunk]) -> Vec<CandidateScore> {
             start_line: chunk.start_line,
             end_line: chunk.end_line,
             score: None,
+            position: None,
+            connected: false,
         })
         .collect()
 }
@@ -227,18 +236,37 @@ fn judge_in_parallel(
     first_pool: Option<usize>,
     stats: &mut CodeRankingStats,
 ) -> Result<ranking::ItemRanking> {
+    // EXPERIMENT: OKO_EXPERIMENT_HOP_INTENT=general judges one-hop candidates
+    // (which carry no keyword score) as related code, not as the implementation asked about.
+    let hop_intent = match std::env::var("OKO_EXPERIMENT_HOP_INTENT").as_deref() {
+        Ok("general") => Some(RankingIntent::General),
+        // Judge connected candidates as connected code, which the
+        // implementation criteria exclude by design (tests, callers).
+        Ok("related") => Some(RankingIntent::Related),
+        _ => None,
+    };
     let jobs: Vec<_> = groups
         .iter()
         .filter(|(group, _)| !group.is_empty())
-        .flat_map(|(group, offset)| intents.iter().map(move |intent| (*group, *offset, *intent)))
+        .flat_map(|(group, offset)| {
+            let connected = *offset > 0 && group[0].lexical_score == 0.0;
+            let intents = match hop_intent {
+                Some(intent) if connected => vec![intent],
+                _ => intents.clone(),
+            };
+            intents
+                .into_iter()
+                .map(move |intent| (*group, *offset, intent))
+        })
         .collect();
     let outcomes: Vec<_> = std::thread::scope(|scope| {
         let handles: Vec<_> = jobs
             .iter()
             .map(|&(group, offset, intent)| {
                 scope.spawn(move || -> Result<_> {
-                    let items =
-                        oko::preview::ranking_previews_with_context(question, group, corpus, intent)?;
+                    let items = oko::preview::ranking_previews_with_context(
+                        question, group, corpus, intent,
+                    )?;
                     let mut calls = Vec::new();
                     let ranking = ranking::rank_items_with_stats(
                         question,
@@ -275,6 +303,8 @@ fn judge_in_parallel(
                     *kept = kept.max(score);
                 }
             }
+            // A slow or failed extra batch must not cost the search its first thirty.
+            Err(_) if first_pool.is_some() && offset > 0 => {}
             Err(error) => failure = Some(error),
         }
     }
@@ -329,6 +359,17 @@ fn lexical_results(chunks: &[search::Chunk]) -> Vec<CodeResult> {
             text: chunk.text.clone(),
         })
         .collect()
+}
+
+/// EXPERIMENT: how many further batches of 30 keyword candidates to judge.
+pub(crate) fn experiment_extra_batches() -> usize {
+    let pool = std::env::var("OKO_EXPERIMENT_POOL").unwrap_or_default();
+    let size: usize = pool
+        .trim_end_matches("first")
+        .trim_end_matches("list")
+        .parse()
+        .unwrap_or(60);
+    (size / 30).saturating_sub(1).max(1)
 }
 
 /// How the shortlist is ordered.
@@ -394,8 +435,13 @@ pub(crate) fn rank_code_with_stats(
         // "60first": as 60, but matches among the first 30 keep their rank ahead
         // of any from the next 30, which then only fill slots left free.
         let pool = std::env::var("OKO_EXPERIMENT_POOL").unwrap_or_default();
-        let wider = pool == "60" || pool == "60first";
-        let first_pool = (pool == "60first").then_some(chunks.len());
+        // "90first" / "120first": as "60first" with two or three extra batches.
+        // "90list": the extra batches never reach the excerpts, the possible
+        // matches or the recovery call. What the agent is shown stays exactly
+        // today's; their judged candidates only join the list of other files.
+        let additive = pool.ends_with("list");
+        let wider = pool == "60" || pool.ends_with("first") || additive;
+        let first_pool = (pool.ends_with("first") || additive).then_some(chunks.len());
         let both_intents = std::env::var("OKO_EXPERIMENT_INTENTS").is_ok_and(|v| v == "1");
         let experiment = wider || both_intents;
         let mut recovery_candidates = Some(recovery_candidates);
@@ -406,7 +452,14 @@ pub(crate) fn rank_code_with_stats(
         let first = if experiment {
             judge_in_parallel(
                 question,
-                &[(chunks, 0), (&extra, chunks.len())],
+                &std::iter::once((chunks, 0))
+                    .chain(
+                        extra
+                            .chunks(30)
+                            .enumerate()
+                            .map(|(batch, group)| (group, chunks.len() + batch * 30)),
+                    )
+                    .collect::<Vec<_>>(),
                 corpus,
                 key.as_deref(),
                 if both_intents {
@@ -453,14 +506,39 @@ pub(crate) fn rank_code_with_stats(
         let mut selected = chunks.to_vec();
         selected.extend(extra);
         let mut ranking = ranking;
-        if ranking.results.is_empty() && !items.is_empty() && !experiment {
+        let candidate = |chunk: &search::Chunk, score: f64, position: usize| CandidateScore {
+            path: chunk.path.clone(),
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            score: Some(score),
+            position: Some(position),
+            // Only one-hop candidates carry no keyword score.
+            connected: position >= chunks.len() && chunk.lexical_score == 0.0,
+        };
+        let mut listed_only = Vec::new();
+        if additive {
+            let position = |id: &str| id.parse::<usize>().expect("IDs generated locally");
+            for (id, score) in &ranking.judged {
+                listed_only.push(candidate(&selected[position(id)], *score, position(id)));
+            }
+            ranking
+                .results
+                .retain(|item| position(&item.id) < chunks.len());
+            ranking.judged.retain(|(id, _)| position(id) < chunks.len());
+        }
+        if ranking.results.is_empty() && !items.is_empty() && (!experiment || additive) {
             let recovery_started = Instant::now();
             let mut recovery: Vec<_> = chunks.iter().take(8).cloned().collect();
-            recovery.extend(
-                (recovery_candidates.take().expect("experiments skip recovery"))()?
-                    .into_iter()
-                    .take(8),
-            );
+            let next: Vec<search::Chunk> = match recovery_candidates.take() {
+                Some(unseen) => unseen()?,
+                // Already fetched for the extra batches: the next keyword matches.
+                None => selected[chunks.len()..]
+                    .iter()
+                    .filter(|chunk| chunk.lexical_score != 0.0)
+                    .cloned()
+                    .collect(),
+            };
+            recovery.extend(next.into_iter().take(8));
             let recovery_items =
                 oko::preview::recovery_previews_with_context(question, &recovery, corpus, intent)?;
             // Do not spend a second call on the same evidence with different IDs.
@@ -512,15 +590,25 @@ pub(crate) fn rank_code_with_stats(
             .judged
             .iter()
             .map(|(id, score)| {
-                let chunk = &selected[id.parse::<usize>().expect("IDs generated locally")];
-                CandidateScore {
-                    path: chunk.path.clone(),
-                    start_line: chunk.start_line,
-                    end_line: chunk.end_line,
-                    score: Some(*score),
-                }
+                let position = id.parse::<usize>().expect("IDs generated locally");
+                candidate(&selected[position], *score, position)
             })
             .collect();
+        if additive {
+            // Everything judged, best first; a recovery call re-judges some of the first thirty.
+            for extra in listed_only {
+                let seen = stats.candidates.iter().any(|old| {
+                    (&old.path, old.start_line, old.end_line)
+                        == (&extra.path, extra.start_line, extra.end_line)
+                });
+                if !seen {
+                    stats.candidates.push(extra);
+                }
+            }
+            stats
+                .candidates
+                .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+        }
         let accepted: std::collections::HashSet<&str> = ranking
             .results
             .iter()

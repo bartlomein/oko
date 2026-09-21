@@ -216,7 +216,35 @@ impl OkoServer {
                     if cancelled() {
                         bail!("Search cancelled.");
                     }
-                    Ok(snapshot.rank_excluding(&input.question, input.intent.into(), &shortlist))
+                    let mut seen = shortlist.clone();
+                    let mut extra = Vec::new();
+                    // EXPERIMENT: OKO_EXPERIMENT_HOP=1 spends the first extra
+                    // batch on files one hop from the strongest matches.
+                    let hop = std::env::var("OKO_EXPERIMENT_HOP").is_ok_and(|v| v == "1");
+                    // Keyword batches are chosen exactly as without the hop, so a
+                    // recovery call sees the candidates it sees today.
+                    for _ in usize::from(hop)..super::experiment_extra_batches() {
+                        let next =
+                            snapshot.rank_excluding(&input.question, input.intent.into(), &seen);
+                        if next.is_empty() {
+                            break;
+                        }
+                        seen.extend(next.iter().cloned());
+                        extra.extend(next);
+                    }
+                    if hop {
+                        let mut connected =
+                            oko::connected::connected_to(corpus, &shortlist, &input.question);
+                        connected.retain(|chunk| {
+                            !extra.iter().any(|old| {
+                                (&old.path, old.start_line, old.end_line)
+                                    == (&chunk.path, chunk.start_line, chunk.end_line)
+                            })
+                        });
+                        connected.extend(extra);
+                        extra = connected;
+                    }
+                    Ok(extra)
                 },
             )?;
             lexical_fallback = stats.lexical_fallback;
