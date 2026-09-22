@@ -152,12 +152,10 @@ Oko searches the directory you run it from:
 cd /path/to/your/project
 oko ask "where is authentication handled?"
 oko ask "how are retries handled?" --json
-oko ask "how does authentication work?" --deep --max-steps 5
 oko ask "where is authentication handled?" --no-jev
 ```
 
-Start with normal search. Deep mode can investigate further, but makes additional
-Jev requests and can take longer. `--no-jev` uses local keyword ranking only.
+`--no-jev` uses local keyword ranking only.
 
 To replace, check, or remove your saved key, use `oko auth login`,
 `oko auth status`, or `oko auth logout`.
@@ -222,8 +220,7 @@ the [runner, tasks, and checks](scripts/benchmark-public/), and the
 ## Privacy
 
 File discovery and initial search run locally. Jev ranking sends your question and
-selected source snippets to TypeSafe AI. Deep mode can send more snippets across
-multiple requests. **Use `--no-jev` for local-only searches.** Oko does not edit your
+selected source snippets to TypeSafe AI, at most 90 snippets in three requests per search. **Use `--no-jev` for local-only searches.** Oko does not edit your
 source files. Prepared search data is cached outside your repository;
 [configuration](docs/configuration.md) explains key storage and cache controls.
 

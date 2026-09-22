@@ -1,6 +1,6 @@
 [package]
 name = "oko"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "A small search and ranking CLI and Rust library with TypeSafe AI Jev reranking"
 default-run = "oko"

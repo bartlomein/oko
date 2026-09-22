@@ -61,7 +61,7 @@ Preview selection itself adds no model requests. Each Jev request keeps the
 the [earlier shortlist audit](../benchmarks/shortlist.md) documents the prior design.
 
 The earlier [BM25 validation](../benchmarks/bm25.md) scored 42/45 first-result hits and
-45/45 top-five hits in both ordinary and deep modes on the existing fixture,
+45/45 top-five hits on the existing fixture,
 with medians of 1.35 s and 1.95 s respectively. These development results match
 the earlier agent comparison on this fixture, not general accuracy parity.
 
@@ -104,7 +104,7 @@ fuller previews plus up to eight previously unconsidered candidates. The origina
 question, intent, directory scope, and relevance threshold stay unchanged. MCP
 reuses the captured snapshot and prepared index; recovery does not rescan files.
 An identical-evidence retry is skipped. Genuine misses can still return nothing.
-Deep mode retains its existing investigation budget; generic `rank` is unchanged.
+Generic `rank` is unchanged.
 
 It never sends the full repository: at most 90 chunks per search, in three
 requests. Each request is limited to 32,000 bytes before the model field is added. This is a byte budget, not a token count. Requests have
@@ -118,70 +118,6 @@ Missing credentials or provider failures exit nonzero.
 
 `--no-jev` skips the API and returns lexical ranking. JSON goes to stdout;
 diagnostics go to stderr. Intent-aware instructions refine the default code ranking.
-
-## Jev-only investigation
-
-```sh
-oko ask --deep --max-steps 5 "Where is authentication handled?"
-oko ask --deep --json "Where are optional values interpolated?"
-```
-
-`--deep` adds a search/read/decision loop using the same `TYPESAFE_API_KEY`.
-No Codex, OpenCode, OpenAI or Anthropic connection is used. Normal `ask` remains
-the fast single-pass path.
-
-Oko proposes searches from the question's words and adjacent word pairs, with
-source-code searches for implementation intent. It also offers nearby chunks
-and definitions of symbols observed in results. Jev chooses the next offered
-action or finishes, then reranks newly discovered evidence with existing results.
-Jev selects typed actions: it does not generate arbitrary queries or shell commands.
-This is a constrained investigation loop, not a full OpenCode-style coding agent.
-
-`--max-steps N` optionally limits local search/read actions, including the initial
-search. A step can require a ranking call and an action-selection call; JSON
-reports the actual `jevCalls`. No step cap is imposed when omitted. The loop
-also stops when Jev chooses to finish or all offered actions are exhausted.
-Actions that expose the same evidence are deduplicated. An empty answer cannot
-finish while untried actions remain; Jev must choose another action. Actions do
-not repeat. Each provider call retains the existing ten-second timeout,
-32 KB request budget and no automatic retries. No total wall-time or token-cost
-budget is implemented. Use a step limit when bounding API use matters.
-
-The repository is read once into a snapshot using the same ignored-file, UTF-8,
-256 KiB file-size and chunking rules as ordinary search. Local actions only use
-that snapshot; there are no edits, shell commands or reads of model-provided paths.
-Progress goes to stderr. JSON includes `investigation` with steps, call count,
-action trace, omitted candidates and stop reason. `complete` is true only when
-Jev chooses to finish; a budget stop returns current findings with `complete:false`.
-That flag is the controller's stopping decision, not proof the answer is correct.
-`--deep` cannot be combined with `--no-jev` or used with generic `rank` inputs.
-
-Run the synthetic live smoke benchmark with `node scripts/benchmark-investigation.mjs`
-after building the release binary. It generates toy source and distractor docs,
-uses Jev, and saves reports under `benchmarks/results/`. On September 18, 2026,
-deep search found the expected function first in 3/3 repeats versus 0/3 for
-single-pass search; median times were 1.17 s and 0.47 s respectively. Deep search
-used two steps and three Jev calls per run, stopping with actions exhausted.
-This is a development case, not a held-out accuracy evaluation.
-
-For a real-repository comparison using only Jev:
-
-```sh
-node scripts/compare-investigation.mjs /path/to/repository /path/to/fixture.json
-```
-
-The fixture uses the same source-hashed expected locations as the agent comparison.
-The runner compares ordinary search with five-step deep search over three repeats,
-rotates execution order, and records accuracy, elapsed time, Jev calls and action
-traces. Repository snippets are sent to Jev. Results are saved under
-`benchmarks/results/deep-comparison-*/`; source and executable snapshots are
-checked before and after the run.
-
-[Real-repository validation](../benchmarks/jev-investigation.md): caching processed
-words reduced deep mode's median time from 19.23 s to 1.82 s on the 15-question
-fixture. The follow-up scored 34/45 first-result hits and 41/45 top-five hits
-for deep mode versus 35/45 and 42/45 for ordinary search (1.19 s median).
-Deep mode remains experimental; this optimization targets speed, not accuracy.
 
 ## Ranking intent
 

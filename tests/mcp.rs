@@ -304,9 +304,6 @@ fn invalid_arguments_boundaries_and_missing_key_are_recoverable() {
         json!({"question":"x".repeat(4097)}),
         json!({"question":"auth","directory":outside.path()}),
         json!({"question":"auth","directory":".."}),
-        json!({"question":"auth","max_steps":1}),
-        json!({"question":"auth","deep":true,"max_steps":6}),
-        json!({"question":"auth","deep":true}),
     ] {
         let result = client.search(args);
         assert_eq!(result["result"]["isError"], true, "{result}");
@@ -315,6 +312,8 @@ fn invalid_arguments_boundaries_and_missing_key_are_recoverable() {
         json!({}),
         json!({"question":"auth","intent":"bad"}),
         json!({"question":"auth","surprise":true}),
+        json!({"question":"auth","deep":true}),
+        json!({"question":"auth","max_steps":1}),
     ] {
         let result = client.search(args);
         assert!(
@@ -382,9 +381,9 @@ fn symlink_directory_cannot_escape_workspace() {
 }
 
 #[test]
-fn normal_and_deep_search_use_mock_jev_and_survive_provider_errors() {
+fn search_uses_mock_jev_and_survives_provider_errors() {
     use std::{io::Read, net::TcpListener, time::Instant};
-    for (deep, fail) in [(false, false), (true, false), (false, true)] {
+    for fail in [false, true] {
         let root = fixture();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -436,28 +435,13 @@ fn normal_and_deep_search_use_mock_jev_and_survive_provider_errors() {
         });
         let mut client = Client::start(root.path(), false, Some(&endpoint));
         client.initialize();
-        let args = if deep {
-            json!({"question":"authentication","deep":true,"max_steps":1})
-        } else {
-            json!({"question":"authentication"})
-        };
-        let result = client.search(args);
+        let result = client.search(json!({"question":"authentication"}));
         server.join().unwrap();
         assert!(!result.to_string().contains("fake-mcp-key"));
         assert_eq!(result["result"]["isError"], fail, "{result}");
         if !fail {
             assert_packet_envelope(&result);
             assert_eq!(result["metrics"]["results"][0]["path"], "auth.rs");
-            if deep {
-                assert_eq!(result["metrics"]["investigation"]["jevCalls"], 1);
-                assert!(
-                    result["result"]["content"][0]["text"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("Deep search stopped after 1 step: "),
-                    "{result}"
-                );
-            }
         }
         assert!(client.request("ping", json!({})).get("error").is_none());
     }
@@ -970,14 +954,11 @@ fn assert_packet_envelope(response: &Value) -> &Value {
             "missing or invalid timing {phase}: {packet}"
         );
     }
-    for optional_phase in ["shortlistMs", "investigateMs"] {
-        assert!(
-            packet["timings"][optional_phase].is_null()
-                || packet["timings"][optional_phase]
-                    .as_f64()
-                    .is_some_and(|n| n >= 0.0)
-        );
-    }
+    assert!(
+        packet["timings"]["shortlistMs"]
+            .as_f64()
+            .is_some_and(|n| n >= 0.0)
+    );
     packet
 }
 

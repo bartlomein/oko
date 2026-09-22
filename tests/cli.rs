@@ -414,45 +414,11 @@ fn invalid_intents_fail_and_offline_intents_need_no_network() {
 }
 
 #[test]
-fn deep_mode_uses_existing_jev_key_and_reports_budget_stop() {
-    let temp = tempfile::tempdir().unwrap();
-    fs::write(
-        temp.path().join("auth.rs"),
-        "fn authenticate() { validate_token(); }\n",
-    )
-    .unwrap();
-    fs::write(temp.path().join(".env"), "TYPESAFE_API_KEY=fake-deep-key\n").unwrap();
-    let mut cmd = command(temp.path());
-    cmd.args([
-        "ask",
-        "authenticate token",
-        "--deep",
-        "--max-steps",
-        "1",
-        "--json",
-    ]);
-    let (output, headers, request) =
-        mock_run(&mut cmd, |request| relevance_response(request, |_| 0.9));
-    assert!(headers.contains("authorization: bearer fake-deep-key"));
-    assert_eq!(request["questions"]["candidate_1"]["type"], "noul");
-    let value = success(output);
-    assert_eq!(value["ranking"], "jev");
-    assert_eq!(value["results"][0]["path"], "auth.rs");
-    assert_eq!(value["investigation"]["steps"], 1);
-    assert_eq!(value["investigation"]["jevCalls"], 1);
-    assert_eq!(value["investigation"]["complete"], false);
-    assert_eq!(value["investigation"]["stopReason"], "step_limit");
-}
-
-#[test]
-fn deep_flags_reject_incompatible_or_ambiguous_limits() {
+fn removed_deep_flags_are_rejected() {
     let temp = tempfile::tempdir().unwrap();
     for args in [
+        vec!["ask", "q", "--deep"],
         vec!["ask", "q", "--max-steps", "1"],
-        vec!["ask", "q", "--deep", "--no-jev"],
-        vec!["ask", "q", "--deep", "--max-steps", "0"],
-        vec!["ask", "q", "--deep", "--max-steps", "-1"],
-        vec!["ask", "q", "--deep", "--max-steps", "1", "--max-steps", "2"],
         vec!["rank", "q", "--input", "items.json", "--deep"],
     ] {
         assert!(

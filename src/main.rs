@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::{env, fs::File, io::Read, path::Path, time::Instant};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY] [--no-jev]\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY] [--no-jev]\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -20,8 +20,6 @@ struct Arguments {
     no_jev: bool,
     input: Option<String>,
     intent: RankingIntent,
-    deep: bool,
-    max_steps: Option<usize>,
 }
 
 fn parse_arguments(args: &[String]) -> Result<Arguments> {
@@ -41,8 +39,6 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
         json: false,
         no_jev: false,
         input: None,
-        deep: false,
-        max_steps: None,
         intent: if command == "ask" {
             RankingIntent::Implementation
         } else {
@@ -65,22 +61,6 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
                     .context("--intent requires implementation, explanation, or general.")?
                     .parse()?;
                 intent_seen = true;
-            }
-            "--deep" if command == "ask" => parsed.deep = true,
-            "--max-steps" if command == "ask" => {
-                if parsed.max_steps.is_some() {
-                    bail!("Provide --max-steps only once.");
-                }
-                index += 1;
-                let steps: usize = args
-                    .get(index)
-                    .context("--max-steps requires a positive integer.")?
-                    .parse()
-                    .context("--max-steps requires a positive integer.")?;
-                if steps == 0 {
-                    bail!("--max-steps must be greater than zero.");
-                }
-                parsed.max_steps = Some(steps);
             }
             "--json" => parsed.json = true,
             "--no-jev" => parsed.no_jev = true,
@@ -106,12 +86,6 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
     }
     if command == "rank" && parsed.input.is_none() {
         bail!("oko rank requires --input items.json.");
-    }
-    if parsed.max_steps.is_some() && !parsed.deep {
-        bail!("--max-steps requires --deep.");
-    }
-    if parsed.deep && parsed.no_jev {
-        bail!("--deep uses Jev and cannot be combined with --no-jev.");
     }
     Ok(parsed)
 }
@@ -222,7 +196,9 @@ fn provider_unavailable(calls: &[JevCallStats]) -> Option<&'static str> {
 /// that run while the shortlist is judged, so they add no wait. They never
 /// reach the excerpts, the possible matches or the recovery call: what the
 /// agent is shown is decided by the shortlist alone. The ones Jev rates
-/// relevant are named in the list of other files.
+/// relevant are named in the list of other files. Letting them into the
+/// excerpts for multi-line questions was measured on SWE-Explore (848
+/// issues) and made no difference; see docs/benchmark-results.md.
 pub(crate) struct Further {
     /// Files one hop from the strongest matches: tests, callers, definitions.
     pub connected: Vec<search::Chunk>,
@@ -232,7 +208,7 @@ pub(crate) struct Further {
 
 /// What one search judges beside its shortlist.
 pub(crate) fn further_candidates(
-    snapshot: &oko::search_cache::WorkspaceSnapshot,
+    snapshot: &std::sync::Arc<oko::search_cache::WorkspaceSnapshot>,
     shortlist: &[search::Chunk],
     question: &str,
     intent: RankingIntent,
@@ -490,7 +466,7 @@ pub(crate) fn rank_code_with_stats(
                     question,
                     &recovery_items,
                     &RankOptions {
-                        api_key: key,
+                        api_key: key.clone(),
                         limit: 30,
                         no_jev: false,
                         intent,
@@ -683,53 +659,11 @@ fn run() -> Result<()> {
             }
         }
     } else {
-        if parsed.deep && key.is_none() {
-            bail!("TYPESAFE_API_KEY is required for --deep investigation.");
-        }
         let workspace = oko::search_cache::WorkspaceCache::new()
             .without_watching()
             .load(&cwd)?;
         let snapshot = workspace.snapshot;
-        let mut investigation = None;
-        let (results, retrieval) = if parsed.deep {
-            let key = key
-                .as_deref()
-                .context("TYPESAFE_API_KEY is required for --deep investigation.")?;
-            let mut provider_calls = Vec::new();
-            let run = oko::investigate::investigate_snapshot_with(
-                &parsed.question,
-                &snapshot,
-                parsed.intent,
-                parsed.max_steps,
-                |request| {
-                    oko::ranking::call_jev_observed(request, key, "deep", &mut provider_calls)
-                },
-            )?;
-            let results = run
-                .results
-                .iter()
-                .map(|f| CodeResult {
-                    path: f.chunk.path.clone(),
-                    start_line: f.chunk.start_line,
-                    end_line: f.chunk.end_line,
-                    text: f.chunk.text.clone(),
-                    score: f.score,
-                })
-                .collect();
-            let mut metadata = serde_json::to_value(&run)?;
-            metadata.as_object_mut().unwrap().remove("results");
-            metadata["providerCalls"] = serde_json::to_value(&provider_calls)?;
-            let retrieval = Some(json!({
-                "attempts": provider_calls.len(),
-                "jevCalls": provider_calls,
-            }));
-            eprintln!(
-                "Investigation: {} steps, {} Jev calls, stopped: {}",
-                run.steps, run.jev_calls, run.stop_reason
-            );
-            investigation = Some(metadata);
-            (results, retrieval)
-        } else {
+        let (results, retrieval) = {
             let shortlist = if parsed.no_jev {
                 snapshot.rank(&parsed.question)
             } else {
@@ -766,9 +700,6 @@ fn run() -> Result<()> {
         if parsed.json {
             let mut output = serde_json::json!({"question": parsed.question, "ranking": if parsed.no_jev { "lexical" } else { "jev" }, "results": results});
             output["cache"] = serde_json::to_value(workspace.timings)?;
-            if let Some(metadata) = investigation {
-                output["investigation"] = metadata;
-            }
             if let Some(stats) = retrieval {
                 output["retrieval"] = stats;
             }

@@ -476,7 +476,7 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
             continue;
         }
         let mut selected = candidate.chunk.clone();
-        // Preserve the raw BM25 score used by CLI output and deep search.
+        // Preserve the raw BM25 score used by CLI output.
         // Fusion chooses shortlist order; its rank-dependent score is not a
         // replacement for relevance values compared across filtered searches.
         selected.lexical_score = candidate.symbol_aware;

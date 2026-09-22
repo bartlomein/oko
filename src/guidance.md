@@ -10,4 +10,4 @@ After an Oko search, if you can name the exact code to cite or change, act: answ
 - Bad: Oko search, then `sed`, `nl`, `cat`, or a read of the same range to verify it.
 - Bad: Oko search, then grep for a name the excerpts already show.
 
-Start with normal search; use deep mode only if it was insufficient. If Oko is unavailable or returns nothing relevant, fall back to native search.
+If Oko is unavailable or returns nothing relevant, fall back to native search.

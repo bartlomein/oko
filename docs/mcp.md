@@ -89,8 +89,6 @@ The server exposes `search` with these inputs:
 - `question`: required, nonblank, at most 4096 bytes.
 - `directory`: optional subdirectory inside the configured root.
 - `intent`: `implementation` (default), `explanation`, or `general`.
-- `deep`: optional, defaults to `false`.
-- `max_steps`: deep mode only, 1–5, defaults to 5.
 
 Results include an automatic context packet: up to three ranked matches with
 source excerpts and up to two supporting definitions or callers. Paths are relative
@@ -169,8 +167,7 @@ Supporting excerpts are introduced by `Definition referenced from`, `Caller of`
 (parser-resolved bindings, with the reference or target location), or
 `Possible definition referenced from` (a lexical name match only). Supporting
 evidence is removed if its primary anchor is trimmed away. A search of a
-subdirectory starts with `Paths are relative to <directory>/.`; deep searches
-state their step count and stop reason; an empty result says so and suggests
+subdirectory starts with `Paths are relative to <directory>/.`; an empty result says so and suggests
 rephrasing or grep. When whole matches or related excerpts were dropped to fit
 the response cap, the text ends with a note saying so; having more accepted
 matches than the three shown is not reported as a size cut, because those are
@@ -273,8 +270,7 @@ the server.
 Serving metadata does not inform the agent's next step, so it is not part of the
 tool result. Set `OKO_METRICS_FILE` in the server's process environment to append
 one JSON line per completed search: the question (shortened to 512 bytes and
-marked), searched directory, ranking mode, `timings`, `retrieval`, deep
-`investigation` counters with shortened action labels, `responseBytes`,
+marked), searched directory, ranking mode, `timings`, `retrieval`, `responseBytes`,
 `responseLimitBytes`, and the structured packet. The file contains source
 excerpts and the question; keep it private. It is not read from `.env`, failed
 searches record nothing, and a write failure is reported on stderr without
@@ -305,8 +301,7 @@ Each search line includes `timings` for preparation (including credential lookup
 scan, shortlist, context building, and total server work. Normal `retrieval`
 metadata reports candidate counts, budgeted request bytes (before the transport
 adds its model field), preview building, and client-side reranking time
-(HTTP preparation, provider wait, and parsing).
-Deep mode reports investigation time instead. These times exclude Codex's
+(HTTP preparation, provider wait, and parsing). These times exclude Codex's
 reasoning, answer generation, and client transport overhead. No request bodies
 or credentials are logged.
 `timings.cache` reports cache status, reused/rebuilt file counts, and the time
@@ -327,8 +322,7 @@ coverage checks, local overhead measurements, and validation limits.
 Normal mode judges a nonempty shortlist in one Jev request, with an
 independent relevance judgment for each candidate, and judges connected files
 and further keyword matches in two requests beside it. Only the shortlist's
-request decides what is shown or whether the search falls back to keyword order. Deep mode is
-bounded to five local actions in MCP, unlike the CLI's optional unbounded mode.
+request decides what is shown or whether the search falls back to keyword order.
 A normal MCP search waits four seconds for each Jev request (`OKO_JEV_TIMEOUT_MS`,
 500–10000). Jev usually answers in about half a second; when it is slow,
 unreachable, rate-limited, or returns a server error, the search returns the
@@ -339,9 +333,9 @@ the metrics line reports `ranking: "lexical-fallback"` and
 Rejections that need an operator, such as an invalid key, are still errors. If
 Jev judged the first shortlist irrelevant and the recovery request then fails,
 the result stays empty: keyword order does not overrule that judgment. The CLI
-and deep mode keep the ten-second timeout and report provider failures, so
+keeps the ten-second timeout and reports provider failures, so
 measurements never mistake keyword order for Jev's. Configure a client tool timeout
-of 120 seconds when using deep mode; large repository scans can take longer.
+of 120 seconds; large repository scans can take longer.
 One search runs at a time; concurrent calls receive a busy error. Cancellation
 stops before the next search phase or provider call; it does not interrupt a
 filesystem scan or an already-running synchronous HTTP request.
@@ -350,13 +344,13 @@ Credentials are resolved on each call from the server environment, the configure
 root's `.env`, or the OS credential store. Model-selected subdirectories do not
 change the credential source. Discovery and startup do not require a key. For
 local-only testing, launch `oko mcp --root /path/to/project --no-jev`; this skips
-credential loading and rejects deep searches.
+credential loading.
 
 Searches rescan current files on each call and cannot select a directory outside
 the configured root. File discovery ignores user ripgrep configuration and skips
 files resolving outside the searched directory. This is an application boundary,
 not an operating-system sandbox. Existing ignored-file and file-size rules apply.
-Normal/deep searches send selected snippets to TypeSafe, as described in the [privacy overview](../README.md#privacy).
+Searches send selected snippets to TypeSafe, as described in the [privacy overview](../README.md#privacy).
 
 The server advertises when to use Oko, but connecting it does not force the agent
 to choose it over native search. Codex project setup is available above. Release

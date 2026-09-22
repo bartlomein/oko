@@ -143,6 +143,27 @@ benchmark's BM25 and TF-IDF score near zero, because their chunker stops at
 Raw rows for every run are in
 [`benchmarks/published/0.5.0/swe-explore/`](../benchmarks/published/0.5.0/swe-explore/).
 
+### A deeper search was measured and dropped
+
+A second round for multi-line questions was built and measured on all 848
+issues against the 0.5.0 build, in three forms, and none of them helped, so
+none shipped. Letting the further keyword matches that Jev rates relevant
+join the excerpts (no extra request): right file 0.501 against 0.503, nDCG
+0.825 against 0.821, first useful hit 0.857 against 0.855, one region per
+file. Judging every candidate beside the shortlist as "related code" and
+showing what passes: worse on every metric (right file 0.476). A further
+round over up to ninety files linked to the matches by import, definition,
+test name or directory, judged against the question: nDCG 0.860 but the same
+files found, for one to three more requests and a second of latency; of
+33,000 linked files judged, 758 scored as relevant, and those reaching the
+top five were right 14–19% of the time against 50% for first-round files.
+Judging the connected files against the question also lowered Agent
+Retrieval Bench (dev half, Recall@20 0.649 to 0.636) because tests and
+callers stop being listed. The code is on the `feat/deep-search` branch;
+the rows are in `benchmarks/results/swe-explore/` for the runs named
+`deep-*`. A 120-issue sample of the same runs showed gains of 0.03 in nDCG
+that the full set did not; decide on the full set.
+
 ## Agent sessions
 
 ## Latest run: 243 sessions, Oko 0.5.0 (September 2026)

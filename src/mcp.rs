@@ -77,11 +77,6 @@ struct SearchInput {
     /// including docs and configuration. general: no preference.
     #[serde(default)]
     intent: Intent,
-    /// Slower multi-step search; only when a normal search was insufficient.
-    #[serde(default)]
-    deep: bool,
-    /// Deep only: 1-5 steps, default 5.
-    max_steps: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -95,15 +90,6 @@ impl OkoServer {
     fn directory(&self, input: &SearchInput) -> Result<PathBuf> {
         if input.question.trim().is_empty() || input.question.len() > 4096 {
             bail!("Question must contain 1–4096 bytes of nonblank text.");
-        }
-        if input.max_steps.is_some() && !input.deep {
-            bail!("max_steps requires deep=true.");
-        }
-        if input.max_steps.is_some_and(|n| !(1..=5).contains(&n)) {
-            bail!("max_steps must be between 1 and 5.");
-        }
-        if input.deep && self.no_jev {
-            bail!("Deep search requires Jev; this server is running with --no-jev.");
         }
         let directory = self
             .root
@@ -152,149 +138,65 @@ impl OkoServer {
         if cancelled() {
             bail!("Search cancelled.");
         }
-        let mut shortlist_ms = None;
-        let mut investigate_ms = None;
-        let mut lexical_fallback = None;
-        let mut candidates = Vec::new();
-        let mut runners_up = Vec::new();
-        let winners = if input.deep {
-            let investigation_started = Instant::now();
-            let mut provider_calls = Vec::new();
-            let run = oko::investigate::investigate_snapshot_with(
-                &input.question,
-                &snapshot,
-                input.intent.into(),
-                Some(input.max_steps.unwrap_or(5)),
-                |request| {
-                    if cancelled() {
-                        bail!("Search cancelled.");
-                    }
-                    oko::ranking::call_jev_observed(
-                        request,
-                        key.as_deref().expect("key checked above"),
-                        "deep",
-                        &mut provider_calls,
-                    )
-                },
-            )?;
-            investigate_ms = Some(investigation_started.elapsed().as_millis() as u64);
-            let results: Vec<_> = run
-                .results
-                .iter()
-                .map(|f| (f.chunk.clone(), f.score))
-                .collect();
-            let mut metadata = serde_json::to_value(&run)?;
-            metadata.as_object_mut().unwrap().remove("results");
-            metadata["providerCalls"] = serde_json::to_value(&provider_calls)?;
-            let retrieval = Some(json!({
-                "attempts": provider_calls.len(),
-                "jevCalls": provider_calls,
-            }));
-            (results, Some(metadata), retrieval)
+        let shortlist_started = Instant::now();
+        let shortlist = if self.no_jev {
+            snapshot.rank(&input.question)
         } else {
-            let shortlist_started = Instant::now();
-            let shortlist = if self.no_jev {
-                snapshot.rank(&input.question)
-            } else {
-                snapshot.rank_with_intent(&input.question, input.intent.into())
-            };
-            shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-            let (results, mut stats) = super::rank_code_with_stats(
-                &input.question,
-                &shortlist,
-                corpus,
-                if self.no_jev {
-                    super::Reranker::Lexical
-                } else {
-                    super::Reranker::Jev {
-                        key,
-                        patience: Some(jev_patience()),
-                    }
-                },
-                input.intent.into(),
-                || {
-                    if cancelled() {
-                        bail!("Search cancelled.");
-                    }
-                    Ok(super::further_candidates(
-                        &snapshot,
-                        &shortlist,
-                        &input.question,
-                        input.intent.into(),
-                    ))
-                },
-            )?;
-            lexical_fallback = stats.lexical_fallback;
-            candidates = stats.candidates.clone();
-            runners_up = std::mem::take(&mut stats.runners_up)
-                .into_iter()
-                .map(|r| {
-                    (
-                        search::Chunk {
-                            path: r.path,
-                            start_line: r.start_line,
-                            end_line: r.end_line,
-                            text: r.text,
-                            lexical_score: 0.0,
-                        },
-                        r.score,
-                    )
-                })
-                .collect();
-            let retrieval = Some(serde_json::to_value(stats)?);
-            let winners = results
-                .into_iter()
-                .map(|r| {
-                    (
-                        search::Chunk {
-                            path: r.path,
-                            start_line: r.start_line,
-                            end_line: r.end_line,
-                            text: r.text,
-                            lexical_score: 0.0,
-                        },
-                        r.score,
-                    )
-                })
-                .collect();
-            (winners, None, retrieval)
+            snapshot.rank_with_intent(&input.question, input.intent.into())
         };
-        if cancelled() {
-            bail!("Search cancelled.");
-        }
-        let context_started = Instant::now();
-        let (winners, mut investigation, retrieval) = winners;
-        // Source evidence has priority over repeated question/action text.
-        let mut trace_truncated = false;
-        if let Some(trace) = investigation
-            .as_mut()
-            .and_then(|v| v["trace"].as_array_mut())
-        {
-            for step in trace {
-                if let Some(action) = step["action"].as_str() {
-                    let short = prefix(action, 256);
-                    trace_truncated |= short.len() < action.len();
-                    step["action"] = json!(short);
+        let shortlist_ms = shortlist_started.elapsed().as_millis() as u64;
+        let (results, mut stats) = super::rank_code_with_stats(
+            &input.question,
+            &shortlist,
+            corpus,
+            if self.no_jev {
+                super::Reranker::Lexical
+            } else {
+                super::Reranker::Jev {
+                    key,
+                    patience: Some(jev_patience()),
                 }
-            }
-        }
-        if let Some(metadata) = &mut investigation {
-            metadata["traceTruncated"] = json!(trace_truncated);
-        }
+            },
+            input.intent.into(),
+            || {
+                if cancelled() {
+                    bail!("Search cancelled.");
+                }
+                Ok(super::further_candidates(
+                    &snapshot,
+                    &shortlist,
+                    &input.question,
+                    input.intent.into(),
+                ))
+            },
+        )?;
+        let lexical_fallback = stats.lexical_fallback;
+        let candidates = stats.candidates.clone();
+        let as_chunk = |r: super::CodeResult| {
+            (
+                search::Chunk {
+                    path: r.path,
+                    start_line: r.start_line,
+                    end_line: r.end_line,
+                    text: r.text,
+                    lexical_score: 0.0,
+                },
+                r.score,
+            )
+        };
+        let runners_up: Vec<(search::Chunk, f64)> = std::mem::take(&mut stats.runners_up)
+            .into_iter()
+            .map(as_chunk)
+            .collect();
+        let retrieval = serde_json::to_value(stats)?;
+        let winners: Vec<(search::Chunk, f64)> = results.into_iter().map(as_chunk).collect();
+        let context_started = Instant::now();
         // What the agent cannot infer from its own request and the excerpts.
         let mut notes = String::new();
         if let Ok(scope) = directory.strip_prefix(&self.root)
             && !scope.as_os_str().is_empty()
         {
             notes.push_str(&format!("Paths are relative to {}/.\n", scope.display()));
-        }
-        if let Some(run) = &investigation {
-            let steps = run["steps"].as_u64().unwrap_or(0);
-            notes.push_str(&format!(
-                "Deep search stopped after {steps} step{}: {}.\n",
-                if steps == 1 { "" } else { "s" },
-                run["stopReason"].as_str().unwrap_or("unknown")
-            ));
         }
         if lexical_fallback.is_some() {
             notes.push_str(
@@ -304,9 +206,9 @@ impl OkoServer {
         let question = prefix(&input.question, 512);
         let metadata = json!({"question":question, "questionTruncated":question.len() < input.question.len(), "directory":directory,
             "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
-            "investigation":investigation, "retrieval":retrieval,
+            "retrieval":retrieval,
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
-                "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
+                "shortlistMs":shortlist_ms,
                 "cache":workspace.timings}});
         let packet = oko::context::build_packet_with_runners_up(
             corpus,

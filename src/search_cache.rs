@@ -95,9 +95,6 @@ impl WorkspaceSnapshot {
             .get_or_init(|| crate::connected::Links::new(&self.chunks))
             .connected_to(&self.chunks, shortlist, question)
     }
-    pub(crate) fn prepared(&self) -> &PreparedCorpus {
-        &self.prepared
-    }
 }
 
 pub struct CachedWorkspace {

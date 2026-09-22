@@ -205,13 +205,15 @@ def oko_regions(ranked, top_k, one_per_file=True):
     return picked[:top_k]
 
 
-def run_oko(row, workspace, binary, live, timeout, intent, one_per_file):
+def run_oko(row, workspace, binary, live, timeout, intent, one_per_file, extra_env=()):
     question = row['problem_statement'].encode()[:QUESTION_BYTES].decode(errors='ignore')
     module = replay.profiler()
     with tempfile.TemporaryDirectory(prefix='oko-swex-cache-') as cache:
+        # The client drops inherited OKO_ settings; experiment switches go in through `env`.
+        command = ['env', *extra_env, str(binary), 'mcp', *([] if live else ['--no-jev']), '--root', str(workspace)]
         client = module.Client(Path(binary), workspace, Path(cache), timeout, live=live,
                                api_key=replay.api_key() if live else None,
-                               model=replay.JEV_MODEL if live else None)
+                               model=replay.JEV_MODEL if live else None, command=command if extra_env else None)
         try:
             client.initialize()
             response = client.request('tools/call', {'name': 'search', 'arguments': {
@@ -251,10 +253,14 @@ def run(row, args, evaluator):
         gt = evaluator.bench_data_dict[row['instance_id']]['ground_truth']
         if args.explorer == 'oko':
             regions, packet, ranked = run_oko(row, workspace, args.binary, args.jev, args.timeout, args.intent,
-                                              not args.all_regions)
+                                              not args.all_regions, tuple(args.env))
             retrieval = (packet.get('retrieval') or {})
             out.update(ranking=packet.get('ranking'), okoMs=(packet.get('timings') or {}).get('totalMs'),
                        jevMs=retrieval.get('rerankMs'), shown=len(packet.get('results') or []),
+                       # The deep round's counters and every linked file it judged, for ablations by link kind.
+                       deep=retrieval.get('deep'), deepLinks=retrieval.get('deepLinks'),
+                       jevCalls=[{k: c.get(k) for k in ('phase', 'success', 'httpStatus', 'errorClass', 'requestBytes')}
+                                 for c in retrieval.get('jevCalls') or []],
                        # Enough to re-order offline without another paid run.
                        ranked=[{'path': p, 'start': s, 'end': e} for p, s, e in ranked[:60]])
         else:
@@ -295,6 +301,7 @@ def main():
     parser.add_argument('--intent', choices=('implementation', 'explanation', 'general'), default='implementation')
     parser.add_argument('--binary', default=str(replay.PROJECT / 'target/release/oko'))
     parser.add_argument('--label', default=None)
+    parser.add_argument('--env', action='append', default=[], metavar='KEY=VALUE', help='Extra environment for Oko, e.g. an experiment switch')
     parser.add_argument('--all-regions', action='store_true',
                         help='Fill the five slots strictly by score, even with several regions of one file')
     parser.add_argument('--timeout', type=float, default=180)
@@ -320,7 +327,7 @@ def main():
             handle.flush()
             mark = result.get('error') or f"file={result['metrics']['hit_file_rate']:.2f} region={result['metrics']['hit_region_rate']:.2f} recall={result['metrics']['recall']:.2f}"
             print(f"{index}/{len(rows)} {row['dataset']} {row['instance_id']} {result['seconds']}s {mark}", flush=True)
-    summary = {'label': label, 'explorer': args.explorer, 'intent': args.intent, 'binary': args.binary,
+    summary = {'label': label, 'explorer': args.explorer, 'intent': args.intent, 'binary': args.binary, 'env': args.env,
                'evaluator': (STATE / 'evaluator-commit.txt').read_text().strip(), 'results': summarize(results)}
     out.with_suffix('.summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print(json.dumps(summary['results'], indent=2))
