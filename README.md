@@ -14,7 +14,7 @@ On [Agent Retrieval Bench](#retrieval-quality), a public benchmark of 345
 code-retrieval tasks in six languages, Oko puts a right file first more often
 than any published method (MRR 0.39 against 0.24), with no GPU and no index.
 In [our own agent benchmark](#benchmarks), Claude Code, Codex, and OpenCode
-finish tasks 15–31% faster with it.
+finish tasks 12–38% faster with it.
 
 Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
 source snippets. Use it through your coding agent or directly from your terminal.
@@ -201,19 +201,19 @@ and Claude Code: **162 sessions**.
 
 | Coding tool | | Without Oko | With Oko | Average | Best task |
 | --- | --- | --- | --- | --- | --- |
-| Codex | Time | 25.7 s | 21.0 s | **18% faster** | 54% faster |
-| | Tokens | 71,923 | 48,823 | **32% fewer** | 69% fewer |
-| | Tool calls | 3.4 | 2.0 | **40% fewer** | 79% fewer |
-| OpenCode | Time | 22.8 s | 19.3 s | **15% faster** | 53% faster |
-| | Tokens | 29,413 | 17,017 | **42% fewer** | 80% fewer |
-| | Tool calls | 5.8 | 2.6 | **56% fewer** | 87% fewer |
-| Claude Code | Time | 10.6 s | 7.3 s | **31% faster** | 52% faster |
-| | Tokens | 23,960 | 19,133 | **20% fewer** | 46% fewer |
-| | Tool calls | 3.7 | 1.6 | **57% fewer** | 77% fewer |
+| Codex | Time | 33.7 s | 29.8 s | **12% faster** | 43% faster |
+| | Tokens | 63,828 | 51,025 | **20% fewer** | 53% fewer |
+| | Tool calls | 3.1 | 2.2 | **30% fewer** | 70% fewer |
+| OpenCode | Time | 32.4 s | 25.7 s | **21% faster** | 50% faster |
+| | Tokens | 29,712 | 16,299 | **45% fewer** | 70% fewer |
+| | Tool calls | 6.0 | 2.3 | **61% fewer** | 79% fewer |
+| Claude Code | Time | 12.4 s | 7.8 s | **38% faster** | 70% faster |
+| | Tokens | 60,320 | 36,948 | **39% fewer** | 71% fewer |
+| | Tool calls | 5.1 | 2.3 | **56% fewer** | 88% fewer |
 
-Tool calls fell on every task for every tool: one Oko search replaces several
-greps and reads. Time and tokens did not improve on every task, and those are in
-the average. It is a small benchmark with Codex CLI 0.155 and OpenCode 1.18
+Tool calls fell on nearly every task for every tool: one Oko search replaces
+several greps and reads. Time and tokens did not improve on every task, and
+those are in the average. It is a small benchmark with Codex CLI 0.155 and OpenCode 1.18
 (`gpt-5.6-sol`) and Claude Code 2.1 (`claude-sonnet-5`) at low reasoning effort;
 your results will vary. [Full results and methodology](docs/benchmark-results.md#agent-sessions),
 the [runner, tasks, and checks](scripts/benchmark-public/), and the

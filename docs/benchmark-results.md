@@ -145,7 +145,7 @@ Raw rows for every run are in
 
 ## Agent sessions
 
-## Latest run: 243 sessions (September 2026)
+## Latest run: 243 sessions, Oko 0.5.0 (September 2026)
 
 The README reports this run. Nine tasks (six code-location questions and three
 small edits across Astro, HTTPX, and ripgrep), three clients, three repeats, and
@@ -153,10 +153,32 @@ three setups: **without Oko**, **Oko**, and **Oko with the guidance `oko setup`
 installs**. The README reports the first and last
 (162 of the 243 sessions), since `oko setup` installs the guidance; the middle one
 is what a manual connection without the guidance gets. Oko starts with a
-warm disk index; building it is excluded from timing. Measured on commit
-`c8934a0`; later commits before 0.4.0 change only `oko setup` and documentation.
+warm disk index; building it is excluded from timing. Measured on the 0.5.0
+build (commit `580fe6f`; the run's own record names `b445927e`, the same code
+with documentation edits), against the same tasks and clients as the 0.4.0 run
+below it. Pass rates: Codex 27/27, 27/27, 26/27; OpenCode 27/27 in all three;
+Claude Code 22/27 in all three, the same five task-and-format failures in each
+setup (the astro-forwarded-empty edit touching a duplicate definition, and
+answers the grader rejected for their JSON format).
 
 Mean seconds, agent tokens, and tool calls per session (27 sessions per cell):
+
+| Client | Without Oko | Oko | Oko + guidance |
+| --- | --- | --- | --- |
+| Codex — seconds | 33.7 | 32.8 | 29.8 |
+| Codex — agent tokens | 63,828 | 53,809 | 51,025 |
+| Codex — tool calls | 3.11 | 2.52 | 2.19 |
+| OpenCode — seconds | 32.4 | 27.7 | 25.7 |
+| OpenCode — agent tokens | 29,712 | 17,859 | 16,299 |
+| OpenCode — tool calls | 5.96 | 3.30 | 2.33 |
+| Claude Code — seconds | 12.4 | 8.9 | 7.8 |
+| Claude Code — agent tokens | 60,320 | 43,213 | 36,948 |
+| Claude Code — tool calls | 5.15 | 3.00 | 2.26 |
+
+Absolute times and tokens are higher than in the 0.4.0 run below (the model
+providers were slower and Claude Code sessions used more tokens without Oko on
+this day); the relative gains are what to compare. The 0.4.0 run, on commit
+`c8934a0`:
 
 | Client | Without Oko | Oko | Oko + guidance |
 | --- | --- | --- | --- |

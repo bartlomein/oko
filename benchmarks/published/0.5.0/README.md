@@ -26,3 +26,10 @@ downloaded by the harnesses in `scripts/benchmark-public/replay/`.
 - `oko-keywords.jsonl`: keyword ranking only, no Jev.
 - `baseline-bm25.jsonl`, `baseline-tfidf.jsonl`: the benchmark's own explorers.
 - `evaluator-commit.txt`: the scorer commit.
+
+## agent-sessions/
+
+- `report.json`, `report.md`: the 243-session agent benchmark behind the README's
+  agent table (nine tasks, three clients, without Oko / Oko / Oko with guidance,
+  three repeats), every session with its timing, token breakdown, tool calls,
+  and grade. Raw client logs and source snapshots are not included.
