@@ -10,6 +10,12 @@ Oko helps Codex, Claude Code, and OpenCode spend less time searching and fewer
 tokens reading irrelevant code. It delivers relevant source snippets through
 MCP so your agent can get to the task sooner. Gains vary by task and coding tool.
 
+On [Agent Retrieval Bench](#retrieval-quality), a public benchmark of 345
+code-retrieval tasks in six languages, Oko puts a right file first more often
+than any published method (MRR 0.39 against 0.24), with no GPU and no index.
+In [our own agent benchmark](#benchmarks), Claude Code, Codex, and OpenCode
+finish tasks 15–31% faster with it.
+
 Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
 source snippets. Use it through your coding agent or directly from your terminal.
 
@@ -162,6 +168,43 @@ To replace, check, or remove your saved key, use `oko auth login`,
 
 ## Benchmarks
 
+### Retrieval quality
+
+[Agent Retrieval Bench](https://arxiv.org/abs/2607.24882) is a public benchmark
+of 345 tasks from 25 repositories in Python, Go, Rust, TypeScript, Java, and
+JavaScript. Each task gives a tool a repository and a signal from a coding
+workflow (a failing test's output, a pull request, a review comment, a code
+change) and asks for the files a developer needs next. We ran Oko on all 345
+with the benchmark's own scoring code, three times, and ran its RepoMap, lexical,
+and BM25 baselines locally on the same tasks; they reproduce the published
+numbers within 0.003. The embedding rows are the published results.
+
+| Method | Right file in top 20 | First right file ranks high (MRR) | Needed code within 8k tokens (BCY@8k) |
+| --- | --- | --- | --- |
+| **Oko 0.5.0** | 0.64 | **0.39** | **0.48** |
+| Qwen3-Embedding-8B (GPU, index) | **0.70** | 0.23 | 0.37 |
+| RepoMap | 0.64 | 0.22 | 0.38 |
+| Qwen3-Embedding-4B (GPU, index) | 0.63 | 0.24 | 0.34 |
+| Lexical | 0.49 | 0.16 | 0.27 |
+| BM25 | 0.45 | 0.15 | 0.21 |
+
+Oko's numbers are the mean of three runs; the runs agree within 0.01. Oko is
+strongest when the signal is an error message (top-five hit 0.71 against 0.46
+for RepoMap) and weakest at finding the files a code change ripples into, where
+it is level with RepoMap. One task type, finding the tests for a change, gained
+from a change we made after our first look at these tasks; see
+[the details](docs/benchmark-results.md#agent-retrieval-bench) for what was
+tuned on what, per-task tables, and the held-out split.
+
+On [SWE-Explore](https://arxiv.org/abs/2606.07297), 848 real issues in ten
+languages where the answer is the code that agents read while fixing them, a
+single Oko call ranks the right code about as well as agents that explore for
+many turns (nDCG 0.81 against 0.82–0.95) and finds a right file in its five
+regions 41% of the time, against 7% for BM25 and 54–67% for the agents.
+[Details](docs/benchmark-results.md#swe-explore).
+
+### Agent sessions
+
 We give the same coding task to the same agent twice: once with only its built-in
 search tools, and once with Oko connected and set up with `oko setup`. Then we
 compare how long the whole session took, how many tokens the agent used, and how
@@ -226,6 +269,8 @@ It is a small benchmark on three repositories with Codex CLI 0.155 and OpenCode
 reasoning effort. Your results will vary. See [full results and methodology](docs/benchmark-results.md).
 The benchmark is in this repository: the [runner, tasks, and answer checks](scripts/benchmark-public/)
 are there to read, and you can [run it yourself](scripts/benchmark-public/README.md#reproduce-the-readme-numbers).
+The retrieval harnesses and the raw per-task results for every number above are
+there too: [benchmarks/published/0.5.0](benchmarks/published/0.5.0/).
 
 ## Privacy
 

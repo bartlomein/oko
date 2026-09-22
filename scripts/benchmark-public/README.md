@@ -257,3 +257,53 @@ An existing session directory without a matching saved report entry blocks resum
 - `report.md` includes aggregate and three-condition per-task timings. Warm-up durations are shown separately; `report.json` retains the observed cache metadata for every Oko call. With one run per task, do not claim statistical significance or universal speedups. Publish the frozen configuration, all task results including losses, success rates, and limitations. Redact credentials/local personal data before sharing logs.
 
 `--prepare`, `--execute`, and the self-tests leave the original clones untouched. Generated workspaces are removed after each session; diffs, validation output, timing, and client logs are retained in ignored results directories. No commits or pushes are performed.
+
+## Retrieval benchmarks
+
+Two public benchmarks score what Oko returns, without agent sessions. Both
+harnesses live in [`replay/`](replay/) and write under `benchmarks/results/`,
+which Git ignores; the raw per-task results behind the README numbers are
+committed under [`benchmarks/published/0.5.0/`](../../benchmarks/published/0.5.0/).
+
+### Agent Retrieval Bench
+
+[arXiv 2607.24882](https://arxiv.org/abs/2607.24882). 345 positive tasks, 25
+repositories, six languages. The harness downloads the released corpora
+(1.5 GB, unpacks to about 7 GB) and the benchmark's own evaluator, rebuilds each
+repository from the corpus so Oko sees exactly the files the baselines saw, asks
+Oko once per task, and scores the ranked list with the evaluator's own metric
+code. `--split all` runs all 345; `dev` and `heldout` are a fixed split by task
+id (we tuned on `dev` only).
+
+```sh
+python3 scripts/benchmark-public/replay/arb.py --fetch            # free
+python3 scripts/benchmark-public/replay/arb.py --split all         # keyword ranking only, free
+python3 scripts/benchmark-public/replay/arb.py --split all --jev   # paid: 345 Jev calls, about 11 minutes
+```
+
+The benchmark's RepoMap, lexical, and BM25 baselines run locally with its own
+CLI (`arb eval-repomap`, `arb eval-baseline --ranker bm25|lexical`); its
+`report-bcy-curve` command computes BCY from the ranked file lists. The README
+numbers are the mean of three `--jev` runs of the 0.5.0 build with `jev-1.13.0`
+and evaluator commit `07014c98`; the three runs agree within 0.01.
+
+### SWE-Explore
+
+[arXiv 2606.07297](https://arxiv.org/abs/2606.07297). 848 real issues from
+SWE-bench Verified, Pro, and Multilingual; the answer is the code successful
+agents read while fixing each one, as line regions; an explorer returns five
+ranked regions. The public benchmark file has no issue text or commit, so the
+harness joins them from the three source datasets, keeps blob-less mirrors of
+the 64 repositories (1.6 GB), and checks out each commit in turn. The
+benchmark's data is CC BY-NC-ND: run it and report, do not redistribute it.
+
+```sh
+python3 scripts/benchmark-public/replay/swe_explore.py --fetch       # free
+python3 scripts/benchmark-public/replay/swe_explore.py --mirror      # free, an hour or two
+python3 scripts/benchmark-public/replay/swe_explore.py               # keyword ranking only, free
+python3 scripts/benchmark-public/replay/swe_explore.py --jev         # paid: 848 Jev calls, about 40 minutes
+python3 scripts/benchmark-public/replay/swe_explore.py --explorer bm25   # the benchmark's own baseline
+```
+
+The baselines need `rank_bm25` and `scikit-learn` (a `uv venv` is enough).
+Our BM25 and TF-IDF runs match the paper's table within 0.01.

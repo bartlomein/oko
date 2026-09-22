@@ -1,6 +1,149 @@
-# Public-repository benchmark results
+# Benchmark results
 
 [← Back to Oko](../README.md#benchmarks)
+
+Three benchmarks: two public retrieval benchmarks that score what Oko returns,
+and our own agent benchmark that times whole coding sessions. Raw per-task
+results for the retrieval benchmarks are in
+[`benchmarks/published/0.5.0/`](../benchmarks/published/0.5.0/); the harnesses
+and commands are in [the runner README](../scripts/benchmark-public/README.md#retrieval-benchmarks).
+
+## Agent Retrieval Bench
+
+[Agent Retrieval Bench](https://arxiv.org/abs/2607.24882) (code:
+[eyuansu62/agent-retrieval-bench](https://github.com/eyuansu62/agent-retrieval-bench))
+has 345 positive tasks from 25 repositories in Python, Go, Rust, TypeScript,
+Java, and JavaScript. Each gives a repository at a commit and a signal from a
+coding workflow, and asks for the files a developer needs next:
+
+- **Failing test → broken file** (101 tasks): a test command and its failure
+  output; find the source file at fault.
+- **Review comment → context** (80): a review comment on a pull request; find
+  the files the reviewer is pointing at.
+- **Pull request → tests to update** (106): a pull request's description and
+  changed files; find the tests that need updating.
+- **Edit → files it ripples into** (58): a code change and its intent; find the
+  other files that must change with it.
+
+**Method.** The harness (`scripts/benchmark-public/replay/arb.py`) rebuilds each
+repository from the benchmark's released corpus, so Oko searches exactly the
+files the published baselines searched, sends the task's signal to Oko's
+`search` tool once (trimmed to Oko's 4,096-byte question limit; 47 of 345 are
+trimmed), and scores the ranked list, Oko's excerpts followed by every judged
+candidate by relevance, with the benchmark's own metric code at commit
+`07014c98`. We ran the benchmark's RepoMap, lexical, and BM25 baselines locally
+on the same tasks; they reproduce the published numbers within 0.003. The
+embedding rows below are the published results; we did not rerun them.
+
+**What was tuned on what.** We split the tasks by a hash of their id into a
+164-task dev half and a 181-task held-out half, tuned on the dev half only, and
+ran the held-out half once when the design was frozen (experiment build:
+Recall@20 0.61, MRR 0.31 on the held-out half; 0.61 / 0.34 on all 345). Two
+changes came after that: connected files are judged by their own criteria, and a
+question that asks for tests no longer has tests excluded. Both were chosen on
+other data, the dev half and our own repositories, and then measured here. The
+second change lifts the "tests to update" task a lot (Recall@5 0.14 → 0.38),
+because 37 of its 46 dev questions carry the benchmark's own summary line
+"N existing test files changed"; Oko reads that as a question about tests. That
+is a fair reaction to the text, but it leans on this benchmark's wording, so we
+say so. Without that task type the three-run mean is unchanged from the frozen
+first look.
+
+**Stability.** The 0.5.0 build was run three times on all 345 tasks with
+`jev-1.13.0`. The runs agree within 0.005 on every ranking metric and 0.013 on
+BCY@8k; every number below is the mean of the three.
+
+### All 345 tasks
+
+| Method | Recall@5 | Recall@20 | MRR | BCY@8k |
+| --- | ---: | ---: | ---: | ---: |
+| **Oko 0.5.0** | **0.45** | 0.64 | **0.39** | **0.48** |
+| Qwen3-Embedding-8B (published) | | **0.70** | 0.23 | 0.37 |
+| RepoMap | 0.32 | 0.64 | 0.22 | 0.38 |
+| Qwen3-Embedding-4B (published) | | 0.63 | 0.24 | 0.34 |
+| pplx-embed-v1-4b (published, provisional) | | 0.61 | 0.23 | 0.35 |
+| nomic-embed-code (published) | | 0.52 | 0.20 | 0.28 |
+| Lexical | 0.23 | 0.49 | 0.16 | 0.27 |
+| jina-code-embeddings-0.5b (published) | | 0.48 | 0.19 | 0.28 |
+| BM25 | 0.19 | 0.45 | 0.15 | 0.21 |
+
+Recall@k is the share of a task's needed files among the first k ranked. MRR is
+the reciprocal rank of the first needed file (1.0 = always first). BCY@8k is the
+benchmark's budgeted context yield: the share of needed files whose text fits
+when ranked files are packed into 8,000 tokens; Oko leads it at every budget
+(4k: 0.39 against RepoMap's 0.20; 32k: 0.64 against 0.63).
+
+Against RepoMap on the same 345 tasks, Oko's MRR lead is +0.17 with a 95%
+bootstrap range of [+0.13, +0.22] by task and [+0.06, +0.27] with each
+repository treated as one unit; Recall@5 +0.13, [+0.07, +0.19] by task; Recall@20
+is a tie, [−0.05, +0.06].
+
+### By task type, and by split
+
+| Task | n | Oko R@5 | RepoMap R@5 | Oko R@20 | RepoMap R@20 | Oko MRR | RepoMap MRR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Failing test → broken file | 101 | 0.71 | 0.46 | 0.82 | 0.85 | 0.67 | 0.27 |
+| Review comment → context | 80 | 0.31 | 0.19 | 0.53 | 0.50 | 0.32 | 0.16 |
+| Pull request → tests to update | 106 | 0.38 | 0.26 | 0.57 | 0.56 | 0.26 | 0.20 |
+| Edit → files it ripples into | 58 | 0.28 | 0.36 | 0.63 | 0.60 | 0.22 | 0.23 |
+| All 345 | 345 | 0.45 | 0.32 | 0.64 | 0.64 | 0.39 | 0.22 |
+| Held-out half | 181 | 0.45 | 0.34 | 0.65 | 0.64 | 0.37 | 0.21 |
+| Dev half | 164 | 0.44 | 0.30 | 0.64 | 0.63 | 0.41 | 0.22 |
+| Without gin-gonic/gin | 257 | 0.33 | 0.27 | 0.54 | 0.55 | 0.29 | 0.19 |
+
+Oko is strongest when the signal is an error message and weakest on the ripple
+task, where RepoMap's import graph helps and Oko's one-hop links do not reach
+far enough. One repository, gin-gonic/gin, contributes 88 of the 345 tasks (the
+benchmark's own README notes this); without it Oko still leads MRR and Recall@5
+and RepoMap leads Recall@20.
+
+**Limits.** Scoring is per file: Oko returns functions, and gets no credit here
+for the exact function. The queries are raw logs, review comments, and pull
+request text, not the questions an agent would ask. Oko showed no excerpt on
+about a third of the tasks (nothing reached its relevance cutoff); the ranked
+list is still scored, but an agent would have to open the listed candidates.
+No GPU or index is involved; each Oko search made three Jev requests.
+
+## SWE-Explore
+
+[SWE-Explore](https://arxiv.org/abs/2606.07297) (code:
+[Qiushao-E/SWE-Explore-Bench](https://github.com/Qiushao-E/SWE-Explore-Bench))
+has 848 real issues from SWE-bench Verified (451), SWE-bench Pro (215), and
+SWE-bench Multilingual (182), across 64 repositories in ten languages. The
+answer for each issue is the code that successful agents read while fixing it,
+as line regions (4.3 files and 4.7 regions per issue on average), and an
+explorer returns five ranked regions. We ran the benchmark's scorer at commit
+`9281148b` on the 0.5.0 build, once, and its own BM25 and TF-IDF explorers on the
+same inputs; ours match the paper's Table 6 within 0.01. Agent rows are the
+paper's. Nothing was tuned on this benchmark.
+
+| Method | Right file in top 5 | Right region in top 5 | Line precision | Line recall | nDCG@500 | First useful hit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Claude Code (agent, published) | 0.67 | | 0.60 | | 0.94 | |
+| Mini-SWE-Agent (agent, published) | 0.64 | | 0.53 | | 0.89 | |
+| LocAgent (agent, published) | 0.54 | | 0.64 | | 0.95 | |
+| CoSIL (agent, published) | 0.54 | | 0.58 | | 0.82 | |
+| **Oko 0.5.0, one call** | 0.41 | 0.34 | 0.52 | 0.15 | 0.81 | 0.84 |
+| AutoCodeRover (agent, published) | 0.28 | | 0.68 | | 0.72 | |
+| Oko, keyword ranking only | 0.21 | 0.16 | 0.19 | 0.05 | 0.36 | 0.41 |
+| TF-IDF (benchmark's explorer) | 0.14 | 0.11 | 0.10 | 0.04 | 0.22 | 0.23 |
+| BM25 (benchmark's explorer) | 0.07 | 0.06 | 0.05 | 0.02 | 0.12 | 0.13 |
+
+The agents explore for many turns with a frontier model; Oko is one search of
+about a second with no model. On ranking (nDCG, first useful hit) and line
+precision Oko sits in the agents' tier; on covering all of an issue's files it
+does not, because five regions from one call cannot reach 4.3 files. Its first
+region is in a right file 83% of the time. Ordering the five slots so that each
+names a different file raises "right file" to 0.50 but halves precision, since
+the second to fifth files are usually wrong; we report the by-score ordering.
+
+By source: SWE-bench Verified 0.46 right file; Multilingual 0.42 (where the
+benchmark's BM25 and TF-IDF score near zero, because their chunker stops at
+3,000 chunks per repository); Pro 0.29, with the highest line precision (0.55).
+Raw rows for every run are in
+[`benchmarks/published/0.5.0/swe-explore/`](../benchmarks/published/0.5.0/swe-explore/).
+
+## Agent sessions
 
 ## Latest run: 243 sessions (September 2026)
 
