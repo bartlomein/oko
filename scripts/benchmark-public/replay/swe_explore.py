@@ -177,7 +177,7 @@ def line_counts(workspace, gt):
     return counts
 
 
-def oko_regions(packet, top_k):
+def oko_ranked(packet):
     """Oko's excerpts first, then every judged candidate by score, as regions."""
     retrieval = packet.get('retrieval') or {}
     shown = [(e['path'], e['startLine'], e['endLine']) for kind in ('results', 'related')
@@ -187,10 +187,25 @@ def oko_regions(packet, top_k):
     for span in shown + [(c['path'], c['startLine'], c['endLine']) for c in rest]:
         if span not in regions:
             regions.append(span)
-    return regions[:top_k]
+    return regions
 
 
-def run_oko(row, workspace, binary, live, timeout, intent):
+def oko_regions(ranked, top_k, one_per_file=True):
+    """The top regions; with `one_per_file`, a file's second region waits until every file has one."""
+    if not one_per_file:
+        return ranked[:top_k]
+    picked, seen = [], set()
+    for span in ranked:
+        if span[0] not in seen:
+            picked.append(span)
+            seen.add(span[0])
+    for span in ranked:
+        if span not in picked:
+            picked.append(span)
+    return picked[:top_k]
+
+
+def run_oko(row, workspace, binary, live, timeout, intent, one_per_file):
     question = row['problem_statement'].encode()[:QUESTION_BYTES].decode(errors='ignore')
     module = replay.profiler()
     with tempfile.TemporaryDirectory(prefix='oko-swex-cache-') as cache:
@@ -204,7 +219,8 @@ def run_oko(row, workspace, binary, live, timeout, intent):
             packet = replay.packet_of(client, response)
         finally:
             client.close()
-    return oko_regions(packet, TOP_K), packet
+    ranked = oko_ranked(packet)
+    return oko_regions(ranked, TOP_K, one_per_file), packet, ranked
 
 
 def run_baseline(name, workspace, row):
@@ -234,10 +250,13 @@ def run(row, args, evaluator):
         checkout(row, workspace)
         gt = evaluator.bench_data_dict[row['instance_id']]['ground_truth']
         if args.explorer == 'oko':
-            regions, packet = run_oko(row, workspace, args.binary, args.jev, args.timeout, args.intent)
+            regions, packet, ranked = run_oko(row, workspace, args.binary, args.jev, args.timeout, args.intent,
+                                              not args.all_regions)
             retrieval = (packet.get('retrieval') or {})
             out.update(ranking=packet.get('ranking'), okoMs=(packet.get('timings') or {}).get('totalMs'),
-                       jevMs=retrieval.get('rerankMs'), shown=len(packet.get('results') or []))
+                       jevMs=retrieval.get('rerankMs'), shown=len(packet.get('results') or []),
+                       # Enough to re-order offline without another paid run.
+                       ranked=[{'path': p, 'start': s, 'end': e} for p, s, e in ranked[:60]])
         else:
             regions, _ = run_baseline(args.explorer, workspace, row)
         evaluator._current_instance_id = row['instance_id']
@@ -276,6 +295,8 @@ def main():
     parser.add_argument('--intent', choices=('implementation', 'explanation', 'general'), default='implementation')
     parser.add_argument('--binary', default=str(replay.PROJECT / 'target/release/oko'))
     parser.add_argument('--label', default=None)
+    parser.add_argument('--all-regions', action='store_true',
+                        help='Fill the five slots strictly by score, even with several regions of one file')
     parser.add_argument('--timeout', type=float, default=180)
     args = parser.parse_args()
     if args.fetch:
