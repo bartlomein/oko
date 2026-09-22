@@ -55,8 +55,8 @@ They also prioritize up to 12 contiguous lines of a query-matching control-flow
 block, so nearby predicates and outcomes can survive the preview budget.
 This is an indentation-based context hint, not a language parser; multiline
 conditions and unsupported syntax use the existing preview selection.
-Preview selection itself adds no model requests. Normal search uses one Jev call
-on a hit, with the existing 30-item, 32,000-byte request budget. See the
+Preview selection itself adds no model requests. Each Jev request keeps the
+30-item, 32,000-byte budget. See the
 [rank-fusion audit](../benchmarks/rank-fusion.md) for offline results and limits;
 the [earlier shortlist audit](../benchmarks/shortlist.md) documents the prior design.
 
@@ -72,7 +72,33 @@ other syntax uses 40-line windows. Results preserve source text, relative paths,
 and inclusive 1-based line ranges.
 
 Normal `ask` sends the question and up to 30 shortlisted code chunks to TypeSafe
-AI for an initial Jev request. If all candidates are rejected, ordinary `ask` and
+AI for an initial Jev request. Two more requests run at the same time, so they
+add no wait beyond the slowest of the three:
+
+- **Connected files.** Up to 30 chunks from files the shortlist lacks but that are
+  one hop from its strongest matches or from a file the question names: the test
+  or tested source by file name (`foo.rs` and `foo_test.rs`, `test_foo.py`,
+  `Foo.spec.ts`), files that mention a distinctive name a match defines, and
+  files that define one it mentions. Names defined in more than five files link
+  nothing. These links are lexical, not parsed, and are built once per workspace
+  snapshot. Jev judges them as connected code, because the implementation
+  criteria exclude tests and callers by design.
+- **Further keyword matches.** The 30 candidates after the shortlist.
+
+Neither can change what is shown. Excerpts, possible matches and the recovery
+request below are decided by the shortlist alone, and a slow or failed extra
+request is ignored. Their candidates only join `retrieval.candidates` and the
+list of other places an agent can open; a connected candidate's relevance is
+scaled by 0.4 there, since it was judged by different criteria. On
+[Agent Retrieval Bench](../scripts/benchmark-public/replay/arb.py) this raised
+the share of needed files among the first twenty ranked from 0.42 to 0.61
+without changing a single excerpt on 323 replayed agent questions.
+
+A question that asks for tests ("where are the tests for…", "which tests
+cover…") is judged by criteria that accept tests. A pasted failure log, a test
+file name, or "do not change tests" does not count as asking.
+
+If all shortlisted candidates are rejected, ordinary `ask` and
 MCP search make at most one recovery request: up to eight leading candidates with
 fuller previews plus up to eight previously unconsidered candidates. The original
 question, intent, directory scope, and relevance threshold stay unchanged. MCP
@@ -80,8 +106,8 @@ reuses the captured snapshot and prepared index; recovery does not rescan files.
 An identical-evidence retry is skipped. Genuine misses can still return nothing.
 Deep mode retains its existing investigation budget; generic `rank` is unchanged.
 
-It never sends the full repository. Each request is limited to 32,000 bytes before
-the model field is added. This is a byte budget, not a token count. Requests have
+It never sends the full repository: at most 90 chunks per search, in three
+requests. Each request is limited to 32,000 bytes before the model field is added. This is a byte budget, not a token count. Requests have
 a 10-second timeout; HTTP errors are not retried. MCP retrieval metadata (written
 to `OKO_METRICS_FILE`, not returned to the agent) includes
 `attempts`, `recoveryCandidates`, and `recovered`. `requestBytes`, `previewMs`, and

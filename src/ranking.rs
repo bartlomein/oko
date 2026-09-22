@@ -11,10 +11,44 @@ pub const MAX_ITEMS: usize = 30;
 pub const MAX_JEV_REQUEST_BYTES: usize = 32_000;
 // Provisional yes/no decision boundary, not a calibrated relevance cutoff.
 // Independent Noul scores do not share Choice's former `none` probability.
-const RELEVANCE_THRESHOLD: f64 = 0.5;
+pub const RELEVANCE_THRESHOLD: f64 = 0.5;
 // Shared once per request: repeating these distinctions for every candidate
 // would displace source evidence from the bounded ranking payload.
 const IMPLEMENTATION_CRITERIA: &str = "Relevant source implements the behavior being located or directly owns the code to change, including declarative UI or configuration. For edits, requested new values or behavior need not exist yet. Exclude code mentioned only to stay unchanged. Exclude mere mentions, docs, tests, examples, and callers that only delegate the requested behavior.";
+
+// The same criteria for a question that asks for tests: excluding tests would
+// reject exactly what was requested.
+const IMPLEMENTATION_CRITERIA_FOR_TESTS: &str = "The question asks about tests. Relevant source is a test, spec or fixture that exercises the behavior being located, or the code that implements that behavior. For edits, requested new values or behavior need not exist yet. Exclude code mentioned only to stay unchanged. Exclude mere mentions, docs, examples, tests of unrelated behavior, and callers that only delegate the requested behavior.";
+
+/// Whether the question asks FOR tests. A pasted failure log or a test file
+/// name mentions tests without asking for them, so a bare "test" is not enough.
+pub fn asks_for_tests(question: &str) -> bool {
+    static ASK: std::sync::OnceLock<(regex::Regex, regex::Regex)> = std::sync::OnceLock::new();
+    let (ask, negated) = ASK.get_or_init(|| {
+        (
+            regex::Regex::new(
+                r"(?i)\b(?:which|where|what|find|locate|list|show|add|write|update|extend|existing|related|relevant|unit|integration|regression)\b[^.\n]{0,40}\b(?:tests?|specs?|fixtures?)\b|\b(?:tests?|specs?|fixtures?)[ \t]+(?:for|of|that|which|covering|cover|exercising)\b",
+            )
+            .unwrap(),
+            regex::Regex::new(r"(?i)\b(?:not|never|without|no|don't|dont|exclude|excluding|ignore|ignoring|skip)\b").unwrap(),
+        )
+    });
+    // "Do not locate or change tests" asks for the opposite.
+    ask.find_iter(question).any(|found| {
+        // The negation may sit just before the matched words or among them.
+        let mut from = found.start().saturating_sub(30);
+        while !question.is_char_boundary(from) {
+            from -= 1;
+        }
+        let clause = &question[from..found.end()];
+        let clause = clause.rsplit(['.', '\n']).next().unwrap_or(clause);
+        !negated.is_match(clause)
+    })
+}
+
+// For candidates proposed because they are connected to the best matches.
+// The implementation criteria exclude exactly these (tests, callers).
+const RELATED_CRITERIA: &str = "Relevant source is closely connected to the behavior or change in `question` without having to implement it: a test that exercises that code, code that calls it or that it calls, or a definition it depends on, which a developer would read or update together with it. Exclude files that only share common names, generic utilities, documentation, and tests of unrelated behavior.";
 
 // Shared once so explanation guidance does not crowd out candidate previews.
 const EXPLANATION_CRITERIA: &str = "Relevant evidence directly helps explain how or why all or part of the requested behavior works. Accept source code or configuration that demonstrates the behavior even without explanatory prose, and documentation or comments that explain it. Respect the question's scope and exclusions. Exclude mere mentions and unrelated code. Do not infer design rationale that the evidence does not support.";
@@ -55,6 +89,8 @@ pub enum RankingIntent {
     General,
     Implementation,
     Explanation,
+    /// Internal: for connected candidates; never parsed from a caller's input.
+    Related,
 }
 
 impl std::str::FromStr for RankingIntent {
@@ -77,6 +113,7 @@ impl RankingIntent {
             );
         }
         let judgment = match self {
+            Self::Related => "meet the fixed `relatedCriteria` for `question`?",
             Self::General => "directly answer all or part of `question`?",
             Self::Implementation => unreachable!("handled above"),
             Self::Explanation => {
@@ -224,9 +261,15 @@ fn create_request(question: &str, items: &[RankItem], intent: RankingIntent) -> 
         .collect();
     let mut state = json!({ "question": question, "candidates": candidates });
     if matches!(intent, RankingIntent::Implementation) {
-        state["implementationCriteria"] = json!(IMPLEMENTATION_CRITERIA);
+        state["implementationCriteria"] = json!(if asks_for_tests(question) {
+            IMPLEMENTATION_CRITERIA_FOR_TESTS
+        } else {
+            IMPLEMENTATION_CRITERIA
+        });
     } else if matches!(intent, RankingIntent::Explanation) {
         state["explanationCriteria"] = json!(EXPLANATION_CRITERIA);
+    } else if matches!(intent, RankingIntent::Related) {
+        state["relatedCriteria"] = json!(RELATED_CRITERIA);
     }
     json!({
         "state": state,
@@ -385,6 +428,9 @@ pub fn call_jev_observed_within(
         .post(format!("{}/v1/systemone", base.trim_end_matches('/')))
         .bearer_auth(api_key)
         .header(reqwest::header::ACCEPT, "application/json")
+        // Which of a search's requests this is: several run at once, and nothing
+        // in the body tells the shortlist's apart from those judged beside it.
+        .header("x-oko-phase", phase)
         .json(&body)
         .send()
     {
@@ -586,6 +632,43 @@ pub fn rank_items_with_stats(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_question_that_asks_for_tests_lifts_their_exclusion() {
+        for asked in [
+            "where are the tests for the retry logic?",
+            "Which existing tests cover header parsing",
+            "add a regression test for empty forwarded values",
+            "unit tests of the decoder chain",
+        ] {
+            assert!(super::asks_for_tests(asked), "{asked}");
+            let request = super::prepare_request_with_intent(
+                asked,
+                &[super::RankItem {
+                    id: "0".into(),
+                    text: "fn a() {}".into(),
+                    source: None,
+                }],
+                super::RankingIntent::Implementation,
+            )
+            .unwrap()
+            .0;
+            let criteria = request["state"]["implementationCriteria"].as_str().unwrap();
+            assert!(criteria.contains("The question asks about tests"));
+        }
+        for log in [
+            "Locate the capture-name predicate. Do not locate or change tests or the regex engine.",
+            "only the predicate may change; do not locate tests or regex engine changes",
+            "its preceding documentation are relevant; exclude regex engine and tests",
+            "The requested edit will add ASCII hyphens; do not locate or change tests or the regex engine.",
+            "$ go test ./.\nFAIL github.com/gin-gonic/gin [build failed]\n./context_test.go:524:27: c.GetError undefined",
+            "--- FAIL: TestContextGetError (0.00s)",
+            "where is the retry delay computed?",
+            "pytest tests/test_client.py::test_redirect fails with KeyError",
+        ] {
+            assert!(!super::asks_for_tests(log), "{log}");
+        }
+    }
+
     use super::*;
     fn items() -> Vec<RankItem> {
         parse_items(json!([{"id":"none","text":"Invoice","source":"row/4"},{"id":"candidate_1","text":"Refund"}])).unwrap()
@@ -912,6 +995,7 @@ mod tests {
                     RankingIntent::Explanation => {
                         json!({"explanationCriteria": EXPLANATION_CRITERIA})
                     }
+                    RankingIntent::Related => json!({"relatedCriteria": RELATED_CRITERIA}),
                     RankingIntent::General => unreachable!(),
                 };
                 assert!(

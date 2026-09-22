@@ -1,3 +1,4 @@
+pub mod connected;
 pub mod context;
 pub mod investigate;
 pub mod navigation;

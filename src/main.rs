@@ -186,6 +186,10 @@ pub(crate) struct CandidateScore {
     pub end_line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    /// Proposed for its connection to the strongest matches, not by keywords.
+    /// Its relevance is scaled by `CONNECTED_WEIGHT`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub connected: bool,
 }
 
 fn lexical_candidates(chunks: &[search::Chunk]) -> Vec<CandidateScore> {
@@ -196,6 +200,7 @@ fn lexical_candidates(chunks: &[search::Chunk]) -> Vec<CandidateScore> {
             start_line: chunk.start_line,
             end_line: chunk.end_line,
             score: None,
+            connected: false,
         })
         .collect()
 }
@@ -211,6 +216,87 @@ fn provider_unavailable(calls: &[JevCallStats]) -> Option<&'static str> {
         ("http_status", Some(429 | 500..)) => Some("unavailable"),
         _ => None,
     }
+}
+
+/// Candidates judged beside the keyword shortlist, in requests of their own
+/// that run while the shortlist is judged, so they add no wait. They never
+/// reach the excerpts, the possible matches or the recovery call: what the
+/// agent is shown is decided by the shortlist alone. The ones Jev rates
+/// relevant are named in the list of other files.
+pub(crate) struct Further {
+    /// Files one hop from the strongest matches: tests, callers, definitions.
+    pub connected: Vec<search::Chunk>,
+    /// The keyword matches after the shortlist; the recovery call draws on them.
+    pub keywords: Vec<search::Chunk>,
+}
+
+/// What one search judges beside its shortlist.
+pub(crate) fn further_candidates(
+    snapshot: &oko::search_cache::WorkspaceSnapshot,
+    shortlist: &[search::Chunk],
+    question: &str,
+    intent: RankingIntent,
+) -> Further {
+    // Chosen as the recovery call has always chosen them.
+    let keywords = snapshot.rank_excluding(question, intent, shortlist);
+    let mut connected = snapshot.connected_to(shortlist, question);
+    connected.retain(|chunk| {
+        !keywords.iter().any(|old| {
+            (&old.path, old.start_line, old.end_line)
+                == (&chunk.path, chunk.start_line, chunk.end_line)
+        })
+    });
+    Further {
+        connected,
+        keywords,
+    }
+}
+
+// Connected code is judged by criteria of its own, so its relevance is not on
+// the shortlist's scale. At equal weight it crowded keyword candidates out of
+// the list; between 0.3 and 0.5 Agent Retrieval Bench recall was flat.
+const CONNECTED_WEIGHT: f64 = 0.4;
+
+/// Relevance of each of `chunks`, by index. A failed or slow request yields
+/// nothing: these candidates are extra, and the search must not depend on them.
+fn judge_beside(
+    question: &str,
+    chunks: &[search::Chunk],
+    corpus: &[search::Chunk],
+    key: Option<&str>,
+    intent: RankingIntent,
+    timeout: std::time::Duration,
+    phase: &'static str,
+) -> (Vec<(usize, f64)>, Vec<JevCallStats>) {
+    let mut calls = Vec::new();
+    if chunks.is_empty() {
+        return (Vec::new(), calls);
+    }
+    let judged = oko::preview::ranking_previews_with_context(question, chunks, corpus, intent)
+        .and_then(|items| {
+            ranking::rank_items_with_stats(
+                question,
+                &items,
+                &RankOptions {
+                    api_key: key.map(str::to_owned),
+                    limit: 30,
+                    no_jev: false,
+                    intent,
+                    timeout,
+                },
+                phase,
+                &mut calls,
+            )
+        })
+        .map(|ranking| {
+            ranking
+                .judged
+                .into_iter()
+                .map(|(id, score)| (id.parse().expect("IDs generated locally"), score))
+                .collect()
+        })
+        .unwrap_or_default();
+    (judged, calls)
 }
 
 fn lexical_results(chunks: &[search::Chunk]) -> Vec<CodeResult> {
@@ -246,7 +332,7 @@ pub(crate) fn rank_code_with_stats(
     corpus: &[search::Chunk],
     reranker: Reranker,
     intent: RankingIntent,
-    recovery_candidates: impl FnOnce() -> Result<Vec<search::Chunk>>,
+    further: impl FnOnce() -> Result<Further>,
 ) -> Result<(Vec<CodeResult>, CodeRankingStats)> {
     let (no_jev, key, patience) = match reranker {
         Reranker::Lexical => (true, None, None),
@@ -282,19 +368,59 @@ pub(crate) fn rank_code_with_stats(
         stats.preview_ms = preview_started.elapsed().as_millis() as u64;
         let rerank_started = Instant::now();
         let timeout = patience.unwrap_or(ranking::JEV_TIMEOUT);
-        let ranking = match ranking::rank_items_with_stats(
-            question,
-            &items,
-            &RankOptions {
-                api_key: key.clone(),
-                limit: 30,
-                no_jev: false,
-                intent,
-                timeout,
-            },
-            "normal",
-            &mut stats.jev_calls,
-        ) {
+        let further = further()?;
+        let (beside_connected, beside_keywords) = (&further.connected, &further.keywords);
+        let (first, beside) = std::thread::scope(|scope| {
+            let key = key.as_deref();
+            let connected = scope.spawn(move || {
+                // The implementation criteria exclude tests and callers by
+                // design; those are what a connection finds.
+                let intent = RankingIntent::Related;
+                judge_beside(
+                    question,
+                    beside_connected,
+                    corpus,
+                    key,
+                    intent,
+                    timeout,
+                    "connected",
+                )
+            });
+            let keywords = scope.spawn(move || {
+                judge_beside(
+                    question,
+                    beside_keywords,
+                    corpus,
+                    key,
+                    intent,
+                    timeout,
+                    "further",
+                )
+            });
+            let first = ranking::rank_items_with_stats(
+                question,
+                &items,
+                &RankOptions {
+                    api_key: key.map(str::to_owned),
+                    limit: 30,
+                    no_jev: false,
+                    intent,
+                    timeout,
+                },
+                "normal",
+                &mut stats.jev_calls,
+            );
+            let join = |handle: std::thread::ScopedJoinHandle<'_, _>| {
+                handle.join().expect("ranking thread")
+            };
+            (first, [join(connected), join(keywords)])
+        });
+        let [(connected, connected_calls), (keywords, keyword_calls)] = beside;
+        // Ahead of the shortlist's call: whether Jev was reachable is read from the last one.
+        stats
+            .jev_calls
+            .splice(0..0, connected_calls.into_iter().chain(keyword_calls));
+        let ranking = match first {
             Ok(ranking) => ranking,
             Err(error) => {
                 stats.rerank_ms = rerank_started.elapsed().as_millis() as u64;
@@ -313,10 +439,38 @@ pub(crate) fn rank_code_with_stats(
         stats.attempts = usize::from(!items.is_empty());
         let mut selected = chunks.to_vec();
         let mut ranking = ranking;
+        let listed = |chunk: &search::Chunk, score: f64, connected: bool| CandidateScore {
+            path: chunk.path.clone(),
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            score: Some(if connected {
+                score * CONNECTED_WEIGHT
+            } else {
+                score
+            }),
+            connected,
+        };
+        let position = |id: &str| id.parse::<usize>().expect("IDs generated locally");
+        // A recovery call replaces the ranking; what the first call judged still counts.
+        let mut beside: Vec<CandidateScore> = ranking
+            .judged
+            .iter()
+            .map(|(id, score)| listed(&chunks[position(id)], *score, false))
+            .collect();
+        beside.extend(
+            connected
+                .iter()
+                .map(|(index, score)| listed(&further.connected[*index], *score, true)),
+        );
+        beside.extend(
+            keywords
+                .iter()
+                .map(|(index, score)| listed(&further.keywords[*index], *score, false)),
+        );
         if ranking.results.is_empty() && !items.is_empty() {
             let recovery_started = Instant::now();
             let mut recovery: Vec<_> = chunks.iter().take(8).cloned().collect();
-            recovery.extend(recovery_candidates()?.into_iter().take(8));
+            recovery.extend(further.keywords.iter().take(8).cloned());
             let recovery_items =
                 oko::preview::recovery_previews_with_context(question, &recovery, corpus, intent)?;
             // Do not spend a second call on the same evidence with different IDs.
@@ -367,16 +521,21 @@ pub(crate) fn rank_code_with_stats(
         stats.candidates = ranking
             .judged
             .iter()
-            .map(|(id, score)| {
-                let chunk = &selected[id.parse::<usize>().expect("IDs generated locally")];
-                CandidateScore {
-                    path: chunk.path.clone(),
-                    start_line: chunk.start_line,
-                    end_line: chunk.end_line,
-                    score: Some(*score),
-                }
-            })
+            .map(|(id, score)| listed(&selected[position(id)], *score, false))
             .collect();
+        for candidate in beside {
+            let seen = stats.candidates.iter().any(|old| {
+                (&old.path, old.start_line, old.end_line)
+                    == (&candidate.path, candidate.start_line, candidate.end_line)
+            });
+            if !seen {
+                stats.candidates.push(candidate);
+            }
+        }
+        // Stable: at equal relevance the shortlist's own order stands.
+        stats
+            .candidates
+            .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
         let accepted: std::collections::HashSet<&str> = ranking
             .results
             .iter()
@@ -589,7 +748,14 @@ fn run() -> Result<()> {
                     }
                 },
                 parsed.intent,
-                || Ok(snapshot.rank_excluding(&parsed.question, parsed.intent, &shortlist)),
+                || {
+                    Ok(further_candidates(
+                        &snapshot,
+                        &shortlist,
+                        &parsed.question,
+                        parsed.intent,
+                    ))
+                },
             )?;
             (results, Some(serde_json::to_value(stats)?))
         };

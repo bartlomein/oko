@@ -87,6 +87,10 @@ fn patterns() -> &'static Patterns {
         }
     })
 }
+/// A conventional test location or file name; a naming hint, not a parse.
+pub fn is_test_path(path: &str) -> bool {
+    patterns().test_path.is_match(path)
+}
 pub fn tokenize(value: &str) -> Vec<String> {
     let p = patterns();
     let a = p.acronym.replace_all(value, "$1 $2");

@@ -19,7 +19,7 @@ less install-oko.sh
 sh install-oko.sh
 ```
 
-The installer defaults to `v0.4.0`, including when that version is published as a
+The installer defaults to `v0.5.0`, including when that version is published as a
 prerelease. It does not rely on GitHub’s latest stable release endpoint. A draft
 or private release is not anonymously downloadable.
 
@@ -28,12 +28,12 @@ on the `sh` process (not on `curl`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh |
-  OKO_VERSION=v0.4.0 sh
+  OKO_VERSION=v0.5.0 sh
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKO_VERSION` | `v0.4.0` | Published release to download; the `v` prefix is optional. |
+| `OKO_VERSION` | `v0.5.0` | Published release to download; the `v` prefix is optional. |
 | `OKO_INSTALL_DIR` | `~/.local/share/oko` | Version directories containing binaries and license notices. |
 | `OKO_BIN_DIR` | `~/.local/bin` | Directory containing the `oko` symlink. |
 
@@ -64,7 +64,7 @@ Download the matching archive and `SHA256SUMS` from
 In the download directory, substitute your chosen filename:
 
 ```sh
-archive=oko-v0.4.0-aarch64-apple-darwin.tar.gz
+archive=oko-v0.5.0-aarch64-apple-darwin.tar.gz
 grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
 tar -xzf "$archive" &&
 "./${archive%.tar.gz}/oko" --version
@@ -106,6 +106,18 @@ Setup keeps its own stable copy: run the newly installed `oko setup` (with the s
 `--client`) in each configured project to update it. Start a new agent session so it launches the
 updated server. If your client keeps an old server running, reconnect its MCP
 connection or restart the client. Saved credentials are separate from the binary.
+
+### Upgrading to 0.5.0
+
+Nothing to reconfigure: reinstall, then start a new agent session (rerun
+`oko setup` per project if you want it to use the new binary right away). Every
+search now makes three Jev requests at once instead of one: the shortlist,
+files connected to its strongest matches, and the next keyword matches. Jev
+usage per search is about three times what it was, and the wait is the slowest
+of the three requests rather than their sum. What the agent is shown is
+unchanged; the list of other places worth opening is better. A question that
+asks for tests ("where are the tests for X") now returns tests. Each Jev
+request carries an `x-oko-phase` header.
 
 ### Upgrading to 0.4.0
 

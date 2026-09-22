@@ -216,7 +216,12 @@ impl OkoServer {
                     if cancelled() {
                         bail!("Search cancelled.");
                     }
-                    Ok(snapshot.rank_excluding(&input.question, input.intent.into(), &shortlist))
+                    Ok(super::further_candidates(
+                        &snapshot,
+                        &shortlist,
+                        &input.question,
+                        input.intent.into(),
+                    ))
                 },
             )?;
             lexical_fallback = stats.lexical_fallback;
