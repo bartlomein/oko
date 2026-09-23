@@ -84,6 +84,11 @@ struct SearchInput {
     max_steps: Option<usize>,
 }
 
+/// Searches that run at once. The snapshot is shared and its refresh is locked,
+/// so parallel searches repeat no scan; each still sends up to three Jev
+/// requests and ranks on the CPU, so the rest wait for a slot.
+const MAX_CONCURRENT_SEARCHES: usize = 4;
+
 #[derive(Clone)]
 struct OkoServer {
     root: PathBuf,
@@ -524,15 +529,18 @@ impl OkoServer {
         Parameters(input): Parameters<SearchInput>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        // Hold the permit in the worker even if the client cancels its awaiting future.
-        let permit = match self.gate.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                return failure(
-                    "Another search is running; wait for it to finish before retrying.",
-                );
-            }
+        // Agents issue searches in parallel; a busy error only makes them retry
+        // one at a time or give up on Oko. Extra calls wait for a slot instead.
+        let permit = match context
+            .ct
+            .run_until_cancelled(self.gate.clone().acquire_owned())
+            .await
+        {
+            Some(Ok(permit)) => permit,
+            Some(Err(_)) => return failure("Search worker failed. Restart the server and retry."),
+            None => return failure("Search cancelled."),
         };
+        // Hold the permit in the worker even if the client cancels its awaiting future.
         let server = self.clone();
         match tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -581,7 +589,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     let server = OkoServer {
         root,
         no_jev,
-        gate: Arc::new(Semaphore::new(1)),
+        gate: Arc::new(Semaphore::new(MAX_CONCURRENT_SEARCHES)),
         cache: Arc::new(Mutex::new(WorkspaceCache::new())),
     };
     prewarm(&server);

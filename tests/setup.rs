@@ -363,16 +363,27 @@ fn claude_setup_registers_a_local_connection_and_writes_its_instructions() {
     let log = fs::read_to_string(temp.path().join("claude.log")).unwrap();
     let added = log
         .lines()
-        .find(|line| line.starts_with("mcp|add|"))
+        .find(|line| line.starts_with("mcp|add-json|"))
         .unwrap();
     let installed = install.canonicalize().unwrap();
-    let expected = format!(
-        "mcp|add|--transport|stdio|--scope|local|oko|--env|OKO_RIPGREP={}|--|{}|mcp|--root|{}|--no-jev|",
-        installed.join("rg").display(),
-        installed.join("oko").display(),
-        root.canonicalize().unwrap().display()
+    let server: serde_json::Value = serde_json::from_str(
+        added
+            .strip_prefix("mcp|add-json|--scope|local|oko|")
+            .and_then(|rest| rest.strip_suffix('|'))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        server,
+        serde_json::json!({
+            "type": "stdio",
+            "command": installed.join("oko"),
+            "args": ["mcp", "--root", root.canonicalize().unwrap(), "--no-jev"],
+            "env": {"OKO_RIPGREP": installed.join("rg")},
+            // Loaded up front, so agents and their explorers see the tool itself.
+            "alwaysLoad": true,
+        })
     );
-    assert_eq!(added, expected);
     assert!(!log.contains("mcp|remove|"));
     assert!(
         fs::read_to_string(root.join("CLAUDE.md"))
@@ -398,7 +409,7 @@ fn claude_setup_replaces_its_own_connection_and_refuses_another() {
     assert_ok(&setup_claude(&root, &temp.path().join("bin"), &claude));
     let log = fs::read_to_string(temp.path().join("claude.log")).unwrap();
     let removed = log.find("mcp|remove|--scope|local|oko|").unwrap();
-    assert!(removed < log.find("mcp|add|").unwrap());
+    assert!(removed < log.find("mcp|add-json|").unwrap());
     assert_eq!(
         fs::read_to_string(root.join("CLAUDE.md")).unwrap(),
         "@AGENTS.md\n"
@@ -418,7 +429,7 @@ fn claude_setup_replaces_its_own_connection_and_refuses_another() {
     assert!(
         !fs::read_to_string(other.path().join("claude.log"))
             .unwrap()
-            .contains("mcp|add|")
+            .contains("mcp|add-json|")
     );
     assert!(!root.join("CLAUDE.md").exists());
 }

@@ -659,6 +659,116 @@ fn ripgrep_config_cannot_enable_outside_symlink_reads() {
 
 /// Accept every request until the MCP search returns, so an accidental second
 /// ranking call is observable rather than merely producing a connection error.
+#[test]
+fn parallel_searches_all_run_instead_of_one_being_turned_away() {
+    use std::{
+        io::Read,
+        net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::Instant,
+    };
+    // Agents send several searches in one turn. Each must get results, and
+    // their Jev requests must overlap rather than queue behind one another.
+    let root = fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (in_flight, most, done) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (server_in_flight, server_most, server_done) =
+        (in_flight.clone(), most.clone(), done.clone());
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut handlers = Vec::new();
+        while !server_done.load(Ordering::Acquire) {
+            let mut stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "mock provider timed out");
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(error) => panic!("mock provider failed: {error}"),
+            };
+            let (in_flight, most) = (server_in_flight.clone(), server_most.clone());
+            handlers.push(thread::spawn(move || {
+                stream.set_nonblocking(false).unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                let request: Value = loop {
+                    let n = stream.read(&mut buffer).unwrap();
+                    assert!(n > 0, "incomplete provider request");
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                        let len: usize = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        if bytes.len() >= end + 4 + len {
+                            break serde_json::from_slice(&bytes[end + 4..end + 4 + len]).unwrap();
+                        }
+                    }
+                };
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                most.fetch_max(now, Ordering::SeqCst);
+                // Long enough for the searches to overlap, well inside Jev patience.
+                thread::sleep(Duration::from_millis(300));
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                let body = serde_json::to_vec(&relevance_response(&request, |_| 0.9)).unwrap();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            }));
+        }
+        for handler in handlers {
+            handler.join().unwrap();
+        }
+    });
+    let mut client = Client::start(root.path(), false, Some(&endpoint));
+    client.initialize();
+    // One more than run at once, so the last call has to wait for a slot.
+    let ids: Vec<u64> = (1..=5).map(|n| 100 + n).collect();
+    for id in &ids {
+        client.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":"search","arguments":{"question":"authentication"}}}));
+    }
+    let mut responses = std::collections::HashMap::new();
+    while responses.len() < ids.len() {
+        let response = client
+            .output
+            .recv_timeout(Duration::from_secs(15))
+            .expect("MCP response timed out");
+        if let Some(id) = response["id"].as_u64() {
+            responses.insert(id, response);
+        }
+    }
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+    for id in &ids {
+        let response = &responses[id];
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("auth.rs:"),
+            "{response}"
+        );
+    }
+    assert!(
+        most.load(Ordering::SeqCst) > 1,
+        "searches ran one at a time"
+    );
+}
+
 fn search_with_counted_provider(
     root: &Path,
     args: Value,

@@ -145,9 +145,84 @@ Raw rows for every run are in
 
 ## Agent sessions
 
-## Latest run: 243 sessions, Oko 0.5.0 (September 2026)
+## Latest run: 243 sessions, Oko 0.5.1 (September 2026)
 
-The README reports this run. Nine tasks (six code-location questions and three
+The README reports this run. Same tasks, clients, models, repeats, and three
+setups as the 0.5.0 run below: **without Oko**, **Oko**, and **Oko with the
+guidance `oko setup` installs**, with a warm disk index excluded from timing.
+Measured on the 0.5.1 build (commit `48da7a9`; the release commit after it
+changes only version numbers and installation docs), with Codex CLI 0.155.0,
+OpenCode 1.18.31, and Claude Code 2.1.280. Pass rates: Codex 26/27, 27/27,
+25/27; OpenCode 27/27 in all three; Claude Code 25/27, 27/27, 27/27. The five
+failures: three astro-forwarded-empty edits that also changed a duplicate
+definition in `validate-headers.ts` (Codex without Oko and with guidance, Claude
+Code without Oko), one ripgrep-printed-bytes answer that missed an anchor (Codex
+with guidance), and one ripgrep-printed-bytes answer the grader rejected
+(Claude Code without Oko).
+
+Mean seconds, agent tokens, and tool calls per session (27 sessions per cell):
+
+| Client | Without Oko | Oko | Oko + guidance |
+| --- | --- | --- | --- |
+| Codex — seconds | 34.4 | 34.3 | 34.6 |
+| Codex — agent tokens | 69,724 | 55,619 | 49,808 |
+| Codex — tool calls | 3.11 | 2.56 | 2.07 |
+| OpenCode — seconds | 33.9 | 27.9 | 26.8 |
+| OpenCode — agent tokens | 29,675 | 17,482 | 16,576 |
+| OpenCode — tool calls | 5.89 | 3.00 | 2.30 |
+| Claude Code — seconds | 8.5 | 6.9 | 6.5 |
+| Claude Code — agent tokens | 22,946 | 18,729 | 20,072 |
+| Claude Code — tool calls | 3.37 | 1.78 | 1.70 |
+
+What changed since 0.5.0:
+
+- **Claude Code without Oko** used 22,946 tokens per session, against 60,320 in
+  the 0.5.0 run and 23,960 in the 0.4.0 run. The 0.5.0 day was the unusual one,
+  so Claude Code's gains here are smaller than that run reported (23% faster and
+  13% fewer tokens, against 38% and 39%). With Oko, Claude Code passed 27/27.
+- **Codex's average time** includes one Oko session (httpx-async-auth-body,
+  repetition 3) that took 123 s with a single tool call: Oko's search took
+  0.45 s and Jev 1.1 s, and the rest was the model provider. All attempts count;
+  without that session Codex's Oko + guidance mean is 31.2 s, 9% faster than
+  without Oko.
+- The guidance gained one line in 0.5.1, about passing Oko on to subagents.
+  These sessions do not use subagents, so it has nothing to act on here.
+- 0.5.1 lets searches run in parallel. No session in this run or the 0.5.0 run
+  sent searches in parallel, so it does not show up here.
+
+Per task, Oko + guidance against without Oko (mean of three sessions; time, tokens):
+
+| Task | Codex | OpenCode | Claude Code |
+| --- | --- | --- | --- |
+| astro-image-probe-authorization | −37%, −43% | −46%, −65% | −40%, −28% |
+| astro-action-key-guards | −45%, −58% | −21%, −60% | −48%, −36% |
+| astro-forwarded-empty (edit) | +11%, −27% | −11%, −50% | +18%, −6% |
+| httpx-decoder-chain | +21%, +54% | −7%, +6% | −19%, +23% |
+| httpx-async-auth-body | +94%, −26% | +6%, −9% | −22%, −11% |
+| httpx-reason-fallback (edit) | −4%, +3% | −17%, −43% | −13%, −1% |
+| ripgrep-capture-expansion | −17%, −44% | −35%, −35% | −44%, −28% |
+| ripgrep-printed-bytes | −4%, −28% | −25%, −32% | −36%, −11% |
+| ripgrep-capture-hyphen (edit) | +0%, −36% | −23%, −57% | −15%, −10% |
+
+Mean tool calls per task, without Oko → Oko + guidance. An Oko search counts as
+one call. They fell on every task for every client except Codex on
+httpx-decoder-chain:
+
+| Task | Codex | OpenCode | Claude Code |
+| --- | --- | --- | --- |
+| astro-image-probe-authorization | 2.7 → 1.0 | 6.3 → 1.3 | 3.3 → 1.0 |
+| astro-action-key-guards | 3.7 → 1.0 | 7.0 → 2.0 | 3.7 → 1.0 |
+| astro-forwarded-empty (edit) | 3.0 → 2.7 | 5.3 → 3.0 | 2.7 → 2.0 |
+| httpx-decoder-chain | 2.7 → 3.3 | 6.3 → 2.3 | 4.3 → 2.7 |
+| httpx-async-auth-body | 2.7 → 1.3 | 5.0 → 2.7 | 3.0 → 1.7 |
+| httpx-reason-fallback (edit) | 3.0 → 2.0 | 3.7 → 2.0 | 2.3 → 2.0 |
+| ripgrep-capture-expansion | 3.7 → 2.7 | 8.3 → 3.0 | 3.3 → 1.0 |
+| ripgrep-printed-bytes | 3.3 → 2.7 | 6.3 → 2.3 | 4.7 → 2.0 |
+| ripgrep-capture-hyphen (edit) | 3.3 → 2.0 | 4.7 → 2.0 | 3.0 → 2.0 |
+
+## Previous run: 243 sessions, Oko 0.5.0 (September 2026)
+
+The README reported this run until 0.5.1. Nine tasks (six code-location questions and three
 small edits across Astro, HTTPX, and ripgrep), three clients, three repeats, and
 three setups: **without Oko**, **Oko**, and **Oko with the guidance `oko setup`
 installs**. The README reports the first and last
