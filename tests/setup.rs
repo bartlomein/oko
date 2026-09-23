@@ -480,3 +480,62 @@ fn all_clients_share_one_agents_file() {
         assert!(ignore.lines().any(|line| line == entry), "{entry}");
     }
 }
+#[cfg(unix)]
+#[test]
+fn a_claude_md_linked_to_agents_md_gets_one_section_and_stays_a_link() {
+    // Next.js and Discourse link CLAUDE.md to their agents file.
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("AGENTS.md"), "# Project notes\n").unwrap();
+    std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+    let claude = fake_claude(temp.path(), None);
+    let output = Command::new(executable())
+        .args(["setup", "--no-jev", "--client", "claude,codex", "--root"])
+        .arg(&root)
+        .arg("--install-dir")
+        .arg(temp.path().join("bin"))
+        .env("OKO_CLAUDE", &claude)
+        .output()
+        .unwrap();
+    assert_ok(&output);
+    assert!(
+        fs::symlink_metadata(root.join("CLAUDE.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let agents = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    assert!(agents.starts_with("# Project notes\n"));
+    assert_eq!(agents.matches("<!-- oko:search:start -->").count(), 1);
+    // Setup is repeatable through the link, too.
+    assert_ok(&setup_claude(&root, &temp.path().join("bin"), &claude));
+    let again = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    assert_eq!(again.matches("<!-- oko:search:start -->").count(), 1);
+}
+#[cfg(unix)]
+#[test]
+fn a_claude_md_linked_outside_the_project_is_refused() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let outside = temp.path().join("elsewhere.md");
+    fs::write(&outside, "someone else's notes\n").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("CLAUDE.md")).unwrap();
+    let claude = fake_claude(temp.path(), None);
+    let output = setup_claude(&root, &temp.path().join("bin"), &claude);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("inside the project"));
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap(),
+        "someone else's notes\n"
+    );
+    // Dangling links are refused the same way.
+    fs::remove_file(root.join("CLAUDE.md")).unwrap();
+    std::os::unix::fs::symlink("missing.md", root.join("CLAUDE.md")).unwrap();
+    assert!(
+        !setup_claude(&root, &temp.path().join("bin"), &claude)
+            .status
+            .success()
+    );
+}

@@ -161,6 +161,24 @@ fn text(path: &Path) -> Result<Option<String>> {
         ),
     }
 }
+/// The file an instruction path names. Projects often link CLAUDE.md to their
+/// AGENTS.md; the section belongs in that file, and the link stays. A link that
+/// leaves the project, or leads to nothing, is still refused.
+fn instruction_file(root: &Path, path: PathBuf) -> Result<PathBuf> {
+    let Ok(meta) = fs::symlink_metadata(&path) else {
+        return Ok(path);
+    };
+    if !meta.file_type().is_symlink() {
+        return Ok(path);
+    }
+    match path.canonicalize() {
+        Ok(target) if target.starts_with(root) && target.is_file() => Ok(target),
+        _ => bail!(
+            "Refusing to follow {}: it must link to a file inside the project",
+            path.display()
+        ),
+    }
+}
 fn config(original: &str, exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<String> {
     let mut doc: DocumentMut = original.parse().map_err(|_| {
         anyhow::anyhow!("Existing Codex configuration is invalid TOML; nothing was overwritten")
@@ -608,7 +626,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                     options.root.join("AGENTS.override.md")
                 }
                 Client::Claude => {
-                    let own = options.root.join("CLAUDE.md");
+                    let own = instruction_file(&options.root, options.root.join("CLAUDE.md"))?;
                     if text(&own)?.is_some_and(|text| text.contains("@AGENTS.md")) {
                         agents.clone()
                     } else {
@@ -617,6 +635,8 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                 }
                 _ => agents.clone(),
             };
+            // A linked CLAUDE.md and AGENTS.md are one file and get one section.
+            let path = instruction_file(&options.root, path)?;
             if !paths.contains(&path) {
                 paths.push(path);
             }
