@@ -32,11 +32,14 @@ From the project directory, add a connection scoped to this project and user:
 
 ```sh
 cd /path/to/your/project
-claude mcp add --transport stdio --scope local oko -- /absolute/path/to/oko mcp --root "$PWD"
+claude mcp add-json --scope local oko \
+  "{\"type\":\"stdio\",\"command\":\"/absolute/path/to/oko\",\"args\":[\"mcp\",\"--root\",\"$PWD\"],\"alwaysLoad\":true}"
 claude mcp list
 ```
 
-Quote the executable path if it contains spaces. Start a new Claude Code session
+`alwaysLoad` makes Claude Code load Oko's tool at startup. Otherwise it defers
+MCP tools behind a tool search, and agents, including the subagents Claude Code
+starts to explore code, see only the tool's name. Start a new Claude Code session
 and check `/mcp` for Oko. The `local` scope keeps this machine’s paths out of your
 shared project configuration. See [Claude Code’s MCP documentation](https://code.claude.com/docs/en/mcp).
 

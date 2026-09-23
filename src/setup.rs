@@ -11,7 +11,7 @@ use std::{
 };
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
@@ -352,25 +352,25 @@ impl Claude {
             self.run(&["mcp", "remove", "--scope", "local", "oko"])
                 .context("Cannot replace the existing Claude Code connection; remove it with `claude mcp remove oko`, then rerun setup")?;
         }
-        let ripgrep = format!(
-            "OKO_RIPGREP={}",
-            rg.to_str().context("ripgrep path must be UTF-8")?
-        );
-        // The name precedes --env, which would otherwise absorb it.
-        let mut args = vec![
+        // Claude Code defers MCP tools behind a tool search: an agent sees only
+        // the bare name until it loads the schema, and explorers never do.
+        // `alwaysLoad` needs add-json; `mcp add` has no flag for it.
+        let server = serde_json::json!({
+            "type": "stdio",
+            "command": exe.to_str().context("Executable path must be UTF-8")?,
+            "args": server_args(&self.root, offline)?,
+            "env": {"OKO_RIPGREP": rg.to_str().context("ripgrep path must be UTF-8")?},
+            "alwaysLoad": true,
+        })
+        .to_string();
+        let args = [
             "mcp",
-            "add",
-            "--transport",
-            "stdio",
+            "add-json",
             "--scope",
             "local",
             "oko",
-            "--env",
-            &ripgrep,
-            "--",
+            server.as_str(),
         ];
-        args.push(exe.to_str().context("Executable path must be UTF-8")?);
-        args.extend(server_args(&self.root, offline)?);
         self.run(&args)
             .context("Claude Code did not accept the connection")?;
         Ok(())

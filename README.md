@@ -83,7 +83,8 @@ From the project you want to search:
 ```sh
 cd /path/to/your/project
 oko auth login
-claude mcp add --transport stdio --scope local oko -- "$(command -v oko)" mcp --root "$PWD"
+claude mcp add-json --scope local oko \
+  "{\"type\":\"stdio\",\"command\":\"$(command -v oko)\",\"args\":[\"mcp\",\"--root\",\"$PWD\"],\"alwaysLoad\":true}"
 claude mcp list
 ```
 
