@@ -342,7 +342,8 @@ the result stays empty: keyword order does not overrule that judgment. The CLI
 and deep mode keep the ten-second timeout and report provider failures, so
 measurements never mistake keyword order for Jev's. Configure a client tool timeout
 of 120 seconds when using deep mode; large repository scans can take longer.
-One search runs at a time; concurrent calls receive a busy error. Cancellation
+Up to four searches run at once and further calls wait for a slot; they share one
+workspace snapshot, so parallel searches do not repeat a scan. Cancellation
 stops before the next search phase or provider call; it does not interrupt a
 filesystem scan or an already-running synchronous HTTP request.
 
