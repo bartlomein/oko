@@ -32,7 +32,7 @@ What setup connects depends on the tool:
 | Tool | Connection | Guidance |
 | --- | --- | --- |
 | Codex | `.codex/config.toml` in the project | `AGENTS.md`, or `AGENTS.override.md` when present |
-| Claude Code | `claude mcp add-json --scope local` with `alwaysLoad`, stored by Claude Code for you and this project | `CLAUDE.md`, or `AGENTS.md` when `CLAUDE.md` imports `@AGENTS.md` |
+| Claude Code | `claude mcp add-json --scope local` with `alwaysLoad`, stored by Claude Code for you and this project | `CLAUDE.md`, the file it links to inside the project, or `AGENTS.md` when `CLAUDE.md` imports `@AGENTS.md` |
 | OpenCode 1.x | `opencode.json` in the project | `AGENTS.md` |
 
 The guidance is a managed section between `oko:search` markers. Existing
