@@ -164,6 +164,15 @@ plausible excerpt misses multi-location answers:
   (`definitions`), described below.
 - `partial excerpt`: the enclosing code continues outside the range (`truncated`),
   so the file should be read when the rest matters.
+- `body abridged`: a complete definition too long to show whole (over 256 lines).
+  Its signature, the start of its body, the ranked evidence when that sits
+  deeper, and its end are shown; each gap is marked
+  `… N lines omitted (path:a-b) …` and listed in `omitted`.
+- `outline`: the same for a class the parser knows the members of: the class
+  header and one line per member (at most 60), with the gaps marked.
+- `exact name match`: the definition of a name the question used, shown
+  although the ranker did not accept it (`exactName`). A name match, not a
+  relevance claim; see "Names" below.
 
 Supporting excerpts are introduced by `Definition referenced from`, `Caller of`
 (parser-resolved bindings, with the reference or target location), or
@@ -225,10 +234,13 @@ When the line that best matches the question is in a comment directly above a
 declaration in the winning chunk, the declaration is treated as the match: doc
 comments often repeat the question better than the code they document.
 
-When a ranked match lies in a function with a known boundary of at most 256
-lines, Oko returns the full implementation instead of the usual 60-line source
-window, for every match and not only the first: a window that stops a few lines
-short of the relevant statement costs a follow-up read, or a wrong answer.
+When a ranked match lies in a definition (function, method, class, type or
+constant) with a known boundary of at most 256 lines, Oko returns the full
+implementation instead of the usual 60-line source window, for every match and
+not only the first: a window that stops a few lines short of the relevant
+statement costs a follow-up read, or a wrong answer. A longer complete
+definition is abridged rather than windowed (`body abridged`, `outline`), so
+its signature and end are always visible.
 Under the response cap, lower-ranked complete definitions are first narrowed
 back to that window, lowest rank first, before any match is dropped.
 If the primary source match lacks a complete function boundary, Oko retains its
@@ -364,3 +376,42 @@ to choose it over native search. Codex project setup is available above. Release
 packages are tested with the CLI and stdio MCP protocol on each CI target.
 Automated Rust tests cover actual stdio messages and mock Jev
 requests without real credentials.
+
+## Names
+
+Agents ask for code by name far more often than by behaviour, and a
+one-line definition can lose a keyword shortlist to files that repeat its
+name. Oko indexes every definition of the languages it parses (JavaScript and
+TypeScript today: functions, classes, methods, object-literal functions,
+types, constants, with their qualified names such as `Server.handle`) and
+looks the question's identifier-shaped words up in that index: qualified
+names, `snake_case`, `camelCase`, `PascalCase`, anything in backticks, and a
+Capitalized word beside a code noun ("Upload model"). Up to three such
+definitions lead the shortlist as whole-definition chunks, so the ranker
+judges them; one it rejects is still shown, labelled `exact name match`, after
+the ranker's first choice. A pinned definition alone is an answer, so "No
+relevant code found" never appears while a named definition exists.
+
+Same-named definitions are chosen by the question's own hints (a container or
+a path segment named in it), then non-test over test, exported over not,
+shorter path. A name defined five or more times outside tests (`render`,
+`Page`) needs such a hint; otherwise a note says how many places define it.
+Other definitions of a pinned name are listed in a note. The metrics record
+the identifiers found, the pins and the notes under `floor`.
+
+## Coverage
+
+The first line of every answer says what was searched:
+
+```
+Index: 25,873 of 26,687 files (814 skipped: 17 over size, 797 unreadable), 20,250 parsed for symbols (js, tsx, ts, jsx), watched
+```
+
+Files are discovered with `rg --files`. Text files up to 256 KiB are indexed
+whole; files of a parsed language up to 1 MiB are indexed by their
+definitions only (a generated table gets no chunks; a minified file is
+skipped); binary, non-UTF-8, blank and larger files are skipped and counted.
+`watched` means the index is kept current by the file watcher, `rescanned`
+that this search re-validated it, `built now` that it was just created. When a
+word of the question is the file stem of a skipped file, that file is named
+with its size. The counts are recorded under `coverage` in the metrics.

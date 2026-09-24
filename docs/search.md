@@ -4,8 +4,11 @@
 
 ## Code search
 
-Oko discovers files with `rg --files`, reads UTF-8 text files up to 256 KiB,
+Oko discovers files with `rg --files`, reads UTF-8 text files up to 256 KiB
+(files of a parsed language up to 1 MiB, indexed by their definitions only),
 rejects binary/invalid UTF-8 content, and builds a deterministic shortlist.
+Definitions the question names by identifier are always candidates; see
+"Names" in [mcp.md](mcp.md).
 Search splits snake_case and camelCase names, ignores common question words,
 and matches English word forms using the Porter stemmer.
 

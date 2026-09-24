@@ -144,7 +144,8 @@ Ask your agent:
 
 Your coding tool starts Oko automatically. You do not need to run a server yourself.
 Connecting Oko makes it available; it does not force the agent to use it for every
-search. Exact names and literal text can still be searched with native grep.
+search. A function, class or method named in the question is always found;
+literal text can still be searched with native grep.
 
 ## Use in your terminal
 
