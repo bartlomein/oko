@@ -23,6 +23,7 @@ pub enum DefinitionKind {
     Type,
     Class,
     Method,
+    Module,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -106,6 +107,9 @@ pub struct FileFacts {
     valid: bool,
     /// The file had syntax errors: definitions were kept, relationships were not.
     partial: bool,
+    /// The language's visitor records definitions only (no bindings, imports
+    /// or references): relationships come from the lexical fallback.
+    definitions_only: bool,
 }
 
 impl FileFacts {
@@ -136,7 +140,7 @@ impl FileFacts {
                 || (self.definitions.is_empty()
                     && self.references.is_empty()
                     && self.imports.is_empty()))
-            && (!self.partial || self.references.is_empty())
+            && (!(self.partial || self.definitions_only) || self.references.is_empty())
             && self.definitions.iter().all(|d| {
                 d.start_line > 0
                     && d.start_line <= d.end_line
@@ -160,18 +164,55 @@ impl FileFacts {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Language {
+    JavaScript,
+    TypeScript,
+    Tsx,
+    Python,
+    Go,
+    Rust,
+    Ruby,
+}
+impl Language {
+    fn of(path: &str) -> Option<Self> {
+        Some(match path.rsplit('.').next()? {
+            "js" | "jsx" | "mjs" | "cjs" => Self::JavaScript,
+            "ts" | "mts" | "cts" => Self::TypeScript,
+            "tsx" => Self::Tsx,
+            "py" | "pyi" => Self::Python,
+            "go" => Self::Go,
+            "rs" => Self::Rust,
+            "rb" | "rake" | "gemspec" => Self::Ruby,
+            _ => return None,
+        })
+    }
+    /// The JavaScript family has scopes, imports and references; the others
+    /// record definitions only.
+    fn relationships(self) -> bool {
+        matches!(self, Self::JavaScript | Self::TypeScript | Self::Tsx)
+    }
+    fn grammar(self) -> tree_sitter::Language {
+        match self {
+            Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Self::Python => tree_sitter_python::LANGUAGE.into(),
+            Self::Go => tree_sitter_go::LANGUAGE.into(),
+            Self::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Self::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        }
+    }
+}
+
+/// A language whose definitions are parsed.
 pub fn supports(path: &str) -> bool {
-    matches!(
-        path.rsplit('.').next(),
-        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts")
-    )
+    Language::of(path).is_some()
 }
 
 #[derive(Default)]
 pub struct NavigationPreparer {
-    js: Option<Parser>,
-    ts: Option<Parser>,
-    tsx: Option<Parser>,
+    parsers: HashMap<Language, Parser>,
 }
 impl NavigationPreparer {
     pub fn prepare(&mut self, path: &str, text: &str) -> FileFacts {
@@ -187,20 +228,14 @@ impl NavigationPreparer {
             facts.valid = facts.config.is_some();
             return facts;
         }
-        if !supports(path) || text.len() > PARSED_FILE_BYTES {
+        let Some(language) = Language::of(path).filter(|_| text.len() <= PARSED_FILE_BYTES) else {
             return facts;
-        }
-        let (slot, language) = match path.rsplit('.').next() {
-            Some("tsx") => (&mut self.tsx, tree_sitter_typescript::LANGUAGE_TSX.into()),
-            Some("ts" | "mts" | "cts") => (
-                &mut self.ts,
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            ),
-            _ => (&mut self.js, tree_sitter_javascript::LANGUAGE.into()),
         };
-        let parser = slot.get_or_insert_with(|| {
+        let parser = self.parsers.entry(language).or_insert_with(|| {
             let mut parser = Parser::new();
-            parser.set_language(&language).expect("bundled parser ABI");
+            parser
+                .set_language(&language.grammar())
+                .expect("bundled parser ABI");
             parser
         });
         let started = Instant::now();
@@ -221,9 +256,311 @@ impl NavigationPreparer {
         // for relationships in that case, but keep the definitions: a name and
         // its lines are still right wherever the definition's own span parsed.
         facts.partial = tree.root_node().has_error();
+        if !language.relationships() {
+            facts.definitions_only = true;
+            let mut visitor = Definitions {
+                text,
+                language,
+                facts,
+                depth: 0,
+            };
+            visitor.visit(tree.root_node(), None);
+            visitor.facts.valid = true;
+            return visitor.facts;
+        }
         let mut collector = Collector::new(text, facts);
         collector.visit(tree.root_node(), 0);
         collector.finish()
+    }
+}
+
+/// Definitions of a language without the JavaScript scope machinery: one
+/// walk that records functions, methods, classes, types, modules and
+/// constants with their containers and qualified names.
+struct Definitions<'a> {
+    text: &'a str,
+    language: Language,
+    facts: FileFacts,
+    depth: usize,
+}
+impl<'a> Definitions<'a> {
+    fn text(&self, node: Node<'_>) -> &'a str {
+        &self.text[node.byte_range()]
+    }
+    fn push(
+        &mut self,
+        name: &str,
+        qualified: Option<String>,
+        kind: DefinitionKind,
+        container: Option<usize>,
+        span: Node<'_>,
+        exported: bool,
+    ) -> usize {
+        let qualified = qualified.unwrap_or_else(|| {
+            match container.and_then(|i| self.facts.definitions.get(i)) {
+                Some(owner) => format!("{}.{name}", owner.qualified),
+                None => name.to_owned(),
+            }
+        });
+        let id = self.facts.definitions.len();
+        self.facts.definitions.push(Definition {
+            name: name.to_owned(),
+            qualified,
+            container,
+            start_line: span.start_position().row + 1,
+            end_line: end_line(span),
+            complete: !span.has_error(),
+            kind,
+            exports: if exported {
+                vec![name.to_owned()]
+            } else {
+                vec![]
+            },
+            start_byte: span.start_byte(),
+            end_byte: span.end_byte(),
+            namespace: Namespace::Both,
+        });
+        id
+    }
+    fn children(&mut self, node: Node<'_>, container: Option<usize>) {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            self.visit(child, container);
+        }
+    }
+    fn visit(&mut self, node: Node<'_>, container: Option<usize>) {
+        if self.depth >= 256 || self.facts.definitions.len() > MAX_FACTS {
+            return;
+        }
+        self.depth += 1;
+        match self.language {
+            Language::Python => self.python(node, container),
+            Language::Go => self.go(node, container),
+            Language::Rust => self.rust(node, container),
+            Language::Ruby => self.ruby(node, container),
+            _ => {}
+        }
+        self.depth -= 1;
+    }
+    fn name_of(&self, node: Node<'_>) -> Option<&'a str> {
+        node.child_by_field_name("name").map(|name| self.text(name))
+    }
+    fn python(&mut self, node: Node<'_>, container: Option<usize>) {
+        match node.kind() {
+            "function_definition" | "class_definition" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                // Decorators belong to the definition.
+                let span = node
+                    .parent()
+                    .filter(|p| p.kind() == "decorated_definition")
+                    .unwrap_or(node);
+                let is_class = node.kind() == "class_definition";
+                let kind = if is_class {
+                    DefinitionKind::Class
+                } else if container.is_some() {
+                    DefinitionKind::Method
+                } else {
+                    DefinitionKind::Function
+                };
+                let id = self.push(name, None, kind, container, span, !name.starts_with('_'));
+                if let Some(body) = node.child_by_field_name("body") {
+                    // Methods belong to their class; a nested function to no one.
+                    self.children(body, is_class.then_some(id));
+                }
+            }
+            _ => self.children(node, container),
+        }
+    }
+    fn go(&mut self, node: Node<'_>, container: Option<usize>) {
+        let exported = |name: &str| name.starts_with(|c: char| c.is_uppercase());
+        match node.kind() {
+            "function_declaration" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(
+                        name,
+                        None,
+                        DefinitionKind::Function,
+                        None,
+                        node,
+                        exported(name),
+                    );
+                }
+            }
+            "method_declaration" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                // The receiver type qualifies the method: `Context.Next`.
+                let receiver = node
+                    .child_by_field_name("receiver")
+                    .and_then(|list| list.named_child(0))
+                    .and_then(|parameter| parameter.child_by_field_name("type"))
+                    .map(|mut ty| {
+                        while let Some(inner) = ty.child_by_field_name("type") {
+                            ty = inner;
+                        }
+                        self.text(ty).trim_start_matches('*').to_owned()
+                    });
+                let qualified = receiver.map(|receiver| format!("{receiver}.{name}"));
+                self.push(
+                    name,
+                    qualified,
+                    DefinitionKind::Method,
+                    None,
+                    node,
+                    exported(name),
+                );
+            }
+            "type_declaration" => {
+                let specs: Vec<Node<'_>> = {
+                    let mut cursor = node.walk();
+                    node.named_children(&mut cursor)
+                        .filter(|c| matches!(c.kind(), "type_spec" | "type_alias"))
+                        .collect()
+                };
+                for spec in &specs {
+                    let Some(name) = self.name_of(*spec) else {
+                        continue;
+                    };
+                    let kind = match spec.child_by_field_name("type").map(|t| t.kind()) {
+                        Some("struct_type") => DefinitionKind::Class,
+                        _ => DefinitionKind::Type,
+                    };
+                    let span = if specs.len() == 1 { node } else { *spec };
+                    self.push(name, None, kind, None, span, exported(name));
+                }
+            }
+            "const_declaration" | "var_declaration" if container.is_none() => {
+                let mut cursor = node.walk();
+                for spec in node.named_children(&mut cursor) {
+                    if let Some(name) = self.name_of(spec) {
+                        self.push(
+                            name,
+                            None,
+                            DefinitionKind::Constant,
+                            None,
+                            node,
+                            exported(name),
+                        );
+                    }
+                }
+            }
+            "source_file" => self.children(node, container),
+            _ => {}
+        }
+    }
+    fn rust(&mut self, node: Node<'_>, container: Option<usize>) {
+        let public = |node: Node<'_>| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .any(|c| c.kind() == "visibility_modifier")
+        };
+        match node.kind() {
+            "function_item" | "function_signature_item" => {
+                if let Some(name) = self.name_of(node) {
+                    let kind = if container.is_some() {
+                        DefinitionKind::Method
+                    } else {
+                        DefinitionKind::Function
+                    };
+                    self.push(name, None, kind, container, node, public(node));
+                }
+            }
+            "struct_item" | "enum_item" | "union_item" | "type_item" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Type, None, node, public(node));
+                }
+            }
+            "trait_item" => {
+                if let Some(name) = self.name_of(node) {
+                    let id = self.push(name, None, DefinitionKind::Type, None, node, public(node));
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.children(body, Some(id));
+                    }
+                }
+            }
+            "impl_item" => {
+                // `impl<'a> Searcher<'a>` and `impl Matcher for Searcher` both
+                // define members of `Searcher`.
+                let name = node.child_by_field_name("type").map(|mut ty| {
+                    while let Some(inner) = ty.child_by_field_name("type") {
+                        ty = inner;
+                    }
+                    self.text(ty).to_owned()
+                });
+                if let Some(name) = name {
+                    let id = self.push(&name, None, DefinitionKind::Class, None, node, true);
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.children(body, Some(id));
+                    }
+                }
+            }
+            "mod_item" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Module, None, node, public(node));
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.children(body, None);
+                    }
+                }
+            }
+            "const_item" | "static_item" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(
+                        name,
+                        None,
+                        DefinitionKind::Constant,
+                        None,
+                        node,
+                        public(node),
+                    );
+                }
+            }
+            "macro_definition" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Function, None, node, true);
+                }
+            }
+            "source_file" => self.children(node, container),
+            _ => {}
+        }
+    }
+    fn ruby(&mut self, node: Node<'_>, container: Option<usize>) {
+        match node.kind() {
+            "class" | "module" => {
+                let Some(name) = node.child_by_field_name("name") else {
+                    return;
+                };
+                // `class Foo::Bar` defines `Bar` inside `Foo`.
+                let full = self.text(name).replace("::", ".");
+                let leaf = full.rsplit('.').next().unwrap_or(&full).to_owned();
+                let qualified = match container.and_then(|i| self.facts.definitions.get(i)) {
+                    Some(owner) => format!("{}.{full}", owner.qualified),
+                    None => full,
+                };
+                let kind = if node.kind() == "class" {
+                    DefinitionKind::Class
+                } else {
+                    DefinitionKind::Module
+                };
+                let id = self.push(&leaf, Some(qualified), kind, container, node, true);
+                if let Some(body) = node.child_by_field_name("body") {
+                    self.children(body, Some(id));
+                }
+            }
+            "method" | "singleton_method" => {
+                if let Some(name) = self.name_of(node) {
+                    let kind = if container.is_some() {
+                        DefinitionKind::Method
+                    } else {
+                        DefinitionKind::Function
+                    };
+                    self.push(name, None, kind, container, node, true);
+                }
+            }
+            _ => self.children(node, container),
+        }
     }
 }
 
@@ -1097,10 +1434,10 @@ impl NavigationIndex {
     /// errors has definitions but keeps the lexical fallback for relationships.
     pub fn is_parsed(&self, path: &str) -> bool {
         supports(path)
-            && self
-                .paths
-                .get(path)
-                .is_some_and(|file| self.files[*file].1.valid && !self.files[*file].1.partial)
+            && self.paths.get(path).is_some_and(|file| {
+                let facts = &self.files[*file].1;
+                facts.valid && !facts.partial && !facts.definitions_only
+            })
     }
     pub fn coverage(&self) -> &IndexCoverage {
         &self.coverage
@@ -1725,6 +2062,205 @@ mod tests {
         let insensitive = index.lookup_insensitive("Handle");
         assert_eq!(insensitive.len(), 4);
         assert!(insensitive.iter().any(|r| index.get(*r).name == "HANDLE"));
+    }
+
+    fn summary(
+        path: &str,
+        source: &str,
+    ) -> Vec<(String, DefinitionKind, usize, usize, Option<usize>, bool)> {
+        let facts = NavigationPreparer::default().prepare(path, source);
+        assert!(facts.valid && !facts.partial, "{path} should parse");
+        assert!(facts.references.is_empty() && facts.imports.is_empty());
+        facts
+            .definitions
+            .iter()
+            .map(|d| {
+                (
+                    d.qualified.clone(),
+                    d.kind,
+                    d.start_line,
+                    d.end_line,
+                    d.container,
+                    d.exported(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn python_definitions_with_decorators_methods_and_nested_functions() {
+        let source = "import os\n\nX = 1\n\n@decorator\ndef top(a, b=2):\n    def inner(): pass\n    return a\n\nclass Flask(App):\n    \"\"\"Doc.\"\"\"\n    def __init__(self, name):\n        self.name = name\n\n    @property\n    def wsgi_app(self):\n        return 1\n\n    @staticmethod\n    def _make(): pass\n\nasync def fetch(): pass\n";
+        let got = summary("app.py", source);
+        let want = [
+            ("top", DefinitionKind::Function, 5, 8, None, true),
+            ("inner", DefinitionKind::Function, 7, 7, None, true),
+            ("Flask", DefinitionKind::Class, 10, 20, None, true),
+            (
+                "Flask.__init__",
+                DefinitionKind::Method,
+                12,
+                13,
+                Some(2),
+                false,
+            ),
+            (
+                "Flask.wsgi_app",
+                DefinitionKind::Method,
+                15,
+                17,
+                Some(2),
+                true,
+            ),
+            (
+                "Flask._make",
+                DefinitionKind::Method,
+                19,
+                20,
+                Some(2),
+                false,
+            ),
+            ("fetch", DefinitionKind::Function, 22, 22, None, true),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+        let index = NavigationIndex::new_shared([(
+            "app.py",
+            Arc::new(NavigationPreparer::default().prepare("app.py", source)),
+        )]);
+        assert_eq!(index.lookup_qualified("Flask.wsgi_app").len(), 1);
+        assert!(
+            !index.is_parsed("app.py"),
+            "definitions only: lexical relationships stay"
+        );
+        assert_eq!(index.coverage().parsed_files, 1);
+    }
+
+    #[test]
+    fn go_definitions_qualify_methods_by_receiver() {
+        let source = "package gin\n\ntype Context struct{ index int }\n\ntype Handler interface{ Serve() }\n\nconst Version = \"1\"\n\nfunc New() *Engine { return nil }\n\nfunc (c *Context) Next() { c.index++ }\n\nfunc (e Engine) run() {}\n";
+        let got = summary("gin.go", source);
+        let want = [
+            ("Context", DefinitionKind::Class, 3, 3, None, true),
+            ("Handler", DefinitionKind::Type, 5, 5, None, true),
+            ("Version", DefinitionKind::Constant, 7, 7, None, true),
+            ("New", DefinitionKind::Function, 9, 9, None, true),
+            ("Context.Next", DefinitionKind::Method, 11, 11, None, true),
+            ("Engine.run", DefinitionKind::Method, 13, 13, None, false),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+    }
+
+    #[test]
+    fn rust_definitions_group_impl_members_under_their_type() {
+        let source = "pub struct Searcher<'a> { x: &'a str }\npub enum Kind { A, B }\npub trait Matcher { fn find(&self) -> bool; }\nimpl<'a> Searcher<'a> {\n    pub fn new(x: &'a str) -> Self { Self { x } }\n    fn private(&self) {}\n}\nimpl Matcher for Searcher<'_> { fn find(&self) -> bool { true } }\npub fn top_level() {}\npub mod inner { pub fn nested() {} }\nconst MAX: usize = 1;\npub type Alias = u8;\nmacro_rules! m { () => {} }\n";
+        let got = summary("lib.rs", source);
+        let want = [
+            ("Searcher", DefinitionKind::Type, 1, 1, None, true),
+            ("Kind", DefinitionKind::Type, 2, 2, None, true),
+            ("Matcher", DefinitionKind::Type, 3, 3, None, true),
+            ("Matcher.find", DefinitionKind::Method, 3, 3, Some(2), false),
+            ("Searcher", DefinitionKind::Class, 4, 7, None, true),
+            ("Searcher.new", DefinitionKind::Method, 5, 5, Some(4), true),
+            (
+                "Searcher.private",
+                DefinitionKind::Method,
+                6,
+                6,
+                Some(4),
+                false,
+            ),
+            ("Searcher", DefinitionKind::Class, 8, 8, None, true),
+            (
+                "Searcher.find",
+                DefinitionKind::Method,
+                8,
+                8,
+                Some(7),
+                false,
+            ),
+            ("top_level", DefinitionKind::Function, 9, 9, None, true),
+            ("inner", DefinitionKind::Module, 10, 10, None, true),
+            ("nested", DefinitionKind::Function, 10, 10, None, true),
+            ("MAX", DefinitionKind::Constant, 11, 11, None, false),
+            ("Alias", DefinitionKind::Type, 12, 12, None, true),
+            ("m", DefinitionKind::Function, 13, 13, None, true),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+    }
+
+    #[test]
+    fn ruby_definitions_nest_classes_in_modules_and_split_scoped_names() {
+        let source = "module Discourse\n  class Upload < ActiveRecord::Base\n    def url; end\n    def self.create_for(user); end\n    private\n    def secret; end\n  end\nend\nclass Foo::Bar\n  def call; end\nend\ndef top; end\n";
+        let got = summary("upload.rb", source);
+        let want = [
+            ("Discourse", DefinitionKind::Module, 1, 8, None, true),
+            (
+                "Discourse.Upload",
+                DefinitionKind::Class,
+                2,
+                7,
+                Some(0),
+                true,
+            ),
+            (
+                "Discourse.Upload.url",
+                DefinitionKind::Method,
+                3,
+                3,
+                Some(1),
+                true,
+            ),
+            (
+                "Discourse.Upload.create_for",
+                DefinitionKind::Method,
+                4,
+                4,
+                Some(1),
+                true,
+            ),
+            (
+                "Discourse.Upload.secret",
+                DefinitionKind::Method,
+                6,
+                6,
+                Some(1),
+                true,
+            ),
+            ("Foo.Bar", DefinitionKind::Class, 9, 11, None, true),
+            (
+                "Foo.Bar.call",
+                DefinitionKind::Method,
+                10,
+                10,
+                Some(5),
+                true,
+            ),
+            ("top", DefinitionKind::Function, 12, 12, None, true),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+        let index = NavigationIndex::new_shared([(
+            "upload.rb",
+            Arc::new(NavigationPreparer::default().prepare("upload.rb", source)),
+        )]);
+        assert_eq!(index.lookup("Upload").len(), 1);
+        assert_eq!(index.lookup_qualified("Upload.url").len(), 1);
+        assert_eq!(
+            index
+                .lookup_qualified("Foo::Bar".replace("::", ".").as_str())
+                .len(),
+            1
+        );
     }
 
     fn index(files: &[(&str, &str)]) -> NavigationIndex {
