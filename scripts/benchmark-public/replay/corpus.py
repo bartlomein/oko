@@ -188,6 +188,9 @@ def run_repo(repo, workspace, rows, binary, live, timeout, progress):
                     hits = declaration_hits(packet, names)
                     row.update(
                         nrcf=not results,
+                        # Listing answers (callers, tests) have no excerpts to score.
+                        answerKind=('callers' if '\nCallers of ' in '\n' + answer_body(text) else
+                                    'tests' if answer_body(text).startswith('Tests for ') else 'ranked'),
                         firstLabel=first_label(text),
                         firstLineKind=first_line_kind(results[0]) if results else None,
                         firstComplete=bool(results[0].get('definitionComplete')) if results else None,

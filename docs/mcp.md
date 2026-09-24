@@ -400,6 +400,34 @@ shorter path. A name defined five or more times outside tests (`render`,
 Other definitions of a pinned name are listed in a note. The metrics record
 the identifiers found, the pins and the notes under `floor`.
 
+## Callers and tests
+
+A question that asks who uses a name ("who calls `wsgi_app`", "callers of
+Context.Next", "where is X used"), or a search with `intent: callers`, is
+answered with a listing instead of ranked excerpts: every whole-word use of
+the name across the index, each attributed to the definition it sits in and
+classified as a call, import or reference, grouped by file with the
+definition's own file first, up to 40 rows in 12 files and a count of the
+rest. Hits in comments, tests and documentation files are counted, not
+listed. No ranker runs, so the answer takes a few milliseconds. `oko ask
+--intent callers` does the same on the command line.
+
+```
+Callers of Context.Next — 7 calls; 2 in comments, 37 in tests hidden
+Defined at context.go:188
+
+gin.go
+  722	call	Engine.handleHTTPRequest	c.Next()
+  766	call	serveError	c.Next()
+```
+
+A question that asks for tests ("tests for `MultiDecoder`", "which specs
+cover Upload") first lists the test files named after the definition's file
+or name (`high`) or mentioning it (`medium`), with the enclosing test
+function for each mention, and then the ranked code as usual. The target of
+either question may be a plain word the index defines, not only an
+identifier-shaped one.
+
 ## Coverage
 
 The first line of every answer says what was searched:
