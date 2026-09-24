@@ -299,7 +299,9 @@ impl OkoServer {
             metadata["traceTruncated"] = json!(trace_truncated);
         }
         // What the agent cannot infer from its own request and the excerpts.
-        let mut notes = String::new();
+        // First, what was searched: how much of the repository the index holds.
+        let mut notes = coverage_line(&snapshot, &workspace.timings, &input.question);
+        notes.push('\n');
         if let Ok(scope) = directory.strip_prefix(&self.root)
             && !scope.as_os_str().is_empty()
         {
@@ -326,6 +328,8 @@ impl OkoServer {
         let metadata = json!({"question":question, "questionTruncated":question.len() < input.question.len(), "directory":directory,
             "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
             "investigation":investigation, "retrieval":retrieval, "floor":floor,
+            "coverage":{"files":snapshot.coverage(), "parsedFiles":snapshot.navigation().coverage().parsed_files,
+                "partialFiles":snapshot.navigation().coverage().partial_files, "definitions":snapshot.navigation().coverage().definitions},
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
@@ -346,6 +350,89 @@ impl OkoServer {
             context_started,
         )
     }
+}
+
+/// `Index: 6,375 of 6,600 files (225 skipped: 15 over size, 210 unreadable),
+/// 3,047 parsed for symbols (ts, js), watched · skipped: app-render.tsx (289 KiB)`.
+/// Declarative: the agent decides what to do about a gap. A skipped file is
+/// named only when a word of the question is its file stem.
+fn coverage_line(
+    snapshot: &oko::search_cache::WorkspaceSnapshot,
+    timings: &oko::search_cache::CacheTimings,
+    question: &str,
+) -> String {
+    let files = snapshot.coverage();
+    let symbols = snapshot.navigation().coverage();
+    let mut line = format!(
+        "Index: {} of {} files",
+        thousands(files.indexed),
+        thousands(files.discovered)
+    );
+    let skipped = files.skipped_over_size.len() + files.skipped_unreadable;
+    if skipped > 0 {
+        let mut reasons = Vec::new();
+        if !files.skipped_over_size.is_empty() {
+            reasons.push(format!("{} over size", files.skipped_over_size.len()));
+        }
+        if files.skipped_unreadable > 0 {
+            reasons.push(format!("{} unreadable", files.skipped_unreadable));
+        }
+        line.push_str(&format!(
+            " ({} skipped: {})",
+            thousands(skipped),
+            reasons.join(", ")
+        ));
+    }
+    if symbols.parsed_files > 0 {
+        let mut extensions: Vec<_> = symbols.extensions.iter().collect();
+        extensions.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        let names: Vec<&str> = extensions.iter().take(4).map(|(e, _)| e.as_str()).collect();
+        line.push_str(&format!(
+            ", {} parsed for symbols ({})",
+            thousands(symbols.parsed_files),
+            names.join(", ")
+        ));
+    }
+    line.push_str(
+        match (timings.status.as_str(), timings.validation.as_str()) {
+            (_, "incremental") => ", watched",
+            ("memory" | "disk", _) => ", rescanned",
+            _ => ", built now",
+        },
+    );
+    let lower = question.to_ascii_lowercase();
+    if let Some((path, bytes)) = files.skipped_over_size.iter().find(|(path, _)| {
+        let stem = path
+            .rsplit('/')
+            .next()
+            .and_then(|name| name.split('.').next())
+            .unwrap_or("");
+        let stem = stem.to_ascii_lowercase();
+        stem.len() >= 4
+            && !matches!(
+                stem.as_str(),
+                "index" | "main" | "utils" | "util" | "test" | "tests" | "types" | "data"
+            )
+            && oko::floor::contains_word(&lower, &stem)
+    }) {
+        line.push_str(&format!(
+            " · skipped: {path} ({} KiB)",
+            bytes.div_ceil(1024)
+        ));
+    }
+    line
+}
+
+fn thousands(value: usize) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn prefix(text: &str, bytes: usize) -> &str {

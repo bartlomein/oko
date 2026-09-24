@@ -49,11 +49,47 @@ pub struct CacheTimings {
     pub fallback_reason: Option<String>,
 }
 
+/// What the index covers, for the first line of every answer.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Coverage {
+    /// Files discovery listed (respecting ignore rules).
+    pub discovered: usize,
+    /// Files with chunks in the index.
+    pub indexed: usize,
+    /// Files skipped for size, largest first, capped; `(path, bytes)`.
+    pub skipped_over_size: Vec<(String, u64)>,
+    /// Files skipped as binary, non-UTF-8, blank, minified or unreadable.
+    pub skipped_unreadable: usize,
+}
+const SKIPPED_PATHS_KEPT: usize = 256;
+impl Coverage {
+    fn new(indexed: usize, skipped: Vec<(String, search::SkipReason, u64)>) -> Self {
+        let mut over_size: Vec<(String, u64)> = skipped
+            .iter()
+            .filter(|(_, reason, _)| *reason == search::SkipReason::OverSize)
+            .map(|(path, _, bytes)| (path.clone(), *bytes))
+            .collect();
+        over_size.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        over_size.truncate(SKIPPED_PATHS_KEPT);
+        Self {
+            discovered: indexed + skipped.len(),
+            indexed,
+            skipped_unreadable: skipped
+                .iter()
+                .filter(|(_, reason, _)| *reason == search::SkipReason::Unreadable)
+                .count(),
+            skipped_over_size: over_size,
+        }
+    }
+}
+
 /// One captured view is used for ranking and all subsequent source evidence.
 pub struct WorkspaceSnapshot {
     chunks: Arc<[Chunk]>,
     prepared: PreparedCorpus,
     navigation: NavigationIndex,
+    coverage: Coverage,
     /// Built by the first search that needs it, then shared by every later one.
     links: std::sync::OnceLock<crate::connected::Links>,
 }
@@ -63,6 +99,9 @@ impl WorkspaceSnapshot {
     }
     pub fn navigation(&self) -> &NavigationIndex {
         &self.navigation
+    }
+    pub fn coverage(&self) -> &Coverage {
+        &self.coverage
     }
     pub fn rank(&self, question: &str) -> Vec<Chunk> {
         self.prepared.rank(question, |_| true)
@@ -240,7 +279,7 @@ impl WorkspaceCache {
         // Deserialization can overlap fresh reads, but no disk data is used
         // until discovery succeeds and its content manifest has been compared.
         // Same-root memory snapshots never trigger a redundant disk load.
-        let captured = scan_and_load_snapshot(
+        let mut captured = scan_and_load_snapshot(
             &root,
             if has_previous {
                 None
@@ -249,7 +288,9 @@ impl WorkspaceCache {
             },
             self.watching.as_mut(),
         )?;
+        let skipped = std::mem::take(&mut captured.capture.skipped);
         let sources = captured.capture.sources;
+        let coverage = Coverage::new(sources.len(), skipped);
         timings.read_files = captured.capture.read_files;
         timings.reused_contents = captured.capture.reused_contents;
         timings.validation = captured.capture.validation.into();
@@ -399,6 +440,7 @@ impl WorkspaceCache {
             chunks,
             prepared,
             navigation,
+            coverage,
             links: std::sync::OnceLock::new(),
         });
         let record = DiskSnapshot {

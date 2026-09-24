@@ -271,8 +271,11 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     }
     let result = client.search(json!({"question":"authentication token"}));
     assert_eq!(result["result"]["isError"], false, "{result}");
+    let text = result["result"]["content"][0]["text"].as_str().unwrap();
+    // The first line says what was searched; the fixture has two indexed files.
+    assert!(text.starts_with("Index: 1 of 1 files, "), "{text}");
     assert_eq!(
-        result["result"]["content"][0]["text"],
+        body(text),
         "auth.rs:1-1 (whole file)\n```\n1\tfn authenticate() { validate_token(); }\n```\n"
     );
     let data = &result["metrics"];
@@ -355,14 +358,12 @@ fn server_instructions_stay_brief_and_subdirectory_searches_state_their_path_bas
     let scoped = client.search(json!({"question":"authentication token","directory":"server"}));
     assert_packet_envelope(&scoped);
     assert_eq!(
-        scoped["result"]["content"][0]["text"],
+        body(scoped["result"]["content"][0]["text"].as_str().unwrap()),
         "Paths are relative to server/.\n\nauth.rs:1-1 (whole file)\n```\n1\tfn authenticate() { validate_token(); }\n```\n"
     );
     let unscoped = client.search(json!({"question":"authentication token"}));
     assert!(
-        unscoped["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
+        body(unscoped["result"]["content"][0]["text"].as_str().unwrap())
             .starts_with("server/auth.rs:1-1 (whole file)\n")
     );
 }
@@ -451,9 +452,7 @@ fn normal_and_deep_search_use_mock_jev_and_survive_provider_errors() {
             if deep {
                 assert_eq!(result["metrics"]["investigation"]["jevCalls"], 1);
                 assert!(
-                    result["result"]["content"][0]["text"]
-                        .as_str()
-                        .unwrap()
+                    body(result["result"]["content"][0]["text"].as_str().unwrap())
                         .starts_with("Deep search stopped after 1 step: "),
                     "{result}"
                 );
@@ -510,7 +509,8 @@ fn a_slow_overloaded_or_unreachable_ranker_yields_labelled_keyword_matches() {
         assert_eq!(packet["results"][0]["path"], "auth.rs");
         let text = response["result"]["content"][0]["text"].as_str().unwrap();
         assert!(
-            text.starts_with("The relevance ranker did not respond, so these are keyword matches"),
+            body(text)
+                .starts_with("The relevance ranker did not respond, so these are keyword matches"),
             "{text}"
         );
         assert!(text.contains("auth.rs:1-1 (whole file)"));
@@ -756,9 +756,7 @@ fn parallel_searches_all_run_instead_of_one_being_turned_away() {
         let response = &responses[id];
         assert_eq!(response["result"]["isError"], false, "{response}");
         assert!(
-            response["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap()
+            body(response["result"]["content"][0]["text"].as_str().unwrap())
                 .starts_with("auth.rs:"),
             "{response}"
         );
@@ -996,6 +994,14 @@ fn relevance_response(request: &Value, score: impl Fn(&Value) -> f64) -> Value {
     json!({"answers":answers})
 }
 
+/// The answer after its coverage line (`Index: N of M files, ...`).
+fn body(text: &str) -> &str {
+    assert!(text.starts_with("Index: "), "{text}");
+    let rest = text.split_once('\n').map_or("", |(_, rest)| rest);
+    // A blank line separates the notes from the excerpts.
+    rest.strip_prefix('\n').unwrap_or(rest)
+}
+
 fn assert_packet_envelope(response: &Value) -> &Value {
     assert_eq!(response["result"]["isError"], false, "{response}");
     let result = &response["result"];
@@ -1088,7 +1094,7 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         );
     }
     if packet["results"].as_array().unwrap().is_empty() {
-        assert!(text.starts_with("No relevant code found."), "{text}");
+        assert!(body(text).starts_with("No relevant code found."), "{text}");
     }
     assert!(packet["results"].as_array().unwrap().len() <= 3);
     assert!(packet["related"].as_array().unwrap().len() <= 2);
@@ -2027,4 +2033,40 @@ fn a_named_definition_is_shown_even_when_the_ranker_rejects_everything() {
         .iter()
         .any(|c| c["path"] == "next-server.ts" && c["startLine"] == 2 && c["endLine"] == 6);
     assert!(judged, "{}", packet["retrieval"]["candidates"]);
+}
+
+#[test]
+fn the_coverage_line_counts_skipped_files_and_names_one_the_question_mentions() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("auth.rs"),
+        "fn authenticate() { validate_token(); }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("ledger.txt"),
+        vec![b'x'; oko::search::MAX_FILE_BYTES + 1],
+    )
+    .unwrap();
+    fs::write(root.path().join("blob.bin"), b"auth\0enticate").unwrap();
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let plain = client.search(json!({"question":"authentication token"}));
+    let text = plain["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("Index: 1 of 3 files (2 skipped: 1 over size, 1 unreadable), "),
+        "{text}"
+    );
+    assert!(!text.contains("skipped: ledger.txt"), "{text}");
+    let mentioned = client.search(json!({"question":"authentication token in the ledger"}));
+    let text = mentioned["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains(" · skipped: ledger.txt (257 KiB)\n"),
+        "{text}"
+    );
+    let metrics = &mentioned["metrics"]["coverage"];
+    assert_eq!(metrics["files"]["discovered"], 3);
+    assert_eq!(metrics["files"]["indexed"], 1);
+    assert_eq!(metrics["files"]["skippedUnreadable"], 1);
+    assert_eq!(metrics["files"]["skippedOverSize"][0][0], "ledger.txt");
 }

@@ -34,6 +34,35 @@ pub fn file_byte_limit(path: &str) -> usize {
 pub fn is_big_source(path: &str, text: &str) -> bool {
     text.len() > MAX_FILE_BYTES && text.len() <= file_byte_limit(path)
 }
+/// Why a discovered file is not in the index. Decided from metadata alone, so
+/// the coverage line costs no second read of the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    /// Larger than `file_byte_limit`.
+    OverSize,
+    /// Binary, not UTF-8, blank, minified or unreadable.
+    Unreadable,
+}
+/// Extensions that are never source, whatever their size.
+const BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "bmp", "svgz", "pdf", "zip", "gz", "tgz",
+    "bz2", "xz", "zst", "7z", "jar", "war", "class", "wasm", "so", "dylib", "dll", "exe", "bin",
+    "dat", "db", "sqlite", "woff", "woff2", "ttf", "otf", "eot", "mp3", "mp4", "mov", "webm",
+    "ogg", "wav", "flac", "psd", "ai", "heic", "icns", "pyc", "o", "a", "lock",
+];
+pub fn skip_reason(root: &Path, file: &str) -> (SkipReason, u64) {
+    let binary = file.rsplit('.').next().is_some_and(|extension| {
+        BINARY_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+    });
+    match fs::metadata(root.join(file)) {
+        Ok(metadata) if !binary && metadata.len() > file_byte_limit(file) as u64 => {
+            (SkipReason::OverSize, metadata.len())
+        }
+        Ok(metadata) => (SkipReason::Unreadable, metadata.len()),
+        Err(_) => (SkipReason::Unreadable, 0),
+    }
+}
 pub fn is_minified(text: &str) -> bool {
     let lines = text.bytes().filter(|b| *b == b'\n').count().max(1);
     text.len() / lines > MINIFIED_LINE_BYTES

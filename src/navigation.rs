@@ -981,8 +981,10 @@ pub struct DefinitionRef {
 }
 
 /// What the index holds, for the coverage line of an answer.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IndexCoverage {
+    /// Parsed files by extension, most first.
+    pub extensions: std::collections::BTreeMap<String, usize>,
     /// Files of a supported language that parsed (fully or with errors).
     pub parsed_files: usize,
     /// Parsed files whose tree had errors: definitions only, no relationships.
@@ -1036,6 +1038,13 @@ impl NavigationIndex {
             if supports(path) {
                 index.coverage.parsed_files += 1;
                 index.coverage.partial_files += usize::from(facts.partial);
+                if let Some(extension) = path.rsplit('.').next() {
+                    *index
+                        .coverage
+                        .extensions
+                        .entry(extension.to_owned())
+                        .or_default() += 1;
+                }
             }
             for (definition, item) in facts.definitions.iter().enumerate() {
                 index.coverage.definitions += 1;
@@ -1093,8 +1102,8 @@ impl NavigationIndex {
                 .get(path)
                 .is_some_and(|file| self.files[*file].1.valid && !self.files[*file].1.partial)
     }
-    pub fn coverage(&self) -> IndexCoverage {
-        self.coverage
+    pub fn coverage(&self) -> &IndexCoverage {
+        &self.coverage
     }
     pub fn path(&self, reference: DefinitionRef) -> &str {
         &self.files[reference.file].0
