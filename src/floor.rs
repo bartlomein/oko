@@ -455,7 +455,28 @@ pub fn floor(question: &str, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
             .filter(|r| !search::is_test_path(navigation.path(**r)))
             .count();
         if non_test >= COMMON_NAME_DEFINITIONS {
-            candidates.retain(|r| hinted(r));
+            // Nesting disambiguates on its own: `Upload` the model is the one
+            // top-level `Upload`; `SiteSetting.Upload` and the plugin modules
+            // are not what a bare `Upload` means.
+            let top_level: Vec<DefinitionRef> = candidates
+                .iter()
+                .copied()
+                .filter(|r| {
+                    navigation.get(*r).qualified == leaf
+                        && !search::is_test_path(navigation.path(*r))
+                })
+                .collect();
+            if top_level.len() == 1 && !candidates.iter().any(&hinted) {
+                let others: Vec<DefinitionRef> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|r| *r != top_level[0])
+                    .collect();
+                candidates = top_level;
+                candidates.extend(others);
+            } else {
+                candidates.retain(|r| hinted(r));
+            }
             if candidates.is_empty() {
                 result.notes.push(format!(
                     "`{leaf}` is defined in {non_test} places; name its class or file to pin one."
@@ -782,6 +803,24 @@ mod tests {
             floor_.notes,
             ["`Page` is defined in 6 places; name its class or file to pin one."]
         );
+        // One top-level definition among nested ones needs no hint.
+        let mut nested: Vec<(String, String)> = files.clone();
+        nested.push((
+            "src/models/page.tsx".into(),
+            "export class Page {}\n".into(),
+        ));
+        for (_, text) in nested.iter_mut().take(6) {
+            // Six methods named `Page` on other classes: the name is common.
+            *text = "export class Admin { Page() { return 1; } }\n".to_owned();
+        }
+        let refs2: Vec<(&str, &str)> = nested
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let (chunks2, index2) = corpus(&refs2);
+        let found = floor("the Page class", &index2, &chunks2);
+        assert_eq!(found.pins.len(), 1, "{:?}", found.notes);
+        assert_eq!(found.pins[0].path, "src/models/page.tsx");
         let floor_ = floor("the Page component in admin", &index, &chunks);
         assert_eq!(floor_.pins.len(), 1);
         assert_eq!(floor_.pins[0].path, "src/pages/admin/page.tsx");
