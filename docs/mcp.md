@@ -381,9 +381,10 @@ requests without real credentials.
 
 Agents ask for code by name far more often than by behaviour, and a
 one-line definition can lose a keyword shortlist to files that repeat its
-name. Oko indexes every definition of the languages it parses (JavaScript and
-TypeScript today: functions, classes, methods, object-literal functions,
-types, constants, with their qualified names such as `Server.handle`) and
+name. Oko indexes every definition of the languages it parses (JavaScript,
+TypeScript, Python, Go, Rust and Ruby: functions, classes, methods, types,
+modules and constants, with their qualified names such as `Server.handle`,
+`Context.Next`, `Searcher.new` or `Discourse.Upload.url`) and
 looks the question's identifier-shaped words up in that index: qualified
 names, `snake_case`, `camelCase`, `PascalCase`, anything in backticks, and a
 Capitalized word beside a code noun ("Upload model"). Up to three such
