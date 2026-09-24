@@ -221,13 +221,13 @@ impl OkoServer {
                 .then(|| oko::floor::named_target(&input.question, snapshot.navigation(), corpus))
                 .flatten();
             // "Definition and callers": the listing accompanies the ranked code.
-            let listing_only = !matches!(input.intent, Intent::Callers)
-                && oko::usages::asks_for_code_too(&input.question);
-            if let Some(pin) = target.as_ref().filter(|_| listing_only) {
+            let listing_only = matches!(input.intent, Intent::Callers)
+                || oko::usages::listing_can_stand_alone(&input.question);
+            if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
                 let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
                 accompanying = Some(oko::usages::render_usages(&listing));
             }
-            if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
+            if let Some(pin) = target.as_ref().filter(|_| listing_only) {
                 let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
                 let text = oko::usages::render_usages(&listing);
                 let retrieval = Some(json!({"usages": listing}));

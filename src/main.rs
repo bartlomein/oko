@@ -746,7 +746,9 @@ fn run() -> Result<()> {
             // Same floor as the MCP server: named definitions lead the shortlist.
             let found =
                 oko::floor::floor(&parsed.question, snapshot.navigation(), snapshot.chunks());
-            if (parsed.callers || oko::usages::asks_for_callers(&parsed.question))
+            if (parsed.callers
+                || (oko::usages::asks_for_callers(&parsed.question)
+                    && oko::usages::listing_can_stand_alone(&parsed.question)))
                 && let Some(pin) = oko::floor::named_target(
                     &parsed.question,
                     snapshot.navigation(),

@@ -97,6 +97,15 @@ pub fn asks_for_callers(question: &str) -> bool {
     patterns().callers.is_match(question)
 }
 
+/// A listing may stand alone only for a short question ("callers of X").
+/// An issue-length text that mentions "references to" or "usage" wants
+/// ranked code; the listing then accompanies it.
+pub fn listing_can_stand_alone(question: &str) -> bool {
+    question.len() <= 120
+        && question.split_whitespace().count() <= 16
+        && !asks_for_code_too(question)
+}
+
 /// The question asks for the definition or behaviour as well ("definition
 /// and callers", "implementation and usage"): the listing then accompanies
 /// the ranked code instead of replacing it.
@@ -490,6 +499,10 @@ mod tests {
             "renderToHTMLOrFlight app render function definition and callers"
         ));
         assert!(!asks_for_code_too("sanitizePathChars callers"));
+        assert!(listing_can_stand_alone("sanitizePathChars callers"));
+        assert!(!listing_can_stand_alone(
+            "When I run the migration the references to the old column are not updated and the usage of `rename_field` in the admin breaks with a KeyError; see the traceback below and the model definition"
+        ));
         for q in [
             "wsgi_app method definition",
             "how does the router match dynamic segments",
