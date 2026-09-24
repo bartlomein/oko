@@ -139,7 +139,17 @@ def first_line_kind(excerpt):
     return 'mid' if head[:1].isspace() else 'declaration'
 
 
+def answer_body(text):
+    """The answer after its coverage line and any notes."""
+    lines = text.split('\n')
+    while lines and (lines[0].startswith('Index: ') or lines[0] == '' or lines[0].startswith('`') and ' defined in ' in lines[0]
+                     or lines[0].startswith('Paths are relative')):
+        lines.pop(0)
+    return '\n'.join(lines)
+
+
 def first_label(text):
+    text = answer_body(text)
     match = re.match(r'^\S+ \(([^)]*)\)', text)
     return match.group(1) if match else ('nrcf' if text.startswith(NRCF) else 'other')
 
@@ -177,7 +187,7 @@ def run_repo(repo, workspace, rows, binary, live, timeout, progress):
                     results = packet.get('results') or []
                     hits = declaration_hits(packet, names)
                     row.update(
-                        nrcf=text.startswith(NRCF),
+                        nrcf=not results,
                         firstLabel=first_label(text),
                         firstLineKind=first_line_kind(results[0]) if results else None,
                         firstComplete=bool(results[0].get('definitionComplete')) if results else None,
