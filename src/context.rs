@@ -535,6 +535,16 @@ impl<'a> Snapshot<'a> {
             code,
         }
     }
+    /// The last line of the gapless run of known lines that contains `start`.
+    /// A big parsed file is chunked by definition, so its lines have gaps; an
+    /// excerpt never reads across one.
+    fn contiguous_end(&self, start: usize) -> usize {
+        let mut end = start;
+        while self.lines.contains_key(&(end + 1)) {
+            end += 1;
+        }
+        end
+    }
     /// Chunks tile a file from line 1, so a gapless range ending at the last
     /// known line is the entire file.
     fn covers_whole_file(&self, start: usize, end: usize) -> bool {
@@ -700,13 +710,19 @@ fn excerpt(
     let symbol = parent.map(|d| symbol_header(snapshot, d));
     // Without a proven declaration boundary, source context must not
     // advertise a complete implementation (even when it reaches EOF).
-    let unproven = start > low
+    let mut unproven = start > low
         || end < high
         || (bounded_parent.is_none() && language(path) != Language::Other)
         || symbol.as_ref().is_some_and(|s| s.truncated);
     // A definition begins with what is attached to it, not with its keyword.
     if parent.is_some_and(|d| d.line == start) {
         start = snapshot.attached_header_start(start);
+    }
+    // Lexical bounds can reach past a gap in a definition-chunked file.
+    let contiguous = snapshot.contiguous_end(start);
+    if end > contiguous {
+        end = contiguous;
+        unproven = true;
     }
     let mut definitions = usize::from(!unproven && bounded_parent.is_some());
     if definitions == 1 {
@@ -1324,6 +1340,10 @@ fn attach_navigation(
                 candidate.start_line
             };
             let end = candidate.end_line.min(start + RELATED_LINES - 1);
+            // A definition-chunked file holds only its definitions' lines.
+            if !(start..=end).all(|line| snapshot.lines.contains_key(&line)) {
+                continue;
+            }
             let complete = start == candidate.start_line
                 && end == candidate.end_line
                 && navigation

@@ -339,3 +339,38 @@ fn prose_and_unknown_languages_keep_content_and_path_fallback() {
     assert_eq!(ranked.len(), 3);
     assert!(ranked.iter().all(|c| c.lexical_score.is_finite()));
 }
+
+#[test]
+fn declaration_symbols_cover_types_and_annotated_arrows() {
+    let cases = [
+        (
+            "app.tsx",
+            "export const renderToHTMLOrFlight: AppPageRender = (\n  req,\n) => {}",
+            "renderToHTMLOrFlight",
+        ),
+        (
+            "server.ts",
+            "export default class NextNodeServer extends BaseServer<Options> {",
+            "NextNodeServer",
+        ),
+        ("upload.rb", "class Upload < ActiveRecord::Base", "Upload"),
+        ("lib.rs", "pub struct Searcher<'a> {", "Searcher"),
+        ("lib.rs", "impl<'a> Iterator for Lines<'a> {", "Lines"),
+        ("lib.rs", "pub trait Matcher {", "Matcher"),
+        ("kinds.ts", "export type Cursor<T> = { id: T };", "Cursor"),
+        ("api.ts", "export interface Handler {", "Handler"),
+        ("main.go", "func (c *Context) Next() {", "Next"),
+        ("app.py", "class Flask(App):", "Flask"),
+        ("mod.rb", "module Discourse", "Discourse"),
+    ];
+    for (path, line, name) in cases {
+        let symbols = &PreparedCorpus::new(&[document(path, line)]).chunks[0].symbols;
+        assert!(
+            symbols.iter().any(|s| s.name == name),
+            "{path}: {line:?} should declare {name}, found {:?}",
+            symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()
+        );
+    }
+    let none = PreparedCorpus::new(&[document("app.ts", "  return renderToHTMLOrFlight(req);")]);
+    assert!(none.chunks[0].symbols.is_empty());
+}

@@ -22,7 +22,7 @@ use std::{
 };
 
 // Bump whenever chunking, tokenization, symbol extraction, or ranking features change.
-const FORMAT_VERSION: u32 = 4;
+const FORMAT_VERSION: u32 = 5;
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -542,6 +542,16 @@ fn prepare_source(
         });
     let (prepared, navigation, chunks, reused) = if let Some((file, chunks)) = cached {
         (file.prepared, file.navigation, chunks, true)
+    } else if search::is_big_source(&source.path, &source.text) {
+        // Over the lexical cap: the parser decides what is worth indexing.
+        let navigation = navigator.prepare(&source.path, &source.text);
+        let chunks = search::chunk_definitions(&source.path, &source.text, &navigation.definitions);
+        (
+            preparer.prepare_definition_chunks(&chunks),
+            Arc::new(navigation),
+            chunks,
+            false,
+        )
     } else {
         let chunks = search::chunk_text(&source.path, &source.text);
         (
@@ -713,7 +723,44 @@ fn write_snapshot(path: &Path, record: &DiskSnapshot) -> Result<()> {
     temporary.write_all(&bytes)?;
     temporary.flush()?;
     temporary.persist(path)?;
+    remove_stale_versions(path);
     Ok(())
+}
+
+/// Delete this root's snapshots written by other format versions. Each format
+/// has its own file name, so a version bump would otherwise leave the old
+/// snapshot on disk for good.
+fn remove_stale_versions(path: &Path) {
+    let Some(current) = path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let Some((_, suffix)) = current.split_once('-') else {
+        return;
+    };
+    let Some(directory) = path.parent() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let stale = name != current
+            && name
+                .strip_prefix('v')
+                .and_then(|rest| rest.split_once('-'))
+                .is_some_and(|(version, rest)| {
+                    rest == suffix
+                        && !version.is_empty()
+                        && version.bytes().all(|b| b.is_ascii_digit())
+                });
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -731,6 +778,30 @@ mod tests {
         let mut cache = WorkspaceCache::with_directory(disk.path().to_path_buf());
         cache.load(root.path()).unwrap();
         (root, disk, cache)
+    }
+
+    #[test]
+    fn writing_a_snapshot_removes_this_roots_older_format_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let disk = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("a.rs"), "fn a() {}\n").unwrap();
+        let mut cache = WorkspaceCache::with_directory(disk.path().to_owned());
+        let current = cache
+            .cache_path(&root.path().canonicalize().unwrap())
+            .unwrap();
+        let name = current.file_name().unwrap().to_str().unwrap().to_owned();
+        let suffix = name.split_once('-').unwrap().1.to_owned();
+        let stale = disk.path().join(format!("v4-{suffix}"));
+        let other_root = disk.path().join("v4-0000.bin");
+        let unrelated = disk.path().join(format!("x4-{suffix}"));
+        for path in [&stale, &other_root, &unrelated] {
+            fs::write(path, b"old").unwrap();
+        }
+        cache.load(root.path()).unwrap();
+        assert!(current.exists());
+        assert!(!stale.exists(), "the same root's older version is removed");
+        assert!(other_root.exists(), "other roots are untouched");
+        assert!(unrelated.exists(), "only v<digits>- files are considered");
     }
 
     #[test]

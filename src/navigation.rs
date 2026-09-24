@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 use tree_sitter::{Node, ParseOptions, Parser};
 
 const MAX_FACTS: usize = 32_768;
+/// Files of a supported language are parsed up to this size. Bigger than the
+/// lexical cap because a generated or bundled source file can hold the
+/// definitions agents ask for most; see `search::file_byte_limit`.
+pub const PARSED_FILE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,11 +22,17 @@ pub enum DefinitionKind {
     Constant,
     Type,
     Class,
+    Method,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Definition {
     pub name: String,
+    /// The name with its containers: `Server.handle`, `routes.list`. Equal to
+    /// `name` for a top-level definition.
+    pub qualified: String,
+    /// Index of the enclosing class or object definition in the same file.
+    pub container: Option<usize>,
     pub start_line: usize,
     pub end_line: usize,
     pub complete: bool,
@@ -31,6 +41,12 @@ pub struct Definition {
     start_byte: usize,
     end_byte: usize,
     namespace: Namespace,
+}
+
+impl Definition {
+    pub fn exported(&self) -> bool {
+        !self.exports.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +104,8 @@ pub struct FileFacts {
     lines: usize,
     bytes: usize,
     valid: bool,
+    /// The file had syntax errors: definitions were kept, relationships were not.
+    partial: bool,
 }
 
 impl FileFacts {
@@ -118,12 +136,16 @@ impl FileFacts {
                 || (self.definitions.is_empty()
                     && self.references.is_empty()
                     && self.imports.is_empty()))
+            && (!self.partial || self.references.is_empty())
             && self.definitions.iter().all(|d| {
                 d.start_line > 0
                     && d.start_line <= d.end_line
                     && d.end_line <= self.lines
                     && d.start_byte <= d.end_byte
                     && d.end_byte <= self.bytes
+                    && !d.name.is_empty()
+                    && d.qualified.ends_with(d.name.as_str())
+                    && d.container.is_none_or(|i| i < self.definitions.len())
             })
             && self.references.iter().all(|r| {
                 r.line > 0
@@ -165,7 +187,7 @@ impl NavigationPreparer {
             facts.valid = facts.config.is_some();
             return facts;
         }
-        if !supports(path) || text.len() > 256 * 1024 {
+        if !supports(path) || text.len() > PARSED_FILE_BYTES {
             return facts;
         }
         let (slot, language) = match path.rsplit('.').next() {
@@ -182,8 +204,10 @@ impl NavigationPreparer {
             parser
         });
         let started = Instant::now();
-        let mut cancel =
-            |_: &tree_sitter::ParseState| started.elapsed() > Duration::from_millis(250);
+        // 250 ms per 256 KiB: a big file gets proportionally longer before the
+        // parse is abandoned, so a slow machine does not silently lose it.
+        let budget = Duration::from_millis(250 * text.len().div_ceil(256 * 1024).max(1) as u64);
+        let mut cancel = |_: &tree_sitter::ParseState| started.elapsed() > budget;
         let mut read = |offset: usize, _: tree_sitter::Point| &text.as_bytes()[offset..];
         let Some(tree) = parser.parse_with_options(
             &mut read,
@@ -193,11 +217,10 @@ impl NavigationPreparer {
             parser.reset();
             return facts;
         };
-        // A partial syntax tree can misidentify scopes. Keep the existing lexical
-        // fallback for the whole file rather than claiming precise relationships.
-        if tree.root_node().has_error() {
-            return facts;
-        }
+        // A partial syntax tree can misidentify scopes. Keep the lexical fallback
+        // for relationships in that case, but keep the definitions: a name and
+        // its lines are still right wherever the definition's own span parsed.
+        facts.partial = tree.root_node().has_error();
         let mut collector = Collector::new(text, facts);
         collector.visit(tree.root_node(), 0);
         collector.finish()
@@ -232,6 +255,8 @@ struct Collector<'a> {
     depth: usize,
     overflow: bool,
     current_caller: Option<usize>,
+    /// The class or object definition whose body is being visited.
+    current_container: Option<usize>,
 }
 impl<'a> Collector<'a> {
     fn new(text: &'a str, facts: FileFacts) -> Self {
@@ -247,6 +272,7 @@ impl<'a> Collector<'a> {
             depth: 0,
             overflow: false,
             current_caller: None,
+            current_container: None,
         }
     }
     fn text(&self, node: Node<'_>) -> &'a str {
@@ -341,6 +367,20 @@ impl<'a> Collector<'a> {
         scope: usize,
         namespace: Namespace,
     ) -> usize {
+        self.definition_named(self.text(name), node, kind, scope, namespace, true)
+    }
+    /// Record a definition. `bind` makes the name a scope binding, which is
+    /// right for declarations and wrong for members (a method is a property of
+    /// its class, not a name in scope).
+    fn definition_named(
+        &mut self,
+        name: &str,
+        node: Node<'_>,
+        kind: DefinitionKind,
+        scope: usize,
+        namespace: Namespace,
+        bind: bool,
+    ) -> usize {
         let mut span = node;
         if let Some(parent) = node.parent()
             && matches!(
@@ -356,7 +396,7 @@ impl<'a> Collector<'a> {
             exports.push(if prefix.split_whitespace().any(|w| w == "default") {
                 "default".into()
             } else {
-                self.text(name).into()
+                name.into()
             });
             span = parent;
         }
@@ -377,12 +417,19 @@ impl<'a> Collector<'a> {
                     .all(char::is_whitespace)
         });
         if export_prefix.is_some() {
-            exports.push(self.text(name).into());
+            exports.push(name.into());
         }
         let start = export_prefix.unwrap_or(span);
         let id = self.facts.definitions.len();
+        let container = self.current_container;
+        let qualified = match container.and_then(|i| self.facts.definitions.get(i)) {
+            Some(owner) => format!("{}.{name}", owner.qualified),
+            None => name.into(),
+        };
         self.facts.definitions.push(Definition {
-            name: self.text(name).into(),
+            name: name.into(),
+            qualified,
+            container,
             start_line: start.start_position().row + 1,
             end_line: end_line(span),
             complete: !span.has_error(),
@@ -392,13 +439,37 @@ impl<'a> Collector<'a> {
             end_byte: span.end_byte(),
             namespace,
         });
-        self.bind(
-            self.text(name),
-            scope,
-            namespace,
-            BindingTarget::Definition(id),
-        );
+        if bind {
+            self.bind(name, scope, namespace, BindingTarget::Definition(id));
+        }
         id
+    }
+    /// The name of a class member or object property, when it is a plain name.
+    fn member_name(&self, node: Node<'_>) -> Option<&'a str> {
+        let name = node
+            .child_by_field_name("name")
+            .or_else(|| node.child_by_field_name("key"))?;
+        match name.kind() {
+            "property_identifier" | "private_property_identifier" | "identifier" => {
+                Some(self.text(name))
+            }
+            "string" => string_value(self.text(name)).and_then(|value| {
+                let inner = &self.text(name)[1..1 + value.len()];
+                (inner == value).then_some(inner)
+            }),
+            _ => None,
+        }
+    }
+    /// Visit a class body or object literal with `owner` as the container of
+    /// the members defined directly inside it.
+    fn visit_members(&mut self, node: Node<'_>, scope: usize, owner: Option<usize>) {
+        let previous = self.current_container;
+        self.current_container = owner;
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            self.visit(child, scope);
+        }
+        self.current_container = previous;
     }
     fn visit(&mut self, node: Node<'_>, scope: usize) {
         if self.depth >= 256 {
@@ -428,23 +499,65 @@ impl<'a> Collector<'a> {
             | "generator_function"
             | "arrow_function"
             | "method_definition" => {
+                let parent = node.parent();
+                let is_value_of = |kind: &str| {
+                    parent.is_some_and(|parent| {
+                        parent.kind() == kind && parent.child_by_field_name("value") == Some(node)
+                    })
+                };
                 let owner = if matches!(
                     node.kind(),
                     "function_declaration" | "generator_function_declaration"
                 ) {
-                    node.child_by_field_name("name").map(|name| {
-                        self.definition(
+                    match node.child_by_field_name("name") {
+                        Some(name) => Some(self.definition(
                             name,
                             node,
                             DefinitionKind::Function,
                             scope,
                             Namespace::Value,
-                        )
+                        )),
+                        // `export default function () {}` has no name of its own.
+                        None if parent.is_some_and(|p| p.kind() == "export_statement") => {
+                            Some(self.definition_named(
+                                "default",
+                                node,
+                                DefinitionKind::Function,
+                                scope,
+                                Namespace::Value,
+                                false,
+                            ))
+                        }
+                        None => None,
+                    }
+                } else if matches!(node.kind(), "function_expression" | "arrow_function")
+                    && parent.is_some_and(|p| {
+                        p.kind() == "export_statement"
+                            && p.child_by_field_name("value") == Some(node)
                     })
-                } else if node.parent().is_some_and(|parent| {
-                    parent.kind() == "variable_declarator"
-                        && parent.child_by_field_name("value") == Some(node)
-                }) {
+                {
+                    // `export default function () {}` / `export default () => {}`.
+                    Some(self.definition_named(
+                        "default",
+                        node,
+                        DefinitionKind::Function,
+                        scope,
+                        Namespace::Value,
+                        false,
+                    ))
+                } else if node.kind() == "method_definition"
+                    && parent.is_some_and(|p| matches!(p.kind(), "class_body" | "object"))
+                {
+                    // Members are properties of their container, not names in scope.
+                    let kind = if parent.is_some_and(|p| p.kind() == "class_body") {
+                        DefinitionKind::Method
+                    } else {
+                        DefinitionKind::Function
+                    };
+                    self.member_name(node).map(|name| {
+                        self.definition_named(name, node, kind, scope, Namespace::Value, false)
+                    })
+                } else if is_value_of("variable_declarator") {
                     self.facts
                         .definitions
                         .last()
@@ -454,11 +567,41 @@ impl<'a> Collector<'a> {
                                 && d.end_byte >= node.end_byte()
                         })
                         .map(|_| self.facts.definitions.len() - 1)
+                } else if is_value_of("pair") {
+                    // `{ list: () => {} }` inside an object literal.
+                    let pair = parent.unwrap();
+                    self.member_name(pair).map(|name| {
+                        self.definition_named(
+                            name,
+                            pair,
+                            DefinitionKind::Function,
+                            scope,
+                            Namespace::Value,
+                            false,
+                        )
+                    })
+                } else if is_value_of("public_field_definition") || is_value_of("field_definition")
+                {
+                    // `handle = () => {}` as a class property.
+                    let field = parent.unwrap();
+                    self.member_name(field).map(|name| {
+                        self.definition_named(
+                            name,
+                            field,
+                            DefinitionKind::Method,
+                            scope,
+                            Namespace::Value,
+                            false,
+                        )
+                    })
                 } else {
                     None
                 };
                 let previous_caller = self.current_caller;
                 self.current_caller = owner;
+                // Names defined inside a body belong to the function, not to the
+                // class or object around it.
+                let previous_container = self.current_container.take();
                 let inner = self.scope(scope, true);
                 if !matches!(
                     node.kind(),
@@ -489,6 +632,7 @@ impl<'a> Collector<'a> {
                     self.visit(return_type, inner);
                 }
                 self.current_caller = previous_caller;
+                self.current_container = previous_container;
                 return;
             }
             "statement_block" | "class_body" | "catch_clause" | "for_statement"
@@ -518,6 +662,7 @@ impl<'a> Collector<'a> {
                         binding_scope = self.scopes[binding_scope].parent.unwrap_or(0);
                     }
                 }
+                let mut owner = None;
                 if name.kind() == "identifier" && is_const {
                     let kind = if node.child_by_field_name("value").is_some_and(|n| {
                         matches!(
@@ -529,12 +674,18 @@ impl<'a> Collector<'a> {
                     } else {
                         DefinitionKind::Constant
                     };
-                    self.definition(name, node, kind, binding_scope, Namespace::Value);
+                    owner =
+                        Some(self.definition(name, node, kind, binding_scope, Namespace::Value));
                 } else {
                     self.pattern(name, binding_scope);
                 }
                 if let Some(value) = node.child_by_field_name("value") {
-                    self.visit(value, scope);
+                    if value.kind() == "object" && owner.is_some() {
+                        // `const routes = { list() {} }`: members qualify as `routes.list`.
+                        self.visit_members(value, scope, owner);
+                    } else {
+                        self.visit(value, scope);
+                    }
                 }
                 if let Some(annotation) = node.child_by_field_name("type") {
                     self.visit(annotation, scope);
@@ -562,13 +713,15 @@ impl<'a> Collector<'a> {
                 } else {
                     Namespace::Both
                 };
-                if let Some(name) = node.child_by_field_name("name") {
-                    self.definition(name, node, kind, scope, namespace);
-                }
+                let owner = node
+                    .child_by_field_name("name")
+                    .map(|name| self.definition(name, node, kind, scope, namespace));
                 let inner = self.scope(scope, false);
                 if let Some(parameters) = node.child_by_field_name("type_parameters") {
                     self.pattern(parameters, inner);
                 }
+                let previous_container = self.current_container;
+                self.current_container = owner.filter(|_| kind == DefinitionKind::Class);
                 let mut cursor = node.walk();
                 for child in node.named_children(&mut cursor) {
                     if Some(child) != node.child_by_field_name("name")
@@ -577,6 +730,7 @@ impl<'a> Collector<'a> {
                         self.visit(child, inner);
                     }
                 }
+                self.current_container = previous_container;
                 return;
             }
             "identifier" | "type_identifier" | "shorthand_property_identifier" => {
@@ -709,6 +863,13 @@ impl<'a> Collector<'a> {
             self.facts.imports.clear();
             return self.facts;
         }
+        if self.facts.partial {
+            // Scopes in a tree with errors are not trustworthy; keep only the
+            // definitions, whose own spans say whether they parsed.
+            self.facts.imports.clear();
+            self.facts.valid = true;
+            return self.facts;
+        }
         let mut bindings: HashMap<(usize, &str), Vec<&Binding>> = HashMap::new();
         for binding in &self.bindings {
             bindings
@@ -812,10 +973,32 @@ struct Edge {
     target_file: usize,
     definition: usize,
 }
+/// A definition found by name: the file and its position in that file's facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DefinitionRef {
+    pub file: usize,
+    pub definition: usize,
+}
+
+/// What the index holds, for the coverage line of an answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IndexCoverage {
+    /// Files of a supported language that parsed (fully or with errors).
+    pub parsed_files: usize,
+    /// Parsed files whose tree had errors: definitions only, no relationships.
+    pub partial_files: usize,
+    pub definitions: usize,
+}
+
 pub struct NavigationIndex {
     files: Vec<(String, Arc<FileFacts>)>,
     paths: HashMap<String, usize>,
     incoming: HashMap<String, Vec<(usize, usize)>>,
+    /// Definitions by leaf name, in path order.
+    by_name: HashMap<String, Vec<DefinitionRef>>,
+    /// Leaf names by their ASCII-lowercased form, for a case-insensitive fallback.
+    by_lower: HashMap<String, Vec<String>>,
+    coverage: IndexCoverage,
 }
 impl NavigationIndex {
     pub fn new<'a>(files: impl IntoIterator<Item = (&'a str, &'a FileFacts)>) -> Self {
@@ -840,12 +1023,37 @@ impl NavigationIndex {
             incoming: HashMap::new(),
             files,
             paths,
+            by_name: HashMap::new(),
+            by_lower: HashMap::new(),
+            coverage: IndexCoverage::default(),
         };
         // Postings only: cross-file resolution happens for the selected evidence,
         // not for every reference whenever a CLI process starts.
-        for (file, (_, facts)) in index.files.iter().enumerate() {
+        for (file, (path, facts)) in index.files.iter().enumerate() {
             if !facts.valid {
                 continue;
+            }
+            if supports(path) {
+                index.coverage.parsed_files += 1;
+                index.coverage.partial_files += usize::from(facts.partial);
+            }
+            for (definition, item) in facts.definitions.iter().enumerate() {
+                index.coverage.definitions += 1;
+                let entry = DefinitionRef { file, definition };
+                match index.by_name.get_mut(&item.name) {
+                    Some(refs) => refs.push(entry),
+                    None => {
+                        let lower = item.name.to_ascii_lowercase();
+                        if lower != item.name {
+                            index
+                                .by_lower
+                                .entry(lower)
+                                .or_default()
+                                .push(item.name.clone());
+                        }
+                        index.by_name.insert(item.name.clone(), vec![entry]);
+                    }
+                }
             }
             for (reference, item) in facts.references.iter().enumerate() {
                 if !item.is_call || item.caller.is_none() {
@@ -876,12 +1084,62 @@ impl NavigationIndex {
             .get(path)
             .map_or(&[], |file| self.files[*file].1.definitions.as_slice())
     }
+    /// Fully parsed: relationships in this file are precise. A file with syntax
+    /// errors has definitions but keeps the lexical fallback for relationships.
     pub fn is_parsed(&self, path: &str) -> bool {
         supports(path)
             && self
                 .paths
                 .get(path)
-                .is_some_and(|file| self.files[*file].1.valid)
+                .is_some_and(|file| self.files[*file].1.valid && !self.files[*file].1.partial)
+    }
+    pub fn coverage(&self) -> IndexCoverage {
+        self.coverage
+    }
+    pub fn path(&self, reference: DefinitionRef) -> &str {
+        &self.files[reference.file].0
+    }
+    pub fn get(&self, reference: DefinitionRef) -> &Definition {
+        &self.files[reference.file].1.definitions[reference.definition]
+    }
+    /// Every definition with this exact leaf name, in path order.
+    pub fn lookup(&self, name: &str) -> &[DefinitionRef] {
+        self.by_name.get(name).map_or(&[], Vec::as_slice)
+    }
+    /// Definitions whose qualified name is `qualified` or ends with `.qualified`:
+    /// `Server.handle` finds `NextNodeServer.handle`, never `handle` alone.
+    pub fn lookup_qualified(&self, qualified: &str) -> Vec<DefinitionRef> {
+        let (_, leaf) = qualified.rsplit_once('.').unwrap_or(("", qualified));
+        if leaf == qualified {
+            return self.lookup(leaf).to_vec();
+        }
+        self.lookup(leaf)
+            .iter()
+            .copied()
+            .filter(|reference| {
+                let full = &self.get(*reference).qualified;
+                full == qualified
+                    || full
+                        .strip_suffix(qualified)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            })
+            .collect()
+    }
+    /// Definitions whose leaf name matches ignoring ASCII case, when no exact
+    /// match exists. Names that differ only by case are all returned.
+    pub fn lookup_insensitive(&self, name: &str) -> Vec<DefinitionRef> {
+        let lower = name.to_ascii_lowercase();
+        let mut names = vec![];
+        if self.by_name.contains_key(&lower) {
+            names.push(lower.clone());
+        }
+        if let Some(others) = self.by_lower.get(&lower) {
+            names.extend(others.iter().cloned());
+        }
+        names
+            .iter()
+            .flat_map(|name| self.lookup(name).iter().copied())
+            .collect()
     }
     pub fn definition(&self, path: &str, line: usize) -> Option<&Definition> {
         let file = *self.paths.get(path)?;
@@ -1350,6 +1608,116 @@ mod tests {
         assert_eq!(facts.definitions[0].end_line, 5);
     }
 
+    #[test]
+    fn class_members_object_members_and_default_exports_are_definitions() {
+        let source = "export default class NextNodeServer extends BaseServer<Options> {\n  private handle(req: Request) {\n    const inner = () => 1;\n    return inner();\n  }\n  static create() { return new NextNodeServer(); }\n  onError = (error: Error) => { log(error); };\n}\nexport const routes = {\n  list() { return []; },\n  get: async (id: string) => id,\n  'quoted-key': () => 2,\n};\nexport default function () { return routes; }\n";
+        let facts = NavigationPreparer::default().prepare("server.ts", source);
+        assert!(facts.valid && !facts.partial);
+        let summary = facts
+            .definitions
+            .iter()
+            .map(|d| {
+                (
+                    d.qualified.as_str(),
+                    d.kind,
+                    d.start_line,
+                    d.end_line,
+                    d.container,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            vec![
+                ("NextNodeServer", DefinitionKind::Class, 1, 8, None),
+                (
+                    "NextNodeServer.handle",
+                    DefinitionKind::Method,
+                    2,
+                    5,
+                    Some(0)
+                ),
+                // A const arrow inside a body is a definition of its own (as
+                // before), but it belongs to no container.
+                ("inner", DefinitionKind::Function, 3, 3, None),
+                (
+                    "NextNodeServer.create",
+                    DefinitionKind::Method,
+                    6,
+                    6,
+                    Some(0)
+                ),
+                (
+                    "NextNodeServer.onError",
+                    DefinitionKind::Method,
+                    7,
+                    7,
+                    Some(0)
+                ),
+                ("routes", DefinitionKind::Constant, 9, 13, None),
+                ("routes.list", DefinitionKind::Function, 10, 10, Some(5)),
+                ("routes.get", DefinitionKind::Function, 11, 11, Some(5)),
+                (
+                    "routes.quoted-key",
+                    DefinitionKind::Function,
+                    12,
+                    12,
+                    Some(5)
+                ),
+                ("default", DefinitionKind::Function, 14, 14, None),
+            ]
+        );
+        assert!(facts.definitions[0].exported());
+        assert!(!facts.definitions[1].exported());
+    }
+
+    #[test]
+    fn files_with_syntax_errors_keep_definitions_and_drop_relationships() {
+        let source = "import { helper } from './helper';\nexport class BaseServer {\n  handle() { return helper(); }\n}\nconst broken = ;\nexport function after() { return 2; }\n";
+        let facts = NavigationPreparer::default().prepare("base.ts", source);
+        assert!(facts.valid && facts.partial);
+        assert!(facts.references.is_empty() && facts.imports.is_empty());
+        let names = facts
+            .definitions
+            .iter()
+            .map(|d| (d.qualified.as_str(), d.complete))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&("BaseServer", true)));
+        assert!(names.contains(&("BaseServer.handle", true)));
+        assert!(names.contains(&("after", true)));
+        let index = index(&[("base.ts", source)]);
+        assert!(!index.is_parsed("base.ts"));
+        assert_eq!(index.lookup("BaseServer").len(), 1);
+        assert_eq!(index.coverage().partial_files, 1);
+    }
+
+    #[test]
+    fn lookup_by_leaf_qualified_and_case() {
+        let index = index(&[
+            (
+                "a.ts",
+                "export class Server { handle() {} }\nexport function handle() {}\n",
+            ),
+            (
+                "b.ts",
+                "export class NextNodeServer { handle() {} }\nexport const HANDLE = 1;\n",
+            ),
+        ]);
+        assert_eq!(index.coverage().definitions, 6);
+        assert_eq!(index.coverage().parsed_files, 2);
+        assert_eq!(index.lookup("handle").len(), 3);
+        let qualified = index.lookup_qualified("Server.handle");
+        assert_eq!(qualified.len(), 1);
+        assert_eq!(index.path(qualified[0]), "a.ts");
+        assert_eq!(index.get(qualified[0]).qualified, "Server.handle");
+        assert_eq!(index.lookup_qualified("NextNodeServer.handle").len(), 1);
+        assert_eq!(index.lookup_qualified("Nope.handle").len(), 0);
+        assert!(index.lookup("Handle").is_empty());
+        let insensitive = index.lookup_insensitive("Handle");
+        assert_eq!(insensitive.len(), 4);
+        assert!(insensitive.iter().any(|r| index.get(*r).name == "HANDLE"));
+    }
+
     fn index(files: &[(&str, &str)]) -> NavigationIndex {
         let mut preparer = NavigationPreparer::default();
         let facts = files
@@ -1580,7 +1948,10 @@ mod tests {
         assert!(facts.definitions.is_empty());
         assert!(facts.references.is_empty());
         assert!(facts.matches_source("nested.ts", &text));
-        let huge = format!("export function run() {{}}\n{}", " ".repeat(256 * 1024));
+        let huge = format!(
+            "export function run() {{}}\n{}",
+            " ".repeat(PARSED_FILE_BYTES)
+        );
         assert!(
             NavigationPreparer::default()
                 .prepare("large.ts", &huge)

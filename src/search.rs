@@ -16,6 +16,28 @@ use std::{
 };
 
 pub const MAX_FILE_BYTES: usize = 256 * 1024;
+/// A file over the lexical cap in a parsed language is indexed by its
+/// definitions only. Lines longer than this on average mean a minified or
+/// generated file, which has no definitions worth chunking.
+pub const MINIFIED_LINE_BYTES: usize = 200;
+/// The size a file may have and still be read: the lexical cap for every
+/// file, the parser's cap for the languages it understands.
+pub fn file_byte_limit(path: &str) -> usize {
+    if crate::navigation::supports(path) {
+        crate::navigation::PARSED_FILE_BYTES.max(MAX_FILE_BYTES)
+    } else {
+        MAX_FILE_BYTES
+    }
+}
+/// Over the lexical cap: chunk only its definitions, and only if it is not
+/// minified.
+pub fn is_big_source(path: &str, text: &str) -> bool {
+    text.len() > MAX_FILE_BYTES && text.len() <= file_byte_limit(path)
+}
+pub fn is_minified(text: &str) -> bool {
+    let lines = text.bytes().filter(|b| *b == b'\n').count().max(1);
+    text.len() / lines > MINIFIED_LINE_BYTES
+}
 pub const CHUNK_LINES: usize = 40;
 pub const CHUNK_OVERLAP: usize = 5;
 pub const FUNCTION_CHUNK_LINES: usize = 120;
@@ -76,7 +98,10 @@ fn patterns() -> &'static Patterns {
             // Conventional test locations and file names across ecosystems; a
             // naming hint, never a parse of the file.
             test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$").unwrap(),
-            symbol: Regex::new(r"(?m)^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|const|export|default|public|private|protected|static|final|override|abstract|internal|open|suspend)\s+)*(?:(?:fn|function\*?|def|fun)\s+([A-Za-z_][A-Za-z0-9_]*)|func\s+(?:\([^\n)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)|(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s+)?(?:\([^\n)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>)").unwrap(),
+            // Functions, methods, arrow constants (with or without a type
+            // annotation) and the type-level declarations of every supported
+            // language: `class`, `struct`, `impl Trait for X`, `module`...
+            symbol: Regex::new(r"(?m)^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|const|export|default|public|private|protected|static|final|override|abstract|internal|open|suspend|sealed|data|declare|readonly)\s+)*(?:(?:fn|function\*?|def|fun)\s+([A-Za-z_][A-Za-z0-9_]*)|func\s+(?:\([^\n)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)|(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=\n]+)?=\s*(?:async\s+)?(?:\([^\n)]*\)\s*=>|[A-Za-z_][A-Za-z0-9_]*\s*=>|\([^\n)]*$)|(?:class|struct|enum|interface|trait|module|object|protocol|record|union)\s+([A-Za-z_][A-Za-z0-9_]*)|impl(?:<[^>\n]*>)?\s+(?:[A-Za-z_][A-Za-z0-9_:<>, ]*\s+for\s+)?([A-Za-z_][A-Za-z0-9_]*)|type\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>\n]*>)?\s*=)").unwrap(),
             acronym: Regex::new("([A-Z]+)([A-Z][a-z])").unwrap(),
             camel: Regex::new("([a-z0-9])([A-Z])").unwrap(),
             words: Regex::new("[a-z0-9]+").unwrap(),
@@ -162,6 +187,75 @@ pub fn chunk_text(path: &str, text: &str) -> Vec<Chunk> {
     }
     chunks
 }
+/// Chunks for a big parsed file: only its functions, methods and class
+/// headers, so a 300 KB source file costs the index its definitions rather
+/// than the whole text. Long definitions are split like ordinary sections.
+/// A file with nothing to chunk (one generated table) gets no chunks.
+pub fn chunk_definitions(
+    path: &str,
+    text: &str,
+    definitions: &[crate::navigation::Definition],
+) -> Vec<Chunk> {
+    use crate::navigation::DefinitionKind;
+    let p = patterns();
+    let mut lines: Vec<&str> = p.lines.split(text).collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let bounds = |definition: &crate::navigation::Definition| {
+        let start = definition.start_line.checked_sub(1)?;
+        let end = definition.end_line.min(lines.len());
+        (start < end).then_some((start, end))
+    };
+    let mut spans = definitions
+        .iter()
+        .filter(|d| matches!(d.kind, DefinitionKind::Function | DefinitionKind::Method))
+        .filter_map(bounds)
+        .collect::<Vec<_>>();
+    // The class header names the class; its members are their own chunks, so
+    // the header runs to the first member or a window, whichever is shorter.
+    for class in definitions
+        .iter()
+        .filter(|d| d.kind == DefinitionKind::Class)
+    {
+        let Some((start, end)) = bounds(class) else {
+            continue;
+        };
+        let first_member = spans
+            .iter()
+            .filter(|(s, _)| *s > start && *s < end)
+            .map(|(s, _)| *s)
+            .min()
+            .unwrap_or(end);
+        spans.push((start, end.min(first_member).min(start + CHUNK_LINES)));
+    }
+    spans.sort_unstable();
+    let mut chunks = vec![];
+    let mut covered = 0;
+    for (start, end) in spans {
+        // Members inside an already chunked span are covered by it.
+        let mut start = start.max(covered);
+        if start >= end {
+            continue;
+        }
+        while start < end {
+            let piece_end = end.min(start + FUNCTION_CHUNK_LINES);
+            chunks.push(Chunk {
+                path: path.into(),
+                start_line: start + 1,
+                end_line: piece_end,
+                text: lines[start..piece_end].join("\n"),
+                lexical_score: 0.0,
+            });
+            if piece_end == end {
+                break;
+            }
+            start += FUNCTION_CHUNK_LINES - CHUNK_OVERLAP;
+        }
+        covered = end;
+    }
+    chunks
+}
 fn normalize(term: String, stems: &mut HashMap<String, String>) -> String {
     stems.entry(term).or_insert_with_key(|s| stemmer(s)).clone()
 }
@@ -198,6 +292,10 @@ pub(crate) struct PreparedFile {
     // All identifiers, including names with no declaration in the current corpus:
     // a new declaration can change reference weights in otherwise unchanged files.
     identifiers: HashSet<String>,
+    /// Chunks cover only the file's definitions, not every line (a big parsed
+    /// file); gaps between chunks are expected.
+    #[serde(default)]
+    parse_only: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct PreparedChunkFeatures {
@@ -227,14 +325,22 @@ impl PreparedFile {
         let mut chunks = Vec::with_capacity(self.chunks.len());
         for cached in &self.chunks {
             let start = cached.start_line.checked_sub(1)?;
+            // Definition-only chunks tile each definition, not the file: they
+            // may leave gaps, but they still ascend and never move backwards
+            // by more than the overlap.
+            let tiled = if self.parse_only {
+                start + CHUNK_OVERLAP >= previous_end
+            } else {
+                (chunks.is_empty() && start == 0)
+                    || (!chunks.is_empty()
+                        && (start == previous_end
+                            || previous_end.checked_sub(CHUNK_OVERLAP) == Some(start)))
+            };
             if cached.end_line <= start
                 || cached.end_line > lines.len()
                 || cached.end_line - start > FUNCTION_CHUNK_LINES
                 || cached.end_line <= previous_end
-                || (chunks.is_empty() && start != 0)
-                || (!chunks.is_empty()
-                    && start != previous_end
-                    && previous_end.checked_sub(CHUNK_OVERLAP) != Some(start))
+                || !tiled
             {
                 return None;
             }
@@ -247,7 +353,8 @@ impl PreparedFile {
             });
             previous_end = cached.end_line;
         }
-        (previous_end == lines.len() && self.matches(&chunks)).then_some(chunks)
+        ((self.parse_only || previous_end == lines.len()) && self.matches(&chunks))
+            .then_some(chunks)
     }
 
     /// Reject incompatible/corrupt records without repeating tokenization or stemming.
@@ -292,6 +399,10 @@ impl FilePreparer {
     pub(crate) fn prepare_file(&mut self, chunks: &[Chunk]) -> PreparedFile {
         prepare_file_with_stems(chunks, &mut self.stems)
     }
+    /// For chunks that cover only a file's definitions (see `chunk_definitions`).
+    pub(crate) fn prepare_definition_chunks(&mut self, chunks: &[Chunk]) -> PreparedFile {
+        prepare_chunks_with_stems(chunks, &mut self.stems, true)
+    }
 }
 
 #[cfg(test)]
@@ -300,6 +411,14 @@ fn prepare_file(chunks: &[Chunk]) -> PreparedFile {
 }
 
 fn prepare_file_with_stems(chunks: &[Chunk], stems: &mut HashMap<String, String>) -> PreparedFile {
+    prepare_chunks_with_stems(chunks, stems, false)
+}
+
+fn prepare_chunks_with_stems(
+    chunks: &[Chunk],
+    stems: &mut HashMap<String, String>,
+    parse_only: bool,
+) -> PreparedFile {
     let path = chunks.first().map_or("", |chunk| chunk.path.as_str());
     debug_assert!(chunks.iter().all(|chunk| chunk.path == path));
     let supported = patterns().symbol_extension.is_match(path);
@@ -353,6 +472,7 @@ fn prepare_file_with_stems(chunks: &[Chunk], stems: &mut HashMap<String, String>
         path_field: Arc::new(words(path, stems)),
         chunks: prepared,
         identifiers,
+        parse_only,
     }
 }
 #[derive(Clone, Copy)]
@@ -1074,7 +1194,7 @@ pub(crate) fn workspace_file_stamp(root: &Path, file: &str) -> Result<Option<Sou
         return Ok(None);
     }
     let metadata = fs::metadata(path)?;
-    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+    if !metadata.is_file() || metadata.len() > file_byte_limit(file) as u64 {
         return Ok(None);
     }
     Ok(SourceStamp::from_metadata(&metadata))
@@ -1092,13 +1212,14 @@ fn read_workspace_file(
     }
     let handle = fs::File::open(path).context("opening search file")?;
     let metadata = handle.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+    let limit = file_byte_limit(file);
+    if !metadata.is_file() || metadata.len() > limit as u64 {
         return Ok(None);
     }
     // A file growing after the metadata check cannot cause an unbounded read.
     let mut bytes = Vec::with_capacity(metadata.len() as usize + 1);
     (&handle)
-        .take(MAX_FILE_BYTES as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .context("reading search file")?;
     let stamp = if capture_stamp {
@@ -1117,7 +1238,11 @@ fn read_workspace_file(
     } else {
         None
     };
-    if bytes.len() > MAX_FILE_BYTES || bytes.contains(&0) {
+    if bytes.len() > limit || bytes.contains(&0) {
+        return Ok(None);
+    }
+    // A big file is worth its definitions; a minified one has none to offer.
+    if bytes.len() > MAX_FILE_BYTES && is_minified(&String::from_utf8_lossy(&bytes)) {
         return Ok(None);
     }
     let raw_digest = Sha256::digest(&bytes);
@@ -1428,6 +1553,65 @@ mod tests {
             ["bom.txt", "good.ts"]
         );
         assert_eq!(result[0].text, "needle");
+    }
+
+    #[test]
+    fn big_parsed_files_are_read_and_minified_or_unparsed_ones_are_not() {
+        let temp = std::env::temp_dir().join(format!("oko-big-{}", std::process::id()));
+        fs::create_dir_all(&temp).unwrap();
+        let temp = temp.canonicalize().unwrap();
+        let body = "export function needle() {\n  return 1;\n}\n".repeat(MAX_FILE_BYTES / 40 + 1);
+        assert!(body.len() > MAX_FILE_BYTES && body.len() < file_byte_limit("a.ts"));
+        fs::write(temp.join("big.ts"), &body).unwrap();
+        fs::write(temp.join("big.txt"), &body).unwrap();
+        fs::write(
+            temp.join("min.js"),
+            format!("var needle={};", "x".repeat(MAX_FILE_BYTES + 1)),
+        )
+        .unwrap();
+        fs::write(
+            temp.join("huge.ts"),
+            "export function needle() {}\n".repeat(file_byte_limit("a.ts") / 28 + 1),
+        )
+        .unwrap();
+        let files: Vec<String> = ["big.ts", "big.txt", "min.js", "huge.ts"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let read = read_workspace_paths(&temp, &files, 1).unwrap();
+        fs::remove_dir_all(&temp).unwrap();
+        assert_eq!(
+            read.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["big.ts"]
+        );
+    }
+
+    #[test]
+    fn definition_chunks_cover_functions_methods_and_class_headers_only() {
+        let text = "import x from 'y';\nconst TABLE = {\n  a: 1,\n  b: 2,\n};\nexport class Server {\n  private field = 1;\n  handle() {\n    return 1;\n  }\n}\nexport function run() {\n  return 2;\n}\n";
+        let facts = crate::navigation::NavigationPreparer::default().prepare("server.ts", text);
+        let chunks = chunk_definitions("server.ts", text, &facts.definitions);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| (c.start_line, c.end_line))
+                .collect::<Vec<_>>(),
+            [(6, 7), (8, 10), (12, 14)]
+        );
+        assert!(chunks[0].text.starts_with("export class Server"));
+        assert!(chunks.iter().all(|c| !c.text.contains("TABLE")));
+        let prepared = FilePreparer::default().prepare_definition_chunks(&chunks);
+        assert_eq!(prepared.restore_chunks("server.ts", text).unwrap().len(), 3);
+        assert!(
+            prepare_file(&chunks)
+                .restore_chunks("server.ts", text)
+                .is_none()
+        );
+        // A file with only a table has nothing to chunk and restores as empty.
+        let table = "export const TABLE = {\n  a: 1,\n};\n";
+        let facts = crate::navigation::NavigationPreparer::default().prepare("table.ts", table);
+        let none = chunk_definitions("table.ts", table, &facts.definitions);
+        assert!(none.is_empty());
     }
 }
 
