@@ -1037,6 +1037,9 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         if excerpt["lowerConfidence"] == true {
             label.push_str(", possible match");
         }
+        if excerpt["exactName"] == true {
+            label.push_str(", exact name match");
+        }
         let header = format!(
             "{}:{}-{} ({label})\n",
             excerpt["path"].as_str().unwrap(),
@@ -1960,4 +1963,43 @@ fn empty_search_skips_identical_recovery_evidence() {
     let packet = &response["metrics"];
     assert_eq!(packet["retrieval"]["attempts"], 1);
     assert!(packet["results"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_named_definition_is_shown_even_when_the_ranker_rejects_everything() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("next-server.ts"),
+        "import { BaseServer } from './base-server';\nexport default class NextNodeServer extends BaseServer {\n  handle() {\n    return 1;\n  }\n}\n",
+    )
+    .unwrap();
+    // A file that repeats the words of the question wins the keyword shortlist.
+    fs::write(
+        root.path().join("base-server.ts"),
+        "// Server Server Server: the base server every server subclass extends.\nexport class BaseServer {\n  serve() { return 'server'; }\n}\n".repeat(3),
+    )
+    .unwrap();
+    let (response, requests) = search_with_counted_provider(
+        root.path(),
+        json!({"question":"NextNodeServer subclass extending base Server"}),
+        |request| relevance_response(request, |_| 0.05),
+    );
+    assert!(!requests.is_empty());
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("next-server.ts:2-6 (complete definition, exact name match)\n"),
+        "{text}"
+    );
+    assert!(!text.contains("No relevant code found"), "{text}");
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(packet["results"][0]["exactName"], true);
+    assert_eq!(packet["floor"]["pins"][0]["qualified"], "NextNodeServer");
+    assert_eq!(packet["floor"]["identifiers"][0], "NextNodeServer");
+    // The pin was judged with the shortlist, so it is listed among the candidates.
+    let judged = packet["retrieval"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["path"] == "next-server.ts" && c["startLine"] == 2 && c["endLine"] == 6);
+    assert!(judged, "{}", packet["retrieval"]["candidates"]);
 }

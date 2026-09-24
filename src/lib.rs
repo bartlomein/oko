@@ -1,5 +1,6 @@
 pub mod connected;
 pub mod context;
+pub mod floor;
 pub mod investigate;
 pub mod navigation;
 pub mod preview;

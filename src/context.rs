@@ -3,7 +3,7 @@
 //! Declaration detection is deliberately lexical. Related definitions require
 //! compatible source evidence; unknown qualification or ambiguity is omitted.
 mod related;
-use crate::navigation::{DefinitionKind, NavigationIndex, Relation};
+use crate::navigation::{NavigationIndex, Relation};
 use crate::search::{Chunk, tokenize};
 use regex::Regex;
 use serde::Serialize;
@@ -65,6 +65,10 @@ pub struct ContextMatch {
     /// Rated below the relevance cutoff; shown because the response had room.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub lower_confidence: bool,
+    /// The definition of a name the question used, shown although the ranker
+    /// did not accept it: a name match, not a relevance claim.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub exact_name: bool,
     /// The focused window that replaces a lower-ranked complete definition
     /// before any match is dropped to fit the budget.
     #[serde(skip)]
@@ -476,10 +480,10 @@ impl<'a> Snapshot<'a> {
     ) -> Self {
         let mut snapshot = Self::new(path, chunks);
         if let Some(index) = navigation.filter(|_| crate::navigation::supports(path)) {
-            // Parser-proven boundaries replace lexical guesses only for parsed
-            // definitions. Unsupported or malformed syntax keeps the fallback.
+            // Parser-proven boundaries replace lexical guesses for every kind
+            // of parsed definition. Malformed syntax keeps the fallback.
             for definition in index.definitions(path) {
-                if definition.kind != DefinitionKind::Function || !definition.complete {
+                if !definition.complete {
                     continue;
                 }
                 if !(definition.start_line..=definition.end_line)
@@ -838,7 +842,7 @@ impl SourceExcerpt {
     /// the source itself cannot close. Every line carries its file line number
     /// and a tab: models count lines unreliably, so an agent asked for a
     /// location would otherwise cite a line or two off.
-    fn render(&self, lower_confidence: bool, out: &mut String) {
+    fn render(&self, lower_confidence: bool, exact_name: bool, out: &mut String) {
         let mut label = if self.whole_file {
             "whole file".to_owned()
         } else if self.definitions > 1 {
@@ -850,6 +854,9 @@ impl SourceExcerpt {
         };
         if lower_confidence {
             label.push_str(", possible match");
+        }
+        if exact_name {
+            label.push_str(", exact name match");
         }
         let longest_run = self
             .text
@@ -878,7 +885,9 @@ impl ContextPacket {
             if !out.is_empty() {
                 out.push('\n');
             }
-            result.excerpt.render(result.lower_confidence, &mut out);
+            result
+                .excerpt
+                .render(result.lower_confidence, result.exact_name, &mut out);
         }
         for related in &self.related {
             let relation = match related.relation {
@@ -903,7 +912,7 @@ impl ContextPacket {
                 "referenced from"
             };
             out.push_str(&format!("\n{relation} {verb} {anchor}:\n"));
-            related.excerpt.render(false, &mut out);
+            related.excerpt.render(false, false, &mut out);
         }
         if self.omitted {
             out.push_str("\nLower-ranked evidence was omitted to fit the response limit.\n");
@@ -985,7 +994,7 @@ impl ContextPacket {
 /// Expand up to three ranked winners and attach at most two lexical definition
 /// candidates. All evidence comes from `corpus`; no reads or model calls occur.
 pub fn build_packet(corpus: &[Chunk], winners: &[(Chunk, f64)], question: &str) -> ContextPacket {
-    build_packet_inner(corpus, winners, &[], question, None)
+    build_packet_inner(corpus, winners, &[], &[], question, None)
 }
 
 /// Use syntax facts from the same captured workspace snapshot as `corpus`.
@@ -996,7 +1005,28 @@ pub fn build_packet_with_navigation(
     question: &str,
     navigation: &NavigationIndex,
 ) -> ContextPacket {
-    build_packet_inner(corpus, winners, &[], question, Some(navigation))
+    build_packet_inner(corpus, winners, &[], &[], question, Some(navigation))
+}
+
+/// As `build_packet_with_runners_up`, also showing `pins`: definitions of
+/// names the question used, labelled `exact name match` unless the ranker
+/// accepted them itself. A pin alone is an answer.
+pub fn build_packet_with_pins(
+    corpus: &[Chunk],
+    winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
+    question: &str,
+    navigation: &NavigationIndex,
+) -> ContextPacket {
+    build_packet_inner(
+        corpus,
+        winners,
+        pins,
+        runners_up,
+        question,
+        Some(navigation),
+    )
 }
 
 /// As `build_packet_with_navigation`, offering candidates rated just below the
@@ -1009,12 +1039,13 @@ pub fn build_packet_with_runners_up(
     question: &str,
     navigation: &NavigationIndex,
 ) -> ContextPacket {
-    build_packet_inner(corpus, winners, runners_up, question, Some(navigation))
+    build_packet_inner(corpus, winners, &[], runners_up, question, Some(navigation))
 }
 
 fn build_packet_inner(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
     runners_up: &[(Chunk, f64)],
     question: &str,
     navigation: Option<&NavigationIndex>,
@@ -1025,8 +1056,9 @@ fn build_packet_inner(
         truncated: false,
         omitted: false,
     };
-    // Nothing accepted is an answer in itself; runners-up only accompany a match.
-    if winners.is_empty() {
+    // Nothing accepted is an answer in itself; runners-up only accompany a
+    // match. A pinned definition of a name the question used stands alone.
+    if winners.is_empty() && pins.is_empty() {
         return packet;
     }
     let mut by_path: BTreeMap<&str, Vec<&Chunk>> = BTreeMap::new();
@@ -1035,11 +1067,23 @@ fn build_packet_inner(
     }
     let terms = query_terms(question);
     let mut snapshots = HashMap::new();
+    // The ranker's first choice leads; the pins come before its second and
+    // third, so the budget drops those first; runners-up come last.
+    let pins = pins.iter().filter(|(pin, _)| {
+        !winners.iter().any(|(winner, _)| {
+            winner.path == pin.path
+                && winner.start_line <= pin.end_line
+                && pin.start_line <= winner.end_line
+        })
+    });
     let ranked = winners
         .iter()
-        .map(|winner| (winner, false))
-        .chain(runners_up.iter().map(|runner_up| (runner_up, true)));
-    for ((chunk, score), lower_confidence) in ranked {
+        .take(1)
+        .map(|winner| (winner, false, false))
+        .chain(pins.map(|pin| (pin, false, true)))
+        .chain(winners.iter().skip(1).map(|winner| (winner, false, false)))
+        .chain(runners_up.iter().map(|runner_up| (runner_up, true, false)));
+    for ((chunk, score), lower_confidence, exact_name) in ranked {
         if packet.results.len() == RESULT_LIMIT {
             // Further accepted matches are named by path after the excerpts;
             // nothing was cut for size.
@@ -1090,11 +1134,12 @@ fn build_packet_inner(
         });
         let (limit, preserve_range) = if proven {
             (whole, false)
-        } else if primary
+        } else if (primary || exact_name)
             && !lower_confidence
             && language(&chunk.path) != Language::Other
             && chunk.end_line - chunk.start_line < PRIMARY_IMPLEMENTATION_LINES
         {
+            // A pinned chunk is the definition's own span: keep all of it.
             (
                 EXCERPT_LINES.max(chunk.end_line - chunk.start_line + 1),
                 true,
@@ -1140,6 +1185,7 @@ fn build_packet_inner(
             excerpt: context,
             score: if score.is_finite() { *score } else { 0.0 },
             lower_confidence,
+            exact_name,
             compact,
         });
     }
@@ -1711,6 +1757,85 @@ mod tests {
             3
         );
     }
+    #[test]
+    fn pins_stand_alone_follow_the_first_winner_and_are_labelled() {
+        let source = "export class Server {\n  handle() {\n    return 1;\n  }\n}\n";
+        let mut corpus = chunk_text("server.ts", source);
+        corpus.extend(chunk_text(
+            "other.ts",
+            "export function handle() {\n  return 2;\n}\n",
+        ));
+        corpus.extend(chunk_text(
+            "third.ts",
+            "export function route() {\n  return 3;\n}\n",
+        ));
+        let chunk = |path: &str| corpus.iter().find(|c| c.path == path).unwrap().clone();
+        let mut preparer = crate::navigation::NavigationPreparer::default();
+        let navigation = NavigationIndex::new_shared([(
+            "server.ts",
+            std::sync::Arc::new(preparer.prepare("server.ts", source)),
+        )]);
+        let pin = (
+            Chunk {
+                path: "server.ts".into(),
+                start_line: 1,
+                end_line: 5,
+                text: source.trim_end().into(),
+                lexical_score: 0.0,
+            },
+            0.0,
+        );
+        // A rejected ranking plus one pin: the pin alone is the answer.
+        let packet = build_packet_with_pins(
+            &corpus,
+            &[],
+            std::slice::from_ref(&pin),
+            &[],
+            "Server class",
+            &navigation,
+        );
+        assert_eq!(packet.results.len(), 1);
+        assert!(packet.results[0].exact_name);
+        let text = packet.render_text();
+        assert!(
+            text.starts_with("server.ts:1-5 (whole file, exact name match)\n"),
+            "{text}"
+        );
+        // The ranker's first choice leads; the pin precedes its second choice.
+        let packet = build_packet_with_pins(
+            &corpus,
+            &[(chunk("other.ts"), 0.9), (chunk("third.ts"), 0.8)],
+            std::slice::from_ref(&pin),
+            &[],
+            "handle Server",
+            &navigation,
+        );
+        let shown: Vec<_> = packet
+            .results
+            .iter()
+            .map(|r| (r.excerpt.path.as_str(), r.exact_name))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("other.ts", false),
+                ("server.ts", true),
+                ("third.ts", false)
+            ]
+        );
+        // A pin the ranker accepted itself is shown once, without the label.
+        let packet = build_packet_with_pins(
+            &corpus,
+            &[(chunk("server.ts"), 0.9)],
+            &[pin],
+            &[],
+            "Server",
+            &navigation,
+        );
+        assert_eq!(packet.results.len(), 1);
+        assert!(!packet.results[0].exact_name);
+    }
+
     #[test]
     fn runners_up_fill_spare_slots_of_a_small_packet_and_are_labelled() {
         let mut corpus = chunk_text(

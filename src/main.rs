@@ -735,6 +735,10 @@ fn run() -> Result<()> {
             } else {
                 snapshot.rank_with_intent(&parsed.question, parsed.intent)
             };
+            // Same floor as the MCP server: named definitions lead the shortlist.
+            let found =
+                oko::floor::floor(&parsed.question, snapshot.navigation(), snapshot.chunks());
+            let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
             let (results, stats) = rank_code_with_stats(
                 &parsed.question,
                 &shortlist,

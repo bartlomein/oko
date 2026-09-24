@@ -162,6 +162,8 @@ impl OkoServer {
         let mut lexical_fallback = None;
         let mut candidates = Vec::new();
         let mut runners_up = Vec::new();
+        let mut pins: Vec<(search::Chunk, f64)> = Vec::new();
+        let mut floor: Option<oko::floor::Floor> = None;
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -203,6 +205,16 @@ impl OkoServer {
             } else {
                 snapshot.rank_with_intent(&input.question, input.intent.into())
             };
+            // Definitions the question names lead the shortlist and are shown
+            // even if the ranker rejects them.
+            let found = oko::floor::floor(&input.question, snapshot.navigation(), corpus);
+            let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
+            pins = found
+                .pins
+                .iter()
+                .map(|pin| (pin.chunk.clone(), 0.0))
+                .collect();
+            floor = Some(found);
             shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
             let (results, mut stats) = super::rank_code_with_stats(
                 &input.question,
@@ -306,16 +318,21 @@ impl OkoServer {
                 "The relevance ranker did not respond, so these are keyword matches in keyword order; treat them as leads and verify them.\n",
             );
         }
+        for note in floor.iter().flat_map(|found| found.notes.iter()) {
+            notes.push_str(note);
+            notes.push('\n');
+        }
         let question = prefix(&input.question, 512);
         let metadata = json!({"question":question, "questionTruncated":question.len() < input.question.len(), "directory":directory,
             "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
-            "investigation":investigation, "retrieval":retrieval,
+            "investigation":investigation, "retrieval":retrieval, "floor":floor,
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
-        let packet = oko::context::build_packet_with_runners_up(
+        let packet = oko::context::build_packet_with_pins(
             corpus,
             &winners,
+            &pins,
             &runners_up,
             &input.question,
             snapshot.navigation(),
@@ -517,7 +534,7 @@ fn prewarm(server: &OkoServer) {
 impl OkoServer {
     #[tool(
         name = "search",
-        description = "Find code by describing its behavior when the exact name is unknown; use grep for known identifiers. Returns up to three ranked excerpts plus related definitions or callers as `path:start-end (label)` with the current file contents, each line prefixed with its file line number and a tab: cite those numbers, drop the prefix when editing. Labels describe only that excerpt: `whole file` and `complete definition(s)` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters; `possible match` was rated below the relevance cutoff; `Possible definition` is a name match only. Results are candidates, not a complete answer: keep searching when a question spans several locations. `Other candidates` lists unshown places, best first.",
+        description = "Find code by describing its behavior or naming a function, class or method; a named definition is always shown. Returns up to three ranked excerpts plus related definitions or callers as `path:start-end (label)` with the current file contents, each line prefixed with its file line number and a tab: cite those numbers, drop the prefix when editing. Labels describe only that excerpt: `whole file` and `complete definition(s)` are shown in full; a `partial excerpt` omits surrounding code, so read the file if the rest matters; `possible match` was rated below the relevance cutoff; `Possible definition` is a name match only. Results are candidates, not a complete answer: keep searching when a question spans several locations. `Other candidates` lists unshown places, best first.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
