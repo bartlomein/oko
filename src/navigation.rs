@@ -113,6 +113,10 @@ pub struct FileFacts {
 }
 
 impl FileFacts {
+    /// Parsed, with definitions worth aligning chunks to.
+    pub fn has_definitions(&self) -> bool {
+        self.valid && !self.definitions.is_empty()
+    }
     pub fn matches_source(&self, path: &str, text: &str) -> bool {
         self.matches_captured_source(path, text.len(), &Sha256::digest(text.as_bytes()).into())
             && self.lines == text.bytes().filter(|b| *b == b'\n').count() + 1

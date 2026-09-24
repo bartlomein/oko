@@ -22,7 +22,7 @@ use std::{
 };
 
 // Bump whenever chunking, tokenization, symbol extraction, or ranking features change.
-const FORMAT_VERSION: u32 = 5;
+const FORMAT_VERSION: u32 = 6;
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -595,10 +595,16 @@ fn prepare_source(
             false,
         )
     } else {
-        let chunks = search::chunk_text(&source.path, &source.text);
+        // Parsed files are chunked along their definitions; the rest by lines.
+        let navigation = navigator.prepare(&source.path, &source.text);
+        let chunks = if navigation.has_definitions() {
+            search::chunk_by_definitions(&source.path, &source.text, &navigation.definitions)
+        } else {
+            search::chunk_text(&source.path, &source.text)
+        };
         (
             preparer.prepare_file(&chunks),
-            Arc::new(navigator.prepare(&source.path, &source.text)),
+            Arc::new(navigation),
             chunks,
             false,
         )

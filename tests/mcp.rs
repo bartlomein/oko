@@ -1894,7 +1894,8 @@ fn cached_syntax_supports_validators_with_one_provider_call_and_bounded_wire_out
     );
     assert_eq!(requests.len(), 1);
     let packet = assert_packet_envelope(&response);
-    assert_eq!(packet["results"][0]["definitionComplete"], true);
+    // The five-line file is one definition-aligned chunk, shown whole.
+    assert_eq!(packet["results"][0]["wholeFile"], true);
     assert_eq!(packet["results"][0]["truncated"], false);
     let related = packet["related"].as_array().unwrap();
     assert_eq!(related.len(), 2);

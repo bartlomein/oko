@@ -216,6 +216,90 @@ pub fn chunk_text(path: &str, text: &str) -> Vec<Chunk> {
     }
     chunks
 }
+/// A chunk boundary this short would leave BM25 too few words to rank on:
+/// adjacent definitions are merged until a section reaches this many lines.
+pub const MIN_SECTION_LINES: usize = 20;
+
+/// Chunks that tile a parsed file along its definitions: every top-level or
+/// member definition starts a section (pulled up over the comments,
+/// decorators and attributes above it), sections shorter than
+/// `MIN_SECTION_LINES` are merged with the next, and long sections are split
+/// like `chunk_text` splits a function. Definitions nested inside a function
+/// body do not start sections. The result covers the file from its first line
+/// to its last, so the cache restores it like any other chunking.
+pub fn chunk_by_definitions(
+    path: &str,
+    text: &str,
+    definitions: &[crate::navigation::Definition],
+) -> Vec<Chunk> {
+    use crate::navigation::DefinitionKind;
+    let p = patterns();
+    let mut lines: Vec<&str> = p.lines.split(text).collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return vec![];
+    }
+    let bodies: Vec<(usize, usize)> = definitions
+        .iter()
+        .filter(|d| matches!(d.kind, DefinitionKind::Function | DefinitionKind::Method))
+        .map(|d| (d.start_line, d.end_line))
+        .collect();
+    let inside_a_body = |d: &crate::navigation::Definition| {
+        bodies
+            .iter()
+            .any(|(start, end)| *start < d.start_line && d.end_line <= *end)
+    };
+    let attached = |line: &str| {
+        let trimmed = line.trim_start();
+        p.comment.is_match(line) || trimmed.starts_with('@') || trimmed.starts_with("#[")
+    };
+    let mut starts: Vec<usize> = definitions
+        .iter()
+        .filter(|d| d.start_line > 0 && !inside_a_body(d))
+        .map(|d| {
+            let mut start = d.start_line - 1;
+            while start > 0 && attached(lines[start - 1]) {
+                start -= 1;
+            }
+            start
+        })
+        .collect();
+    starts.sort_unstable();
+    starts.dedup();
+    // Merge: a boundary stands only when the section before it is long enough.
+    let mut boundaries = vec![0];
+    for start in starts {
+        let previous = *boundaries.last().unwrap();
+        if start > previous && start - previous >= MIN_SECTION_LINES {
+            boundaries.push(start);
+        }
+    }
+    if *boundaries.last().unwrap() != lines.len() {
+        boundaries.push(lines.len());
+    }
+    let mut chunks = vec![];
+    for section in boundaries.windows(2) {
+        let (mut start, section_end) = (section[0], section[1]);
+        while start < section_end {
+            let end = section_end.min(start + FUNCTION_CHUNK_LINES);
+            chunks.push(Chunk {
+                path: path.into(),
+                start_line: start + 1,
+                end_line: end,
+                text: lines[start..end].join("\n"),
+                lexical_score: 0.0,
+            });
+            if end == section_end {
+                break;
+            }
+            start += FUNCTION_CHUNK_LINES - CHUNK_OVERLAP;
+        }
+    }
+    chunks
+}
+
 /// Chunks for a big parsed file: only its functions, methods and class
 /// headers, so a 300 KB source file costs the index its definitions rather
 /// than the whole text. Long definitions are split like ordinary sections.
@@ -1623,6 +1707,60 @@ mod tests {
         assert_eq!(
             read.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
             ["big.ts"]
+        );
+    }
+
+    #[test]
+    fn definition_aligned_chunks_start_at_decorators_merge_short_ones_and_restore() {
+        let mut source = String::from("import os\n\nX = 1\n\n");
+        for i in 0..6 {
+            source.push_str(&format!("@decorator\ndef tiny{i}():\n    return {i}\n\n"));
+        }
+        source.push_str("class Big:\n    \"\"\"Doc.\"\"\"\n");
+        for m in 0..3 {
+            source.push_str(&format!("    @property\n    def method{m}(self):\n"));
+            for j in 0..30 {
+                source.push_str(&format!("        step{j}()\n"));
+            }
+            source.push_str(&format!(
+                "        def inner{m}():\n            pass\n        return {m}\n"
+            ));
+        }
+        let facts = crate::navigation::NavigationPreparer::default().prepare("app.py", &source);
+        let chunks = chunk_by_definitions("app.py", &source, &facts.definitions);
+        let ranges: Vec<_> = chunks.iter().map(|c| (c.start_line, c.end_line)).collect();
+        // Six 4-line functions merge into 20-line sections; every chunk starts
+        // at a decorator or the file/class start, never inside a body.
+        let starts: Vec<&str> = chunks
+            .iter()
+            .map(|c| c.text.lines().next().unwrap().trim())
+            .collect();
+        assert!(
+            starts
+                .iter()
+                .all(|s| s.starts_with('@') || s.starts_with("import") || s.starts_with("class")),
+            "{starts:?}"
+        );
+        assert!(
+            chunks
+                .iter()
+                .all(|c| c.end_line - c.start_line < FUNCTION_CHUNK_LINES)
+        );
+        assert!(chunks.len() >= 4 && chunks.len() <= 8, "{ranges:?}");
+        assert!(
+            !starts.iter().any(|s| s.starts_with("def inner")),
+            "{starts:?}"
+        );
+        // Full coverage, restorable from the persisted ranges.
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(
+            chunks.last().unwrap().end_line,
+            source.trim_end().lines().count()
+        );
+        let prepared = prepare_file(&chunks);
+        assert_eq!(
+            prepared.restore_chunks("app.py", &source).unwrap().len(),
+            chunks.len()
         );
     }
 
