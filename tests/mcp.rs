@@ -2071,3 +2071,55 @@ fn the_coverage_line_counts_skipped_files_and_names_one_the_question_mentions() 
     assert_eq!(metrics["files"]["skippedUnreadable"], 1);
     assert_eq!(metrics["files"]["skippedOverSize"][0][0], "ledger.txt");
 }
+
+#[test]
+fn callers_and_tests_questions_get_listings_instead_of_ranked_excerpts() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::create_dir_all(root.path().join("tests")).unwrap();
+    fs::write(
+        root.path().join("src/auth.py"),
+        "def authenticate(token):\n    return validate(token)\n\ndef login(request):\n    # authenticate first\n    return authenticate(request.token)\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("src/api.py"),
+        "from .auth import authenticate\n\nclass Api:\n    def handle(self, request):\n        return authenticate(request)\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("tests/test_auth.py"),
+        "from src.auth import authenticate\n\ndef test_authenticate():\n    assert authenticate('x')\n",
+    )
+    .unwrap();
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let response = client.search(json!({"question":"who calls authenticate"}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(
+        text.starts_with("Callers of authenticate — 2 calls, 1 import; 1 in comments, 2 in tests hidden\nDefined at src/auth.py:1\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nsrc/auth.py\n  6\tcall\tlogin\treturn authenticate(request.token)\n"),
+        "{text}"
+    );
+    assert!(text.contains("\nsrc/api.py\n  1\timport\t-\tfrom .auth import authenticate\n  5\tcall\tApi.handle\treturn authenticate(request)\n"), "{text}");
+    assert!(!text.contains("No relevant code found"), "{text}");
+    assert_eq!(response["metrics"]["retrieval"]["usages"]["calls"], 2);
+    // The explicit intent works without the phrasing.
+    let explicit = client.search(json!({"question":"authenticate","intent":"callers"}));
+    assert!(
+        body(explicit["result"]["content"][0]["text"].as_str().unwrap())
+            .starts_with("Callers of authenticate — 2 calls")
+    );
+    // Tests for X: paired by name and by mention, ahead of the ranked code.
+    let tests = client.search(json!({"question":"tests for authenticate"}));
+    let text = body(tests["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(text.starts_with("Tests for authenticate:\n  tests/test_auth.py — named after it, mentions it, high: L1, test_authenticate (L4)\n"), "{text}");
+    assert!(
+        text.contains("src/auth.py:1-"),
+        "the definition still follows: {text}"
+    );
+}

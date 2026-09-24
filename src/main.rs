@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::{env, fs::File, io::Read, path::Path, time::Instant};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY] [--no-jev]\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY] [--no-jev]\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general|callers] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -22,6 +22,8 @@ struct Arguments {
     intent: RankingIntent,
     deep: bool,
     max_steps: Option<usize>,
+    /// `--intent callers`: list every use of the named definition.
+    callers: bool,
 }
 
 fn parse_arguments(args: &[String]) -> Result<Arguments> {
@@ -43,6 +45,7 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
         input: None,
         deep: false,
         max_steps: None,
+        callers: false,
         intent: if command == "ask" {
             RankingIntent::Implementation
         } else {
@@ -60,10 +63,15 @@ fn parse_arguments(args: &[String]) -> Result<Arguments> {
                     bail!("Provide --intent only once.");
                 }
                 index += 1;
-                parsed.intent = args
-                    .get(index)
-                    .context("--intent requires implementation, explanation, or general.")?
-                    .parse()?;
+                let value = args.get(index).context(
+                    "--intent requires implementation, explanation, general, or callers.",
+                )?;
+                if value == "callers" && command == "ask" {
+                    parsed.callers = true;
+                    parsed.intent = RankingIntent::Implementation;
+                } else {
+                    parsed.intent = value.parse()?;
+                }
                 intent_seen = true;
             }
             "--deep" if command == "ask" => parsed.deep = true,
@@ -738,6 +746,27 @@ fn run() -> Result<()> {
             // Same floor as the MCP server: named definitions lead the shortlist.
             let found =
                 oko::floor::floor(&parsed.question, snapshot.navigation(), snapshot.chunks());
+            if (parsed.callers || oko::usages::asks_for_callers(&parsed.question))
+                && let Some(pin) = oko::floor::named_target(
+                    &parsed.question,
+                    snapshot.navigation(),
+                    snapshot.chunks(),
+                )
+            {
+                let pin = &pin;
+                let listing = oko::usages::usages(pin, snapshot.navigation(), snapshot.chunks());
+                if parsed.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &json!({"question": parsed.question, "usages": listing})
+                        )?
+                    );
+                } else {
+                    print!("{}", oko::usages::render_usages(&listing));
+                }
+                return Ok(());
+            }
             let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
             let (results, stats) = rank_code_with_stats(
                 &parsed.question,

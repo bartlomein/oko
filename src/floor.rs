@@ -552,6 +552,134 @@ pub fn floor(question: &str, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
     result
 }
 
+/// The pin for one definition: its whole span as a chunk, when the snapshot
+/// holds every line of it.
+pub fn pin_for(
+    navigation: &NavigationIndex,
+    corpus: &[Chunk],
+    reference: DefinitionRef,
+) -> Option<Pin> {
+    let definition = navigation.get(reference);
+    let path = navigation.path(reference);
+    let lines = file_lines(corpus, path);
+    let text = span_text(&lines, definition.start_line, definition.end_line)?;
+    Some(Pin {
+        name: definition.name.clone(),
+        qualified: definition.qualified.clone(),
+        path: path.to_owned(),
+        start_line: definition.start_line,
+        end_line: definition.end_line,
+        kind: definition.kind,
+        chunk: Chunk {
+            path: path.to_owned(),
+            start_line: definition.start_line,
+            end_line: definition.end_line,
+            text,
+            lexical_score: 0.0,
+        },
+    })
+}
+
+/// For "who calls X" and "tests for X": the name may be a plain word
+/// (`authenticate`), so when the identifier rules found nothing, every word
+/// of the question that the index defines is a candidate; the last one wins,
+/// preferring a top-level, non-test definition.
+pub fn named_target(question: &str, navigation: &NavigationIndex, corpus: &[Chunk]) -> Option<Pin> {
+    let found = floor(question, navigation, corpus);
+    if let Some(pin) = found.pins.into_iter().next() {
+        return Some(pin);
+    }
+    let words: Vec<&str> = patterns()
+        .token
+        .find_iter(question)
+        .map(|m| m.as_str())
+        .filter(|w| w.len() >= 3 && !CALLERS_WORDS.contains(&w.to_ascii_lowercase().as_str()))
+        .collect();
+    for word in words.iter().rev() {
+        let mut candidates = navigation.lookup(word).to_vec();
+        if candidates.is_empty() {
+            continue;
+        }
+        candidates.sort_by_cached_key(|r| {
+            let d = navigation.get(*r);
+            (
+                search::is_test_path(navigation.path(*r)),
+                d.qualified != d.name,
+                !d.exported(),
+                navigation.path(*r).len(),
+            )
+        });
+        if let Some(pin) = pin_for(navigation, corpus, candidates[0]) {
+            return Some(pin);
+        }
+    }
+    None
+}
+
+/// Words of a callers or tests question that are never the target.
+const CALLERS_WORDS: &[&str] = &[
+    "who",
+    "calls",
+    "call",
+    "called",
+    "caller",
+    "callers",
+    "uses",
+    "use",
+    "used",
+    "usage",
+    "usages",
+    "where",
+    "what",
+    "which",
+    "all",
+    "the",
+    "every",
+    "each",
+    "places",
+    "sites",
+    "site",
+    "from",
+    "for",
+    "and",
+    "are",
+    "that",
+    "this",
+    "with",
+    "invokes",
+    "invoked",
+    "references",
+    "referenced",
+    "reference",
+    "tests",
+    "test",
+    "specs",
+    "spec",
+    "find",
+    "list",
+    "show",
+    "locate",
+    "existing",
+    "related",
+    "relevant",
+    "unit",
+    "integration",
+    "covering",
+    "cover",
+    "exercising",
+    "function",
+    "method",
+    "class",
+    "definition",
+    "implementation",
+    "code",
+    "file",
+    "files",
+    "module",
+    "internal",
+    "non",
+];
+
 fn leaf_of(identifier: &str) -> &str {
     identifier
         .rsplit(['.', '#', ':'])

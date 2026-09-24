@@ -55,11 +55,12 @@ enum Intent {
     Implementation,
     Explanation,
     General,
+    Callers,
 }
 impl From<Intent> for RankingIntent {
     fn from(value: Intent) -> Self {
         match value {
-            Intent::Implementation => Self::Implementation,
+            Intent::Implementation | Intent::Callers => Self::Implementation,
             Intent::Explanation => Self::Explanation,
             Intent::General => Self::General,
         }
@@ -74,7 +75,8 @@ struct SearchInput {
     /// Subdirectory of the workspace to search. Defaults to the root.
     directory: Option<String>,
     /// implementation (default): code to inspect or change. explanation: how/why,
-    /// including docs and configuration. general: no preference.
+    /// including docs and configuration. general: no preference. callers: list
+    /// every use of the named definition.
     #[serde(default)]
     intent: Intent,
     /// Slower multi-step search; only when a normal search was insufficient.
@@ -164,6 +166,8 @@ impl OkoServer {
         let mut runners_up = Vec::new();
         let mut pins: Vec<(search::Chunk, f64)> = Vec::new();
         let mut floor: Option<oko::floor::Floor> = None;
+        // A usages listing answers the question by itself; no ranking runs.
+        let mut direct: Option<String> = None;
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -208,73 +212,89 @@ impl OkoServer {
             // Definitions the question names lead the shortlist and are shown
             // even if the ranker rejects them.
             let found = oko::floor::floor(&input.question, snapshot.navigation(), corpus);
-            let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
-            pins = found
-                .pins
-                .iter()
-                .map(|pin| (pin.chunk.clone(), 0.0))
-                .collect();
-            floor = Some(found);
-            shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-            let (results, mut stats) = super::rank_code_with_stats(
-                &input.question,
-                &shortlist,
-                corpus,
-                if self.no_jev {
-                    super::Reranker::Lexical
-                } else {
-                    super::Reranker::Jev {
-                        key,
-                        patience: Some(jev_patience()),
-                    }
-                },
-                input.intent.into(),
-                || {
-                    if cancelled() {
-                        bail!("Search cancelled.");
-                    }
-                    Ok(super::further_candidates(
-                        &snapshot,
-                        &shortlist,
-                        &input.question,
-                        input.intent.into(),
-                    ))
-                },
-            )?;
-            lexical_fallback = stats.lexical_fallback;
-            candidates = stats.candidates.clone();
-            runners_up = std::mem::take(&mut stats.runners_up)
-                .into_iter()
-                .map(|r| {
-                    (
-                        search::Chunk {
-                            path: r.path,
-                            start_line: r.start_line,
-                            end_line: r.end_line,
-                            text: r.text,
-                            lexical_score: 0.0,
-                        },
-                        r.score,
-                    )
-                })
-                .collect();
-            let retrieval = Some(serde_json::to_value(stats)?);
-            let winners = results
-                .into_iter()
-                .map(|r| {
-                    (
-                        search::Chunk {
-                            path: r.path,
-                            start_line: r.start_line,
-                            end_line: r.end_line,
-                            text: r.text,
-                            lexical_score: 0.0,
-                        },
-                        r.score,
-                    )
-                })
-                .collect();
-            (winners, None, retrieval)
+            let wants_callers = matches!(input.intent, Intent::Callers)
+                || (!matches!(input.intent, Intent::Explanation)
+                    && oko::usages::asks_for_callers(&input.question));
+            let target = wants_callers
+                .then(|| oko::floor::named_target(&input.question, snapshot.navigation(), corpus))
+                .flatten();
+            if let Some(pin) = target.as_ref() {
+                let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
+                let text = oko::usages::render_usages(&listing);
+                let retrieval = Some(json!({"usages": listing}));
+                direct = Some(text);
+                floor = Some(found);
+                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+                (Vec::new(), None, retrieval)
+            } else {
+                let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
+                pins = found
+                    .pins
+                    .iter()
+                    .map(|pin| (pin.chunk.clone(), 0.0))
+                    .collect();
+                floor = Some(found);
+                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+                let (results, mut stats) = super::rank_code_with_stats(
+                    &input.question,
+                    &shortlist,
+                    corpus,
+                    if self.no_jev {
+                        super::Reranker::Lexical
+                    } else {
+                        super::Reranker::Jev {
+                            key,
+                            patience: Some(jev_patience()),
+                        }
+                    },
+                    input.intent.into(),
+                    || {
+                        if cancelled() {
+                            bail!("Search cancelled.");
+                        }
+                        Ok(super::further_candidates(
+                            &snapshot,
+                            &shortlist,
+                            &input.question,
+                            input.intent.into(),
+                        ))
+                    },
+                )?;
+                lexical_fallback = stats.lexical_fallback;
+                candidates = stats.candidates.clone();
+                runners_up = std::mem::take(&mut stats.runners_up)
+                    .into_iter()
+                    .map(|r| {
+                        (
+                            search::Chunk {
+                                path: r.path,
+                                start_line: r.start_line,
+                                end_line: r.end_line,
+                                text: r.text,
+                                lexical_score: 0.0,
+                            },
+                            r.score,
+                        )
+                    })
+                    .collect();
+                let retrieval = Some(serde_json::to_value(stats)?);
+                let winners = results
+                    .into_iter()
+                    .map(|r| {
+                        (
+                            search::Chunk {
+                                path: r.path,
+                                start_line: r.start_line,
+                                end_line: r.end_line,
+                                text: r.text,
+                                lexical_score: 0.0,
+                            },
+                            r.score,
+                        )
+                    })
+                    .collect();
+                (winners, None, retrieval)
+            }
         };
         if cancelled() {
             bail!("Search cancelled.");
@@ -324,6 +344,19 @@ impl OkoServer {
             notes.push_str(note);
             notes.push('\n');
         }
+        // "Tests for X": paired by file name and by mention, before the ranked code.
+        if oko::ranking::asks_for_tests(&input.question)
+            && !input.deep
+            && let Some(pin) =
+                oko::floor::named_target(&input.question, snapshot.navigation(), corpus)
+        {
+            let tests = oko::usages::tests_for(&pin, snapshot.navigation(), corpus);
+            notes.push_str(&oko::usages::render_tests(&pin, &tests));
+        }
+        if let Some(text) = &direct {
+            notes.push('\n');
+            notes.push_str(text);
+        }
         let question = prefix(&input.question, 512);
         let metadata = json!({"question":question, "questionTruncated":question.len() < input.question.len(), "directory":directory,
             "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
@@ -346,6 +379,7 @@ impl OkoServer {
             packet,
             &notes,
             &candidates,
+            direct.is_some(),
             started,
             context_started,
         )
@@ -505,13 +539,15 @@ fn packet_result(
     mut packet: oko::context::ContextPacket,
     notes: &str,
     candidates: &[super::CandidateScore],
+    // The notes already answer the question (a usages listing).
+    direct_answer: bool,
     started: Instant,
     context_started: Instant,
 ) -> Result<CallToolResult> {
     let mut packet_budget = serde_json::to_vec(&packet)?.len().min(MAX_MCP_RESULT_BYTES);
     loop {
         let mut text = notes.to_owned();
-        if packet.results.is_empty() {
+        if packet.results.is_empty() && !direct_answer {
             text.push_str(
                 "No relevant code found. Rephrase the question, or use grep for exact identifiers.\n",
             );
