@@ -804,7 +804,9 @@ const ABRIDGED_HEAD_LINES_WITH_WINDOW: usize = 30;
 const ABRIDGED_TAIL_LINES: usize = 10;
 /// A class outline keeps this many header lines before its first member.
 const OUTLINE_HEADER_LINES: usize = 12;
-const OUTLINE_MEMBERS: usize = 200;
+/// Members listed in an outline; a 2,000-line class with 100 methods would
+/// otherwise take most of the response.
+const OUTLINE_MEMBERS: usize = 60;
 
 /// A complete definition longer than the whole-return limit, shown as its
 /// signature, the start of its body and its end, or as a member outline when
