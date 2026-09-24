@@ -168,6 +168,8 @@ impl OkoServer {
         let mut floor: Option<oko::floor::Floor> = None;
         // A usages listing answers the question by itself; no ranking runs.
         let mut direct: Option<String> = None;
+        // A listing shown beside the ranked code, for mixed questions.
+        let mut accompanying: Option<String> = None;
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -218,7 +220,14 @@ impl OkoServer {
             let target = wants_callers
                 .then(|| oko::floor::named_target(&input.question, snapshot.navigation(), corpus))
                 .flatten();
-            if let Some(pin) = target.as_ref() {
+            // "Definition and callers": the listing accompanies the ranked code.
+            let listing_only = !matches!(input.intent, Intent::Callers)
+                && oko::usages::asks_for_code_too(&input.question);
+            if let Some(pin) = target.as_ref().filter(|_| listing_only) {
+                let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
+                accompanying = Some(oko::usages::render_usages(&listing));
+            }
+            if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
                 let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
                 let text = oko::usages::render_usages(&listing);
                 let retrieval = Some(json!({"usages": listing}));
@@ -353,7 +362,7 @@ impl OkoServer {
             let tests = oko::usages::tests_for(&pin, snapshot.navigation(), corpus);
             notes.push_str(&oko::usages::render_tests(&pin, &tests));
         }
-        if let Some(text) = &direct {
+        if let Some(text) = accompanying.as_ref().or(direct.as_ref()) {
             notes.push('\n');
             notes.push_str(text);
         }

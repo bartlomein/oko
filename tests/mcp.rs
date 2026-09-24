@@ -2114,6 +2114,14 @@ fn callers_and_tests_questions_get_listings_instead_of_ranked_excerpts() {
         body(explicit["result"]["content"][0]["text"].as_str().unwrap())
             .starts_with("Callers of authenticate — 2 calls")
     );
+    // "Definition and callers": the listing accompanies the ranked code.
+    let mixed = client.search(json!({"question":"authenticate function definition and callers"}));
+    let text = body(mixed["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(
+        text.starts_with("Callers of authenticate — 2 calls"),
+        "{text}"
+    );
+    assert!(text.contains("src/auth.py:1-"), "{text}");
     // Tests for X: paired by name and by mention, ahead of the ranked code.
     let tests = client.search(json!({"question":"tests for authenticate"}));
     let text = body(tests["result"]["content"][0]["text"].as_str().unwrap());

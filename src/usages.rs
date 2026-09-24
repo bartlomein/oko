@@ -84,7 +84,7 @@ fn patterns() -> &'static Patterns {
     static P: OnceLock<Patterns> = OnceLock::new();
     P.get_or_init(|| Patterns {
         callers: Regex::new(
-            r"(?i)\b(?:callers?|usages?|call ?sites?|references?|uses|users|consumers|invocations?)\s+(?:of|to|for)\b|\bwho\s+(?:calls|uses|invokes|references)\b|\bwhere\s+(?:is|are|it's|its)\b[^\n]{0,60}\b(?:called|used|invoked|referenced|consumed)\b|\b(?:all|every|each)\s+(?:the\s+)?(?:places?|sites?|locations?)\s+(?:that|which|where)\b[^.\n]{0,40}\b(?:calls?|uses?|invokes?)\b",
+            r"(?i)\b(?:callers?|usages?|usage|call ?sites?|consumers|invocations?|uses of|calls to|references to)\b|\bwho\s+(?:calls|uses|invokes|references)\b|\bwhere\b[^\n]{0,60}\b(?:is|are|gets?|get)\s+(?:called|used|invoked|referenced|consumed)\b|\bwhere\s+(?:is|are)\b[^\n]{0,60}\b(?:called|used|invoked|referenced|consumed)\b|\b(?:all|every|each)\s+(?:the\s+)?(?:places?|sites?|locations?)\s+(?:that|which|where)\b[^.\n]{0,40}\b(?:calls?|uses?|invokes?)\b",
         )
         .unwrap(),
         import: Regex::new(r"^\s*(?:import\b|from\s+\S+\s+import\b|use\s+[A-Za-z_:]|require\s*\(|require\s+'|include\s+[A-Z]|extend\s+[A-Z]|using\s+|#include\b|export\s+\{|export\s+\*)").unwrap(),
@@ -95,6 +95,18 @@ fn patterns() -> &'static Patterns {
 /// The question asks who uses a name rather than what the name does.
 pub fn asks_for_callers(question: &str) -> bool {
     patterns().callers.is_match(question)
+}
+
+/// The question asks for the definition or behaviour as well ("definition
+/// and callers", "implementation and usage"): the listing then accompanies
+/// the ranked code instead of replacing it.
+pub fn asks_for_code_too(question: &str) -> bool {
+    static CODE: OnceLock<Regex> = OnceLock::new();
+    CODE.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:definitions?|implementations?|implemented|implement|how\b|what\b|why\b|logic|explain|body|source)\b")
+            .unwrap()
+    })
+    .is_match(question)
 }
 
 fn lines_by_path(corpus: &[Chunk]) -> BTreeMap<&str, BTreeMap<usize, &str>> {
@@ -458,11 +470,26 @@ mod tests {
             "callers of wsgi_app",
             "who calls dispatch_request",
             "where is Context.Next called from",
+            "where Context.Next is called from internal callers non-test",
             "all the places that use inferRemoteSize",
             "usages of `Upload`",
+            "sanitizePathChars callers",
+            "calls to debugPrintError function usages",
+            "mockFileSystem type usage in gin",
         ] {
             assert!(asks_for_callers(q), "{q}");
         }
+        // "Referenced by posts" and "used by Upload" describe the code, not a listing.
+        for q in [
+            "Upload model that represents an uploaded file referenced by posts",
+            "HasUrl concern module used by Upload",
+        ] {
+            assert!(!asks_for_callers(q), "{q}");
+        }
+        assert!(asks_for_code_too(
+            "renderToHTMLOrFlight app render function definition and callers"
+        ));
+        assert!(!asks_for_code_too("sanitizePathChars callers"));
         for q in [
             "wsgi_app method definition",
             "how does the router match dynamic segments",
