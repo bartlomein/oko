@@ -347,8 +347,12 @@ impl PreparedFile {
         if lines.is_empty() {
             return (self.chunks.is_empty() && self.matches(&[])).then(Vec::new);
         }
-        if self.path != path || self.chunks.is_empty() {
+        if self.path != path {
             return None;
+        }
+        if self.chunks.is_empty() {
+            // A definition-chunked file with nothing to chunk is still cached.
+            return (self.parse_only && self.matches(&[])).then(Vec::new);
         }
         let mut previous_end: usize = 0;
         let mut chunks = Vec::with_capacity(self.chunks.len());
@@ -429,8 +433,12 @@ impl FilePreparer {
         prepare_file_with_stems(chunks, &mut self.stems)
     }
     /// For chunks that cover only a file's definitions (see `chunk_definitions`).
-    pub(crate) fn prepare_definition_chunks(&mut self, chunks: &[Chunk]) -> PreparedFile {
-        prepare_chunks_with_stems(chunks, &mut self.stems, true)
+    pub(crate) fn prepare_definition_chunks(
+        &mut self,
+        path: &str,
+        chunks: &[Chunk],
+    ) -> PreparedFile {
+        prepare_chunks_with_stems(path, chunks, &mut self.stems, true)
     }
 }
 
@@ -440,15 +448,18 @@ fn prepare_file(chunks: &[Chunk]) -> PreparedFile {
 }
 
 fn prepare_file_with_stems(chunks: &[Chunk], stems: &mut HashMap<String, String>) -> PreparedFile {
-    prepare_chunks_with_stems(chunks, stems, false)
+    let path = chunks.first().map_or("", |chunk| chunk.path.as_str());
+    prepare_chunks_with_stems(path, chunks, stems, false)
 }
 
+/// `path` is given, not taken from the chunks: a definition-chunked file may
+/// have no chunks at all, and two such files must not share an empty path.
 fn prepare_chunks_with_stems(
+    path: &str,
     chunks: &[Chunk],
     stems: &mut HashMap<String, String>,
     parse_only: bool,
 ) -> PreparedFile {
-    let path = chunks.first().map_or("", |chunk| chunk.path.as_str());
     debug_assert!(chunks.iter().all(|chunk| chunk.path == path));
     let supported = patterns().symbol_extension.is_match(path);
     let pattern = if patterns().typed_extension.is_match(path) {
@@ -1629,7 +1640,7 @@ mod tests {
         );
         assert!(chunks[0].text.starts_with("export class Server"));
         assert!(chunks.iter().all(|c| !c.text.contains("TABLE")));
-        let prepared = FilePreparer::default().prepare_definition_chunks(&chunks);
+        let prepared = FilePreparer::default().prepare_definition_chunks("server.ts", &chunks);
         assert_eq!(prepared.restore_chunks("server.ts", text).unwrap().len(), 3);
         assert!(
             prepare_file(&chunks)
@@ -1641,6 +1652,12 @@ mod tests {
         let facts = crate::navigation::NavigationPreparer::default().prepare("table.ts", table);
         let none = chunk_definitions("table.ts", table, &facts.definitions);
         assert!(none.is_empty());
+        let empty = FilePreparer::default().prepare_definition_chunks("table.ts", &none);
+        assert_eq!(empty.path, "table.ts");
+        assert_eq!(empty.restore_chunks("table.ts", table), Some(vec![]));
+        // Two chunkless files must coexist in one corpus.
+        let other = FilePreparer::default().prepare_definition_chunks("other.ts", &none);
+        assert!(PreparedCorpus::from_files(&[], [&empty, &other]).is_ok());
     }
 }
 

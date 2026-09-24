@@ -589,7 +589,7 @@ fn prepare_source(
         let navigation = navigator.prepare(&source.path, &source.text);
         let chunks = search::chunk_definitions(&source.path, &source.text, &navigation.definitions);
         (
-            preparer.prepare_definition_chunks(&chunks),
+            preparer.prepare_definition_chunks(&source.path, &chunks),
             Arc::new(navigation),
             chunks,
             false,

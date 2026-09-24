@@ -275,26 +275,7 @@ const PROSE: &[&str] = &[
     "Middleware",
     "Plugin",
     "Plugins",
-    "Image",
-    "Images",
-    "Page",
-    "Pages",
     "Session",
-    "User",
-    "Users",
-    "Post",
-    "Posts",
-    "Topic",
-    "Topics",
-    "Group",
-    "Groups",
-    "Category",
-    "Categories",
-    "Site",
-    "Theme",
-    "Themes",
-    "Email",
-    "Emails",
     "Token",
     "Tokens",
     "Key",
@@ -303,6 +284,8 @@ const PROSE: &[&str] = &[
     "Store",
     "Context",
     "Engine",
+    "Server",
+    "Client",
     "Build",
     "Dev",
     "Static",
@@ -311,7 +294,6 @@ const PROSE: &[&str] = &[
     "Local",
     "Public",
     "Private",
-    "Server",
     "Content",
     "Encoding",
     "Type",
@@ -324,8 +306,6 @@ const PROSE: &[&str] = &[
     "Names",
     "Path",
     "Paths",
-    "Upload",
-    "Uploads",
 ];
 
 fn is_word_char(c: char) -> bool {
@@ -414,9 +394,13 @@ pub fn identifiers(question: &str) -> Vec<String> {
         }
         if token.starts_with(|c: char| c.is_uppercase()) && has_lower {
             let after = question[found_token.end()..].trim_start();
-            let next = matches
-                .get(index + 1)
-                .map(|m| m.as_str().to_ascii_lowercase());
+            // "Upload ActiveRecord model": the framework name in between does
+            // not hide the noun.
+            let next = matches[index + 1..]
+                .iter()
+                .map(|m| m.as_str())
+                .find(|word| !STOP.contains(word))
+                .map(str::to_ascii_lowercase);
             let previous = index
                 .checked_sub(1)
                 .and_then(|i| matches.get(i))
@@ -677,6 +661,11 @@ mod tests {
                 "Upload ActiveRecord model definition class Upload",
                 &["Upload"],
             ),
+            (
+                "Upload ActiveRecord model that represents an uploaded file",
+                &["Upload"],
+            ),
+            ("Post model where uploads are validated", &["Post"]),
             (
                 "NextNodeServer subclass extending base Server",
                 &["NextNodeServer"],
