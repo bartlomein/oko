@@ -574,7 +574,15 @@ fn lookup(navigation: &NavigationIndex, identifier: &str) -> Vec<DefinitionRef> 
     navigation
         .lookup_insensitive(leaf)
         .into_iter()
-        .filter(|r| navigation.get(*r).name.chars().next().map(|c| c.is_uppercase()) == first)
+        .filter(|r| {
+            navigation
+                .get(*r)
+                .name
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                == first
+        })
         .collect()
 }
 

@@ -1040,6 +1040,20 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         if excerpt["exactName"] == true {
             label.push_str(", exact name match");
         }
+        let omitted: Vec<(u64, u64)> = excerpt["omitted"]
+            .as_array()
+            .map(|ranges| {
+                ranges
+                    .iter()
+                    .map(|r| (r[0].as_u64().unwrap(), r[1].as_u64().unwrap()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if excerpt["outline"] == true {
+            label.push_str(", outline");
+        } else if !omitted.is_empty() {
+            label.push_str(", body abridged");
+        }
         let header = format!(
             "{}:{}-{} ({label})\n",
             excerpt["path"].as_str().unwrap(),
@@ -1053,13 +1067,21 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         let fence = body.lines().next().unwrap();
         assert!(fence.len() >= 3 && fence.chars().all(|c| c == '`'));
         // The agent reads each line's number instead of counting from the header.
-        let numbered = excerpt["text"]
-            .as_str()
-            .unwrap()
-            .split('\n')
-            .zip(excerpt["startLine"].as_u64().unwrap()..)
-            .map(|(line, number)| format!("{number}\t{line}\n"))
-            .collect::<String>();
+        let mut number = excerpt["startLine"].as_u64().unwrap();
+        let mut gaps = omitted.iter().peekable();
+        let mut numbered = String::new();
+        for line in excerpt["text"].as_str().unwrap().split('\n') {
+            while let Some((from, to)) = gaps.next_if(|(from, _)| *from <= number) {
+                numbered.push_str(&format!(
+                    "… {} lines omitted ({}:{from}-{to}) …\n",
+                    to - from + 1,
+                    excerpt["path"].as_str().unwrap()
+                ));
+                number = to + 1;
+            }
+            numbered.push_str(&format!("{number}\t{line}\n"));
+            number += 1;
+        }
         assert!(
             body[fence.len() + 1..].starts_with(&format!("{numbered}{fence}\n")),
             "{header}: {text}"
@@ -1253,22 +1275,25 @@ fn headerless_primary_keeps_late_decision_evidence_when_the_winner_fits() {
     let start = primary["startLine"].as_u64().unwrap() as usize;
     let end = primary["endLine"].as_u64().unwrap() as usize;
     assert!(start <= winner.start_line && end >= winner.end_line);
-    assert_eq!(primary["text"], lines[start - 1..end].join("\n"));
+    // The 400-line function is complete but too long to show whole: its
+    // signature, the ranked evidence and its end are kept, the rest marked.
+    assert_eq!((start, end), (1, 400));
+    let text = primary["text"].as_str().unwrap();
+    assert!(text.starts_with("pub fn process_batch() {\n"));
+    assert!(text.contains("!index.contains(record.key)"));
+    assert!(text.contains("persist(accepted)"));
+    assert!(text.ends_with("\n}"));
+    assert_eq!(primary["truncated"], false);
+    assert_eq!(primary["definitionComplete"], true);
+    assert_eq!(primary["omitted"], json!([[31, 115], [236, 390]]));
+    let rendered = response["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        primary["text"]
-            .as_str()
-            .unwrap()
-            .contains("!index.contains(record.key)")
+        rendered.contains("worker.rs:1-400 (complete definition, body abridged)\n"),
+        "{rendered}"
     );
     assert!(
-        primary["text"]
-            .as_str()
-            .unwrap()
-            .contains("persist(accepted)")
-    );
-    assert_eq!(
-        primary["truncated"], true,
-        "the containing function is still incomplete"
+        rendered.contains("… 85 lines omitted (worker.rs:31-115) …\n116\t"),
+        "{rendered}"
     );
 }
 
