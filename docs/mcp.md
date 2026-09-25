@@ -400,6 +400,21 @@ shorter path. A name defined five or more times outside tests (`render`,
 Other definitions of a pinned name are listed in a note. The metrics record
 the identifiers found, the pins and the notes under `floor`.
 
+## Several questions in one call
+
+`questions` takes two to eight independent questions. Each gets its own
+shortlist, floor and ranking at the same time, on its own thread; only the
+first question sends the requests judged beside its shortlist and the
+recovery call, so a four-question call costs about six Jev requests where
+four separate calls cost twelve. The answer is one packet: winners are taken
+one per question before any question's second, every excerpt is labelled
+with the question it answers (`Q2`; `Q1+Q3` when two questions led to the
+same code), a duplicate is shown once, and a question that found nothing is
+named in a note. The excerpt cap grows by two per extra question (up to
+twelve) and the response cap by 5,000 bytes (up to 36,000). The first
+question leads the notes, the floor and the metrics; `retrieval.questions`
+records each question's results, pins, Jev calls and timing.
+
 ## Names as a parameter
 
 `symbols` takes exact names, comma-separated, up to twelve ("wsgi_app,
