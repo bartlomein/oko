@@ -430,7 +430,35 @@ const FILE_EXTENSIONS: &[&str] = &[
 
 /// Everything the question names that the index defines, as pins.
 pub fn floor(question: &str, navigation: &NavigationIndex, corpus: &[Chunk]) -> Floor {
-    let identifiers = identifiers(question);
+    resolve(
+        identifiers(question),
+        question,
+        navigation,
+        corpus,
+        MAX_PINS,
+    )
+}
+
+/// Names given explicitly (`symbols`): each is looked up like a question's
+/// identifier, with the names themselves as the hint text and room for all.
+pub fn pins_for_names(names: &[String], navigation: &NavigationIndex, corpus: &[Chunk]) -> Floor {
+    let hint = names.join(" ");
+    resolve(
+        names.to_vec(),
+        &hint,
+        navigation,
+        corpus,
+        names.len().max(1),
+    )
+}
+
+fn resolve(
+    identifiers: Vec<String>,
+    question: &str,
+    navigation: &NavigationIndex,
+    corpus: &[Chunk],
+    max_pins: usize,
+) -> Floor {
     let mut result = Floor {
         identifiers: identifiers.clone(),
         ..Floor::default()
@@ -438,7 +466,7 @@ pub fn floor(question: &str, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
     let mut lines_by_path: BTreeMap<&str, BTreeMap<usize, &str>> = BTreeMap::new();
     let mut seen: HashSet<(String, usize, usize)> = HashSet::new();
     for identifier in &identifiers {
-        if result.pins.len() == MAX_PINS {
+        if result.pins.len() == max_pins {
             break;
         }
         let mut candidates = lookup(navigation, identifier);

@@ -118,10 +118,21 @@ pub fn asks_for_code_too(question: &str) -> bool {
     .is_match(question)
 }
 
-fn lines_by_path(corpus: &[Chunk]) -> BTreeMap<&str, BTreeMap<usize, &str>> {
+/// Lines of every file that mentions `name` somewhere: the substring test
+/// over chunk text is the cheap part, and it rules out most files.
+fn lines_by_path<'a>(
+    corpus: &'a [Chunk],
+    name: &str,
+) -> BTreeMap<&'a str, BTreeMap<usize, &'a str>> {
+    let mentioning: std::collections::HashSet<&str> = corpus
+        .iter()
+        .filter(|chunk| chunk.text.contains(name))
+        .map(|chunk| chunk.path.as_str())
+        .collect();
     let mut files: BTreeMap<&str, BTreeMap<usize, &str>> = BTreeMap::new();
     for chunk in corpus {
-        if chunk.start_line == 0
+        if !mentioning.contains(chunk.path.as_str())
+            || chunk.start_line == 0
             || chunk.text.split('\n').count() != chunk.end_line - chunk.start_line + 1
         {
             continue;
@@ -196,7 +207,7 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
         definition: Some((pin.path.clone(), pin.start_line)),
         ..Usages::default()
     };
-    let files = lines_by_path(corpus);
+    let files = lines_by_path(corpus, name);
     let mut per_file: Vec<(&str, Vec<Use>)> = Vec::new();
     for (path, lines) in &files {
         if !lines.values().any(|line| line.contains(name)) {
@@ -273,6 +284,124 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
     result.omitted_rows = total_rows - shown.len();
     result.shown = shown;
     result
+}
+
+/// Files that use a name, most first, with counts: the answer to "what
+/// depends on X" in one line, and the shape of `mode: enumerate`.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsedBy {
+    pub name: String,
+    pub qualified: String,
+    /// Non-test files, most uses first: `(path, uses, first line)`.
+    pub files: Vec<(String, usize, usize)>,
+    pub uses: usize,
+    pub test_files: usize,
+    pub tests: usize,
+}
+
+/// A summary is offered on its own only when this many files use the name.
+pub const USED_BY_MIN_FILES: usize = 4;
+const USED_BY_SHOWN: usize = 8;
+const ENUMERATE_FILES: usize = 40;
+
+pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
+    let name = pin.name.as_str();
+    let mut result = UsedBy {
+        name: pin.name.clone(),
+        qualified: pin.qualified.clone(),
+        ..UsedBy::default()
+    };
+    for (path, lines) in &lines_by_path(corpus, name) {
+        // Dependents are other code files: not the definition's own file, not
+        // documentation.
+        if *path == pin.path || is_docs_path(path) {
+            continue;
+        }
+        let mut count = 0;
+        let mut first = 0;
+        for (number, text) in lines {
+            if patterns().comment.is_match(text) || !contains_word(text, name) {
+                continue;
+            }
+            count += 1;
+            if first == 0 {
+                first = *number;
+            }
+        }
+        if count == 0 {
+            continue;
+        }
+        if search::is_test_path(path) {
+            result.test_files += 1;
+            result.tests += count;
+        } else {
+            result.uses += count;
+            result.files.push(((*path).to_owned(), count, first));
+        }
+    }
+    result
+        .files
+        .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    result
+}
+
+/// One line under a pinned definition: `Used by 41 files (386 uses): a.rb
+/// (12), b.rb (9), … +33 more; 19 test files`. Nothing when few files use it.
+pub fn render_used_by(summary: &UsedBy) -> Option<String> {
+    if summary.files.len() < USED_BY_MIN_FILES {
+        return None;
+    }
+    let shown: Vec<String> = summary
+        .files
+        .iter()
+        .take(USED_BY_SHOWN)
+        .map(|(path, count, _)| format!("{path} ({count})"))
+        .collect();
+    let more = summary.files.len().saturating_sub(USED_BY_SHOWN);
+    let mut line = format!(
+        "`{}` is used by {} files ({} uses): {}",
+        summary.qualified,
+        summary.files.len(),
+        summary.uses,
+        shown.join(", ")
+    );
+    if more > 0 {
+        line.push_str(&format!(", +{more} more"));
+    }
+    if summary.test_files > 0 {
+        line.push_str(&format!("; {} test files", summary.test_files));
+    }
+    line.push_str(". Ask \"who uses ");
+    line.push_str(&summary.name);
+    line.push_str("\" for every line.\n");
+    Some(line)
+}
+
+/// `mode: enumerate`: every file that uses the name, one row each with the
+/// count and first line, up to 40, then a count of the rest.
+pub fn render_enumerate(summary: &UsedBy) -> String {
+    let mut out = format!(
+        "Files using {} — {} files, {} uses",
+        summary.qualified,
+        summary.files.len(),
+        summary.uses
+    );
+    if summary.test_files > 0 {
+        out.push_str(&format!(
+            "; {} test files ({} uses) hidden",
+            summary.test_files, summary.tests
+        ));
+    }
+    out.push('\n');
+    for (path, count, first) in summary.files.iter().take(ENUMERATE_FILES) {
+        out.push_str(&format!("  {path}:{first}\t{count}\n"));
+    }
+    let more = summary.files.len().saturating_sub(ENUMERATE_FILES);
+    if more > 0 {
+        out.push_str(&format!("  … {more} more files\n"));
+    }
+    out
 }
 
 /// The rendered usages answer.
@@ -376,7 +505,7 @@ fn named_after(test_path: &str, file_stem: &str, name: &str) -> bool {
 /// mentioning the name (medium), each with the mentioning lines and their
 /// enclosing test function.
 pub fn tests_for(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Vec<TestMatch> {
-    let files = lines_by_path(corpus);
+    let files = lines_by_path(corpus, &pin.name);
     let file_stem = stem(&pin.path);
     let mut matches = Vec::new();
     for (path, lines) in &files {
@@ -577,6 +706,52 @@ mod tests {
             text.contains("tests/test_basic.py — mentions it, medium: test_wsgi_app (L2)"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn used_by_counts_files_and_renders_a_summary_only_when_widely_used() {
+        let mut files: Vec<(String, String)> = vec![(
+            "app/models/upload.rb".into(),
+            "class Upload < ActiveRecord::Base\n  def url; end\nend\n".into(),
+        )];
+        for i in 0..5 {
+            files.push((format!("app/models/user{i}.rb"), format!("class User{i}\n  belongs_to :avatar, class_name: 'Upload'\n  def avatar_upload; Upload.find(1); end\nend\n")));
+        }
+        files.push((
+            "spec/models/upload_spec.rb".into(),
+            "describe Upload do\n  it { Upload.new }\nend\n".into(),
+        ));
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let (chunks, index) = corpus(&refs);
+        let found = floor::floor("Upload model", &index, &chunks);
+        let summary = used_by(&found.pins[0], &chunks);
+        assert_eq!(
+            (
+                summary.files.len(),
+                summary.uses,
+                summary.test_files,
+                summary.tests
+            ),
+            (5, 10, 1, 2)
+        );
+        let line = render_used_by(&summary).unwrap();
+        assert!(
+            line.starts_with("`Upload` is used by 5 files (10 uses): app/models/user0.rb (2), "),
+            "{line}"
+        );
+        assert!(
+            line.contains("; 1 test files. Ask \"who uses Upload\" for every line."),
+            "{line}"
+        );
+        let listing = render_enumerate(&summary);
+        assert!(listing.starts_with("Files using Upload — 5 files, 10 uses; 1 test files (2 uses) hidden\n  app/models/user0.rb:2\t2\n"), "{listing}");
+        // Few users: no summary line.
+        let (chunks, index) = corpus(&refs[..2]);
+        let found = floor::floor("Upload model", &index, &chunks);
+        assert!(render_used_by(&used_by(&found.pins[0], &chunks)).is_none());
     }
 
     #[test]

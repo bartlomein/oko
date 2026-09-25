@@ -66,12 +66,42 @@ impl From<Intent> for RankingIntent {
         }
     }
 }
+/// Names as one string, comma- or space-separated: an array parameter would
+/// cost an `anyOf` in the schema, and Codex sends arrays as strings anyway.
+fn split_names(text: &str) -> Vec<String> {
+    text.split([',', '\n', ' '])
+        .map(|name| name.trim().trim_matches('`'))
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A listing instead of ranked excerpts. Deserialize only: a `default`
+/// keyword in the schema made Claude Code reject calls that omit the field,
+/// and variant docs would turn the enum into a `oneOf`.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "lowercase")]
+#[schemars(inline)]
+enum Mode {
+    Usages,
+    Enumerate,
+}
+
+/// Names per call in `symbols`.
+const MAX_SYMBOLS: usize = 12;
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SearchInput {
     /// Behavior or code to locate, in the user's terms.
     /// For edits, describe the existing code; keep stated exclusions.
-    question: String,
+    question: Option<String>,
+    /// Exact names, comma-separated (up to 12): their definitions, whole,
+    /// unranked. "wsgi_app, Flask.dispatch_request"
+    symbols: Option<String>,
+    /// usages: every use of the named definition, by line; enumerate: every
+    /// file using it. Needs a name.
+    mode: Option<Mode>,
     /// Subdirectory of the workspace to search. Defaults to the root.
     directory: Option<String>,
     /// implementation (default): code to inspect or change. explanation: how/why,
@@ -100,8 +130,26 @@ struct OkoServer {
 }
 impl OkoServer {
     fn directory(&self, input: &SearchInput) -> Result<PathBuf> {
-        if input.question.trim().is_empty() || input.question.len() > 4096 {
-            bail!("Question must contain 1–4096 bytes of nonblank text.");
+        let question = input.question.as_deref().unwrap_or("");
+        let symbols = input
+            .symbols
+            .as_deref()
+            .map(split_names)
+            .unwrap_or_default();
+        if symbols.is_empty() && (question.trim().is_empty() || question.len() > 4096) {
+            bail!("Question must contain 1–4096 bytes of nonblank text, or name symbols.");
+        }
+        if question.len() > 4096 {
+            bail!("Question must contain at most 4096 bytes.");
+        }
+        if symbols.len() > MAX_SYMBOLS {
+            bail!("symbols takes at most {MAX_SYMBOLS} names.");
+        }
+        if symbols.iter().any(|name| name.len() > 200) {
+            bail!("A symbol name must be at most 200 bytes.");
+        }
+        if input.deep && (input.mode.is_some() || !symbols.is_empty()) {
+            bail!("deep cannot be combined with symbols or mode.");
         }
         if input.max_steps.is_some() && !input.deep {
             bail!("max_steps requires deep=true.");
@@ -126,6 +174,22 @@ impl OkoServer {
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
         let started = Instant::now();
         let directory = self.directory(&input)?;
+        let symbols = input
+            .symbols
+            .as_deref()
+            .map(split_names)
+            .unwrap_or_default();
+        // Names alone: the question for ranking, notes and metrics is the names.
+        let question_text = input
+            .question
+            .clone()
+            .filter(|q| !q.trim().is_empty())
+            .unwrap_or_else(|| symbols.join(" "));
+        let input = SearchInput {
+            question: Some(question_text),
+            ..input
+        };
+        let question = input.question.as_deref().expect("set above");
         // Credentials belong to the operator-selected root, never a model-selected subdirectory.
         let key = if self.no_jev {
             None
@@ -170,11 +234,12 @@ impl OkoServer {
         let mut direct: Option<String> = None;
         // A listing shown beside the ranked code, for mixed questions.
         let mut accompanying: Option<String> = None;
+        let mut symbols_missing: Vec<String> = Vec::new();
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
             let run = oko::investigate::investigate_snapshot_with(
-                &input.question,
+                question,
                 &snapshot,
                 input.intent.into(),
                 Some(input.max_steps.unwrap_or(5)),
@@ -207,102 +272,155 @@ impl OkoServer {
         } else {
             let shortlist_started = Instant::now();
             let shortlist = if self.no_jev {
-                snapshot.rank(&input.question)
+                snapshot.rank(question)
             } else {
-                snapshot.rank_with_intent(&input.question, input.intent.into())
+                snapshot.rank_with_intent(question, input.intent.into())
             };
             // Definitions the question names lead the shortlist and are shown
             // even if the ranker rejects them.
-            let found = oko::floor::floor(&input.question, snapshot.navigation(), corpus);
-            let wants_callers = matches!(input.intent, Intent::Callers)
-                || (!matches!(input.intent, Intent::Explanation)
-                    && oko::usages::asks_for_callers(&input.question));
-            let target = wants_callers
-                .then(|| oko::floor::named_target(&input.question, snapshot.navigation(), corpus))
-                .flatten();
-            // "Definition and callers": the listing accompanies the ranked code.
-            let listing_only = matches!(input.intent, Intent::Callers)
-                || oko::usages::listing_can_stand_alone(&input.question);
-            if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
-                let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
-                accompanying = Some(oko::usages::render_usages(&listing));
-            }
-            if let Some(pin) = target.as_ref().filter(|_| listing_only) {
-                let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
-                let text = oko::usages::render_usages(&listing);
-                let retrieval = Some(json!({"usages": listing}));
-                direct = Some(text);
+            let found = if symbols.is_empty() {
+                oko::floor::floor(question, snapshot.navigation(), corpus)
+            } else {
+                oko::floor::pins_for_names(&symbols, snapshot.navigation(), corpus)
+            };
+            // `mode: enumerate`: every file that uses the name; no ranking.
+            if input.mode == Some(Mode::Enumerate) {
+                let Some(pin) =
+                    found.pins.first().cloned().or_else(|| {
+                        oko::floor::named_target(question, snapshot.navigation(), corpus)
+                    })
+                else {
+                    bail!("mode requires a name the index defines, in symbols or the question.");
+                };
+                let summary = oko::usages::used_by(&pin, corpus);
+                direct = Some(oko::usages::render_enumerate(&summary));
+                floor = Some(found);
+                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+                (Vec::new(), None, Some(json!({"usedBy": summary})))
+            } else if !symbols.is_empty() && input.mode.is_none() {
+                // Names alone: their definitions, whole, in the order asked.
+                if found.pins.is_empty() {
+                    bail!(
+                        "No definition named {} in the index.",
+                        symbols
+                            .iter()
+                            .map(|s| format!("`{s}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                // As pins, not winners: a pin keeps its own span (a long class
+                // becomes an outline); a winner would be focused by the words.
+                pins = found
+                    .pins
+                    .iter()
+                    .map(|pin| (pin.chunk.clone(), 1.0))
+                    .collect();
+                let missing: Vec<&String> = symbols
+                    .iter()
+                    .filter(|name| {
+                        let leaf = name.rsplit(['.', ':', '#']).next().unwrap_or(name);
+                        !found.pins.iter().any(|pin| pin.name == leaf)
+                    })
+                    .collect();
+                let retrieval = Some(json!({"symbols": symbols, "missing": missing}));
+                symbols_missing = missing.into_iter().cloned().collect();
                 floor = Some(found);
                 shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
                 (Vec::new(), None, retrieval)
             } else {
-                let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
-                pins = found
-                    .pins
-                    .iter()
-                    .map(|pin| (pin.chunk.clone(), 0.0))
-                    .collect();
-                floor = Some(found);
-                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-                let (results, mut stats) = super::rank_code_with_stats(
-                    &input.question,
-                    &shortlist,
-                    corpus,
-                    if self.no_jev {
-                        super::Reranker::Lexical
-                    } else {
-                        super::Reranker::Jev {
-                            key,
-                            patience: Some(jev_patience()),
-                        }
-                    },
-                    input.intent.into(),
-                    || {
-                        if cancelled() {
-                            bail!("Search cancelled.");
-                        }
-                        Ok(super::further_candidates(
-                            &snapshot,
-                            &shortlist,
-                            &input.question,
-                            input.intent.into(),
-                        ))
-                    },
-                )?;
-                lexical_fallback = stats.lexical_fallback;
-                candidates = stats.candidates.clone();
-                runners_up = std::mem::take(&mut stats.runners_up)
-                    .into_iter()
-                    .map(|r| {
-                        (
-                            search::Chunk {
-                                path: r.path,
-                                start_line: r.start_line,
-                                end_line: r.end_line,
-                                text: r.text,
-                                lexical_score: 0.0,
-                            },
-                            r.score,
-                        )
-                    })
-                    .collect();
-                let retrieval = Some(serde_json::to_value(stats)?);
-                let winners = results
-                    .into_iter()
-                    .map(|r| {
-                        (
-                            search::Chunk {
-                                path: r.path,
-                                start_line: r.start_line,
-                                end_line: r.end_line,
-                                text: r.text,
-                                lexical_score: 0.0,
-                            },
-                            r.score,
-                        )
-                    })
-                    .collect();
-                (winners, None, retrieval)
+                let wants_callers = matches!(input.intent, Intent::Callers)
+                    || input.mode == Some(Mode::Usages)
+                    || (!matches!(input.intent, Intent::Explanation)
+                        && oko::usages::asks_for_callers(question));
+                let target = wants_callers
+                    .then(|| oko::floor::named_target(question, snapshot.navigation(), corpus))
+                    .flatten();
+                // "Definition and callers": the listing accompanies the ranked code.
+                let listing_only = matches!(input.intent, Intent::Callers)
+                    || input.mode == Some(Mode::Usages)
+                    || oko::usages::listing_can_stand_alone(question);
+                if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
+                    let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
+                    accompanying = Some(oko::usages::render_usages(&listing));
+                }
+                if let Some(pin) = target.as_ref().filter(|_| listing_only) {
+                    let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
+                    let text = oko::usages::render_usages(&listing);
+                    let retrieval = Some(json!({"usages": listing}));
+                    direct = Some(text);
+                    floor = Some(found);
+                    shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+                    (Vec::new(), None, retrieval)
+                } else {
+                    let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
+                    pins = found
+                        .pins
+                        .iter()
+                        .map(|pin| (pin.chunk.clone(), 0.0))
+                        .collect();
+                    floor = Some(found);
+                    shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+                    let (results, mut stats) = super::rank_code_with_stats(
+                        question,
+                        &shortlist,
+                        corpus,
+                        if self.no_jev {
+                            super::Reranker::Lexical
+                        } else {
+                            super::Reranker::Jev {
+                                key,
+                                patience: Some(jev_patience()),
+                            }
+                        },
+                        input.intent.into(),
+                        || {
+                            if cancelled() {
+                                bail!("Search cancelled.");
+                            }
+                            Ok(super::further_candidates(
+                                &snapshot,
+                                &shortlist,
+                                question,
+                                input.intent.into(),
+                            ))
+                        },
+                    )?;
+                    lexical_fallback = stats.lexical_fallback;
+                    candidates = stats.candidates.clone();
+                    runners_up = std::mem::take(&mut stats.runners_up)
+                        .into_iter()
+                        .map(|r| {
+                            (
+                                search::Chunk {
+                                    path: r.path,
+                                    start_line: r.start_line,
+                                    end_line: r.end_line,
+                                    text: r.text,
+                                    lexical_score: 0.0,
+                                },
+                                r.score,
+                            )
+                        })
+                        .collect();
+                    let retrieval = Some(serde_json::to_value(stats)?);
+                    let winners = results
+                        .into_iter()
+                        .map(|r| {
+                            (
+                                search::Chunk {
+                                    path: r.path,
+                                    start_line: r.start_line,
+                                    end_line: r.end_line,
+                                    text: r.text,
+                                    lexical_score: 0.0,
+                                },
+                                r.score,
+                            )
+                        })
+                        .collect();
+                    (winners, None, retrieval)
+                }
             }
         };
         if cancelled() {
@@ -329,7 +447,7 @@ impl OkoServer {
         }
         // What the agent cannot infer from its own request and the excerpts.
         // First, what was searched: how much of the repository the index holds.
-        let mut notes = coverage_line(&snapshot, &workspace.timings, &input.question);
+        let mut notes = coverage_line(&snapshot, &workspace.timings, question);
         notes.push('\n');
         if let Ok(scope) = directory.strip_prefix(&self.root)
             && !scope.as_os_str().is_empty()
@@ -354,20 +472,39 @@ impl OkoServer {
             notes.push('\n');
         }
         // "Tests for X": paired by file name and by mention, before the ranked code.
-        if oko::ranking::asks_for_tests(&input.question)
+        if oko::ranking::asks_for_tests(question)
             && !input.deep
-            && let Some(pin) =
-                oko::floor::named_target(&input.question, snapshot.navigation(), corpus)
+            && let Some(pin) = oko::floor::named_target(question, snapshot.navigation(), corpus)
         {
             let tests = oko::usages::tests_for(&pin, snapshot.navigation(), corpus);
             notes.push_str(&oko::usages::render_tests(&pin, &tests));
+        }
+        for name in &symbols_missing {
+            notes.push_str(&format!("`{name}`: no definition in the index.\n"));
+        }
+        // A widely used definition gets its dependents summarised in one line,
+        // so "what depends on X" needs no second question.
+        if direct.is_none()
+            && accompanying.is_none()
+            && let Some(pin) = floor.as_ref().and_then(|found| found.pins.first())
+            && matches!(
+                pin.kind,
+                oko::navigation::DefinitionKind::Class
+                    | oko::navigation::DefinitionKind::Module
+                    | oko::navigation::DefinitionKind::Type
+                    | oko::navigation::DefinitionKind::Function
+                    | oko::navigation::DefinitionKind::Method
+            )
+            && let Some(line) = oko::usages::render_used_by(&oko::usages::used_by(pin, corpus))
+        {
+            notes.push_str(&line);
         }
         if let Some(text) = accompanying.as_ref().or(direct.as_ref()) {
             notes.push('\n');
             notes.push_str(text);
         }
-        let question = prefix(&input.question, 512);
-        let metadata = json!({"question":question, "questionTruncated":question.len() < input.question.len(), "directory":directory,
+        let shown_question = prefix(question, 512);
+        let metadata = json!({"question":shown_question, "questionTruncated":shown_question.len() < question.len(), "directory":directory,
             "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
             "investigation":investigation, "retrieval":retrieval, "floor":floor,
             "coverage":{"files":snapshot.coverage(), "parsedFiles":snapshot.navigation().coverage().parsed_files,
@@ -380,7 +517,7 @@ impl OkoServer {
             &winners,
             &pins,
             &runners_up,
-            &input.question,
+            question,
             snapshot.navigation(),
         );
         packet_result(

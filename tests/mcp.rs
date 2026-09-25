@@ -252,9 +252,11 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     // Every agent turn pays for the tool definition, whether or not it searches.
     assert!(tools[0].get("outputSchema").is_none());
+    // Raised from 1,950 for `symbols` and `mode` (2026-09-24): about 90 more
+    // tokens on every turn, for two parameters that replace several calls.
     let definition = serde_json::to_vec(&tools[0]).unwrap().len();
     assert!(
-        definition <= 1_950,
+        definition <= 2_300,
         "tool definition grew to {definition} bytes"
     );
     // Brevity must not cost correctness: agents that read a completeness label
@@ -2130,4 +2132,87 @@ fn callers_and_tests_questions_get_listings_instead_of_ranked_excerpts() {
         text.contains("src/auth.py:1-"),
         "the definition still follows: {text}"
     );
+}
+
+#[test]
+fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("app/models")).unwrap();
+    fs::create_dir_all(root.path().join("spec")).unwrap();
+    fs::write(
+        root.path().join("app/models/upload.rb"),
+        "class Upload < ActiveRecord::Base\n  def url\n    1\n  end\nend\n",
+    )
+    .unwrap();
+    for i in 0..5 {
+        fs::write(
+            root.path().join(format!("app/models/thing{i}.rb")),
+            format!("class Thing{i}\n  belongs_to :file, class_name: 'Upload'\n  def pick; Upload.find(1); end\nend\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        root.path().join("spec/upload_spec.rb"),
+        "describe Upload do\n  it { Upload.new }\nend\n",
+    )
+    .unwrap();
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    // Names alone: whole definitions, in order, no ranking; a Codex-style string list too.
+    for arguments in [
+        json!({"symbols":"Upload, Thing2.pick"}),
+        json!({"symbols":"Upload Thing2.pick"}),
+    ] {
+        let response = client.search(arguments);
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+        assert!(
+            text.contains("app/models/upload.rb:1-5 (whole file, exact name match)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("app/models/thing2.rb:3-3 (complete definition, exact name match)\n"),
+            "{text}"
+        );
+        let paths: Vec<_> = response["metrics"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["path"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(paths, ["app/models/upload.rb", "app/models/thing2.rb"]);
+    }
+    // A missing name is reported, the found ones still answer.
+    let response = client.search(json!({"symbols":"Upload, Nope"}));
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("`Nope`: no definition in the index.\n"),
+        "{text}"
+    );
+    // A widely used definition carries its dependents in one line.
+    let response = client.search(json!({"question":"Upload model class definition"}));
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("`Upload` is used by 5 files (10 uses): app/models/thing0.rb (2), "),
+        "{text}"
+    );
+    assert!(
+        text.contains("; 1 test files. Ask \"who uses Upload\" for every line.\n"),
+        "{text}"
+    );
+    // mode: enumerate lists the files; mode: usages the lines.
+    let response = client.search(json!({"symbols":"Upload","mode":"enumerate"}));
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(text.starts_with("Files using Upload — 5 files, 10 uses; 1 test files (2 uses) hidden\n  app/models/thing0.rb:2\t2\n"), "{text}");
+    let response = client.search(json!({"question":"Upload","mode":"usages"}));
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(
+        text.starts_with("Callers of Upload — 10 references; 2 in tests hidden\n"),
+        "{text}"
+    );
+    // Neither a question nor symbols is an error, as is mode without a name.
+    let response = client.search(json!({"symbols":" "}));
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let response = client.search(json!({"question":"how are files stored","mode":"enumerate"}));
+    assert_eq!(response["result"]["isError"], true, "{response}");
 }
