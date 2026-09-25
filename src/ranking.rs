@@ -366,6 +366,38 @@ fn env_value(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The provider's documented rate is 250,000 tokens per second. Several
+/// searches at once, each with several requests, can pass that in a burst;
+/// this process-wide bucket delays a request until the current second has
+/// room, counting about three bytes per token.
+const TOKENS_PER_SECOND: usize = 200_000;
+fn throttle(request_bytes: usize) {
+    static BUCKET: std::sync::Mutex<Option<(Instant, usize)>> = std::sync::Mutex::new(None);
+    let tokens = request_bytes / 3 + 1;
+    loop {
+        let wait = {
+            let mut bucket = BUCKET.lock().unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            let (window, used) = match *bucket {
+                Some((window, used)) if now.duration_since(window) < Duration::from_secs(1) => {
+                    (window, used)
+                }
+                _ => (now, 0),
+            };
+            if used == 0 || used + tokens <= TOKENS_PER_SECOND {
+                *bucket = Some((window, used + tokens));
+                None
+            } else {
+                Some(Duration::from_secs(1).saturating_sub(now.duration_since(window)))
+            }
+        };
+        match wait {
+            None => return,
+            Some(wait) => std::thread::sleep(wait.max(Duration::from_millis(5))),
+        }
+    }
+}
+
 /// One request, no application retries, with the SDK's ten-second total timeout.
 pub fn call_jev(request: &Value, api_key: &str) -> Result<Value> {
     let mut ignored = Vec::new();
@@ -403,6 +435,7 @@ pub fn call_jev_observed_within(
             json!(env_value("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| "jev-latest".into())),
         );
     let request_bytes = serde_json::to_vec(&body)?.len();
+    throttle(request_bytes);
     let started = Instant::now();
     let client = match reqwest::blocking::Client::builder()
         .retry(reqwest::retry::never())

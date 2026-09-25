@@ -89,6 +89,12 @@ enum Mode {
 
 /// Names per call in `symbols`.
 const MAX_SYMBOLS: usize = 12;
+/// Questions per call in `questions`.
+const MAX_QUESTIONS: usize = 8;
+/// Each question beyond the first earns the response this much more room,
+/// up to `MAX_MULTI_RESULT_BYTES`: below Claude Code's 10,000-token warning.
+const EXTRA_QUESTION_BYTES: usize = 5_000;
+const MAX_MULTI_RESULT_BYTES: usize = 36_000;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -102,6 +108,9 @@ struct SearchInput {
     /// usages: every use of the named definition, by line; enumerate: every
     /// file using it. Needs a name.
     mode: Option<Mode>,
+    /// 2-8 independent questions answered in one call, ranked in parallel;
+    /// each excerpt is labelled Q1, Q2... The first question leads.
+    questions: Option<Vec<String>>,
     /// Subdirectory of the workspace to search. Defaults to the root.
     directory: Option<String>,
     /// implementation (default): code to inspect or change. explanation: how/why,
@@ -136,7 +145,14 @@ impl OkoServer {
             .as_deref()
             .map(split_names)
             .unwrap_or_default();
-        if symbols.is_empty() && (question.trim().is_empty() || question.len() > 4096) {
+        let has_questions = input
+            .questions
+            .as_ref()
+            .is_some_and(|qs| qs.iter().any(|q| !q.trim().is_empty()));
+        if symbols.is_empty()
+            && !has_questions
+            && (question.trim().is_empty() || question.len() > 4096)
+        {
             bail!("Question must contain 1–4096 bytes of nonblank text, or name symbols.");
         }
         if question.len() > 4096 {
@@ -150,6 +166,20 @@ impl OkoServer {
         }
         if input.deep && (input.mode.is_some() || !symbols.is_empty()) {
             bail!("deep cannot be combined with symbols or mode.");
+        }
+        if let Some(questions) = &input.questions {
+            let count = questions.iter().filter(|q| !q.trim().is_empty()).count();
+            if !(2..=MAX_QUESTIONS).contains(&count) {
+                bail!(
+                    "questions takes 2 to {MAX_QUESTIONS} nonblank questions; use question for one."
+                );
+            }
+            if questions.iter().any(|q| q.len() > 4096) {
+                bail!("Each question must contain at most 4096 bytes.");
+            }
+            if input.deep || input.mode.is_some() || !symbols.is_empty() {
+                bail!("questions cannot be combined with deep, symbols or mode.");
+            }
         }
         if input.max_steps.is_some() && !input.deep {
             bail!("max_steps requires deep=true.");
@@ -179,11 +209,21 @@ impl OkoServer {
             .as_deref()
             .map(split_names)
             .unwrap_or_default();
+        let questions: Vec<String> = input
+            .questions
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|q| q.trim().to_owned())
+            .filter(|q| !q.is_empty())
+            .collect();
         // Names alone: the question for ranking, notes and metrics is the names.
+        // Several questions: the first leads the notes and the floor.
         let question_text = input
             .question
             .clone()
             .filter(|q| !q.trim().is_empty())
+            .or_else(|| questions.first().cloned())
             .unwrap_or_else(|| symbols.join(" "));
         let input = SearchInput {
             question: Some(question_text),
@@ -235,6 +275,10 @@ impl OkoServer {
         // A listing shown beside the ranked code, for mixed questions.
         let mut accompanying: Option<String> = None;
         let mut symbols_missing: Vec<String> = Vec::new();
+        // Several questions: which question each winning chunk answers, and
+        // notes about the ones that found nothing.
+        let mut tagged: Vec<(search::Chunk, String)> = Vec::new();
+        let mut extra_notes: Vec<String> = Vec::new();
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -269,6 +313,27 @@ impl OkoServer {
                 "jevCalls": provider_calls,
             }));
             (results, Some(metadata), retrieval)
+        } else if !questions.is_empty() {
+            let shortlist_started = Instant::now();
+            if cancelled() {
+                bail!("Search cancelled.");
+            }
+            let many = self.ask_many(
+                &questions,
+                &snapshot,
+                corpus,
+                key.clone(),
+                input.intent.into(),
+            )?;
+            shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+            lexical_fallback = many.lexical_fallback;
+            candidates = many.candidates;
+            runners_up = many.runners_up;
+            pins = many.pins;
+            floor = Some(many.floor);
+            tagged = many.tagged;
+            extra_notes.extend(many.notes);
+            (many.winners, None, Some(many.retrieval))
         } else {
             let shortlist_started = Instant::now();
             let shortlist = if self.no_jev {
@@ -482,6 +547,10 @@ impl OkoServer {
         for name in &symbols_missing {
             notes.push_str(&format!("`{name}`: no definition in the index.\n"));
         }
+        for note in &extra_notes {
+            notes.push_str(note);
+            notes.push('\n');
+        }
         // A widely used definition gets its dependents summarised in one line,
         // so "what depends on X" needs no second question.
         if direct.is_none()
@@ -512,7 +581,7 @@ impl OkoServer {
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
-        let packet = oko::context::build_packet_with_pins(
+        let mut packet = oko::context::build_packet_with_pins(
             corpus,
             &winners,
             &pins,
@@ -520,17 +589,188 @@ impl OkoServer {
             question,
             snapshot.navigation(),
         );
+        if !tagged.is_empty() {
+            packet.tag_results(|excerpt| {
+                tagged
+                    .iter()
+                    .filter(|(chunk, _)| {
+                        chunk.path == excerpt.path
+                            && chunk.start_line <= excerpt.end_line
+                            && excerpt.start_line <= chunk.end_line
+                    })
+                    .map(|(_, tag)| tag.clone())
+                    .collect::<Vec<_>>()
+            });
+        }
+        let limit = (MAX_MCP_RESULT_BYTES
+            + EXTRA_QUESTION_BYTES * questions.len().saturating_sub(1))
+        .min(MAX_MULTI_RESULT_BYTES);
         packet_result(
             metadata,
             packet,
             &notes,
             &candidates,
             direct.is_some(),
+            limit,
             started,
             context_started,
         )
     }
+
+    /// Several independent questions in one call: each gets its own shortlist,
+    /// floor and ranking on its own thread; the first question alone gets the
+    /// side requests and the recovery call. One merged answer follows, the
+    /// first question's winners leading, every winner tagged with its question.
+    fn ask_many(
+        &self,
+        questions: &[String],
+        snapshot: &Arc<oko::search_cache::WorkspaceSnapshot>,
+        corpus: &[search::Chunk],
+        key: Option<String>,
+        intent: RankingIntent,
+    ) -> Result<Many> {
+        let no_jev = self.no_jev;
+        let outcomes: Vec<Result<Outcome>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = questions
+                .iter()
+                .enumerate()
+                .map(|(index, question)| {
+                    let key = key.clone();
+                    let snapshot = Arc::clone(snapshot);
+                    scope.spawn(move || -> Result<Outcome> {
+                        let shortlist = if no_jev {
+                            snapshot.rank(question)
+                        } else {
+                            snapshot.rank_with_intent(question, intent)
+                        };
+                        let found = oko::floor::floor(question, snapshot.navigation(), corpus);
+                        let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
+                        let primary = index == 0;
+                        let (results, mut stats) = super::rank_code_with_stats(
+                            question,
+                            &shortlist,
+                            corpus,
+                            if no_jev {
+                                super::Reranker::Lexical
+                            } else {
+                                super::Reranker::Jev {
+                                    key,
+                                    patience: Some(jev_patience()),
+                                }
+                            },
+                            intent,
+                            || {
+                                // Side requests cost two thirds of a search's
+                                // tokens; only the leading question pays them.
+                                Ok(if primary {
+                                    super::further_candidates(
+                                        &snapshot, &shortlist, question, intent,
+                                    )
+                                } else {
+                                    super::Further {
+                                        connected: Vec::new(),
+                                        keywords: Vec::new(),
+                                    }
+                                })
+                            },
+                        )?;
+                        let runners_up = std::mem::take(&mut stats.runners_up);
+                        Ok(Outcome {
+                            question: question.clone(),
+                            found,
+                            results,
+                            runners_up,
+                            stats,
+                        })
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("question thread"))
+                .collect()
+        });
+        let mut many = Many::default();
+        let mut per_question = Vec::new();
+        let chunk_of = |r: &super::CodeResult| search::Chunk {
+            path: r.path.clone(),
+            start_line: r.start_line,
+            end_line: r.end_line,
+            text: r.text.clone(),
+            lexical_score: 0.0,
+        };
+        for (index, outcome) in outcomes.into_iter().enumerate() {
+            let outcome = outcome?;
+            let tag = format!("Q{}", index + 1);
+            per_question.push(json!({
+                "tag": tag,
+                "question": prefix(&outcome.question, 200),
+                "results": outcome.results.len(),
+                "pins": outcome.found.pins.len(),
+                "jevCalls": outcome.stats.jev_calls.len(),
+                "rerankMs": outcome.stats.rerank_ms,
+                "lexicalFallback": outcome.stats.lexical_fallback,
+            }));
+            if outcome.results.is_empty() && outcome.found.pins.is_empty() {
+                many.notes.push(format!("{tag}: no relevant code found."));
+            }
+            if outcome.stats.lexical_fallback.is_some() {
+                many.lexical_fallback = outcome.stats.lexical_fallback;
+            }
+            for result in &outcome.results {
+                many.tagged.push((chunk_of(result), tag.clone()));
+                many.winners.push((chunk_of(result), result.score));
+            }
+            for pin in &outcome.found.pins {
+                many.tagged.push((pin.chunk.clone(), tag.clone()));
+                many.pins.push((pin.chunk.clone(), 0.0));
+            }
+            if index == 0 {
+                many.runners_up = outcome
+                    .runners_up
+                    .iter()
+                    .map(|r| (chunk_of(r), r.score))
+                    .collect();
+                many.floor = outcome.found;
+            } else {
+                many.floor.notes.extend(outcome.found.notes);
+            }
+            many.candidates.extend(outcome.stats.candidates);
+            many.jev_calls.extend(outcome.stats.jev_calls);
+        }
+        many.retrieval = json!({
+            "questions": per_question,
+            "jevCalls": many.jev_calls,
+            "candidates": many.candidates,
+        });
+        Ok(many)
+    }
 }
+
+/// One question's share of a several-question call.
+struct Outcome {
+    question: String,
+    found: oko::floor::Floor,
+    results: Vec<super::CodeResult>,
+    runners_up: Vec<super::CodeResult>,
+    stats: super::CodeRankingStats,
+}
+
+#[derive(Default)]
+struct Many {
+    winners: Vec<(search::Chunk, f64)>,
+    pins: Vec<(search::Chunk, f64)>,
+    runners_up: Vec<(search::Chunk, f64)>,
+    tagged: Vec<(search::Chunk, String)>,
+    floor: oko::floor::Floor,
+    notes: Vec<String>,
+    candidates: Vec<super::CandidateScore>,
+    jev_calls: Vec<oko::ranking::JevCallStats>,
+    lexical_fallback: Option<&'static str>,
+    retrieval: Value,
+}
+
+impl OkoServer {}
 
 /// `Index: 6,375 of 6,600 files (225 skipped: 15 over size, 210 unreadable),
 /// 3,047 parsed for symbols (ts, js), watched · skipped: app-render.tsx (289 KiB)`.
@@ -680,6 +920,7 @@ fn other_candidates(
     text
 }
 
+#[allow(clippy::too_many_arguments)]
 fn packet_result(
     mut metadata: Value,
     mut packet: oko::context::ContextPacket,
@@ -687,10 +928,12 @@ fn packet_result(
     candidates: &[super::CandidateScore],
     // The notes already answer the question (a usages listing).
     direct_answer: bool,
+    // The response cap for this call: more room when several questions share it.
+    limit: usize,
     started: Instant,
     context_started: Instant,
 ) -> Result<CallToolResult> {
-    let mut packet_budget = serde_json::to_vec(&packet)?.len().min(MAX_MCP_RESULT_BYTES);
+    let mut packet_budget = serde_json::to_vec(&packet)?.len().min(limit);
     loop {
         let mut text = notes.to_owned();
         if packet.results.is_empty() && !direct_answer {
@@ -706,12 +949,12 @@ fn packet_result(
         text.push_str(&other_candidates(&packet, candidates));
         let result = CallToolResult::success(vec![ContentBlock::text(text)]);
         let size = serde_json::to_vec(&result)?.len();
-        if size <= MAX_MCP_RESULT_BYTES {
+        if size <= limit {
             metadata["timings"]["contextMs"] = json!(context_started.elapsed().as_millis() as u64);
             metadata["timings"]["totalWallNs"] = json!(started.elapsed().as_nanos() as u64);
             metadata["timings"]["totalMs"] = json!(started.elapsed().as_millis() as u64);
             metadata["responseBytes"] = json!(size);
-            metadata["responseLimitBytes"] = json!(MAX_MCP_RESULT_BYTES);
+            metadata["responseLimitBytes"] = json!(limit);
             record_search(metadata, &packet);
             return Ok(result);
         }
@@ -722,7 +965,7 @@ fn packet_result(
         // text. Reduce conservatively to retain evidence even for
         // backslash-heavy code, then measure the real result.
         packet_budget = packet_budget
-            .saturating_sub((size - MAX_MCP_RESULT_BYTES).div_ceil(4).max(64))
+            .saturating_sub((size - limit).div_ceil(4).max(64))
             .max(128);
         packet.fit_to_budget(packet_budget);
     }

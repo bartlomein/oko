@@ -69,6 +69,10 @@ pub struct ContextMatch {
     /// did not accept it: a name match, not a relevance claim.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub exact_name: bool,
+    /// Which of several questions this answers (`Q2`), when a call asked more
+    /// than one. Set after building, from the winner that produced it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
     /// The focused window that replaces a lower-ranked complete definition
     /// before any match is dropped to fit the budget.
     #[serde(skip)]
@@ -992,7 +996,13 @@ impl SourceExcerpt {
     /// the source itself cannot close. Every line carries its file line number
     /// and a tab: models count lines unreliably, so an agent asked for a
     /// location would otherwise cite a line or two off.
-    fn render(&self, lower_confidence: bool, exact_name: bool, out: &mut String) {
+    fn render(
+        &self,
+        lower_confidence: bool,
+        exact_name: bool,
+        tag: Option<&str>,
+        out: &mut String,
+    ) {
         let mut label = if self.whole_file {
             "whole file".to_owned()
         } else if self.definitions > 1 {
@@ -1007,6 +1017,10 @@ impl SourceExcerpt {
         }
         if exact_name {
             label.push_str(", exact name match");
+        }
+        if let Some(tag) = tag {
+            label.push_str(", ");
+            label.push_str(tag);
         }
         if self.outline {
             label.push_str(", outline");
@@ -1043,6 +1057,18 @@ impl SourceExcerpt {
     }
 }
 impl ContextPacket {
+    /// Label each result with the questions it answers, from `tags_of` the
+    /// excerpt (several when two questions led to the same code).
+    pub fn tag_results(&mut self, tags_of: impl Fn(&SourceExcerpt) -> Vec<String>) {
+        for result in &mut self.results {
+            let mut tags = tags_of(&result.excerpt);
+            tags.sort();
+            tags.dedup();
+            if !tags.is_empty() {
+                result.tag = Some(tags.join("+"));
+            }
+        }
+    }
     /// Compact agent-facing rendering: exact source without JSON escaping,
     /// scores, or serving metadata. Matches are in ranked order.
     pub fn render_text(&self) -> String {
@@ -1051,9 +1077,12 @@ impl ContextPacket {
             if !out.is_empty() {
                 out.push('\n');
             }
-            result
-                .excerpt
-                .render(result.lower_confidence, result.exact_name, &mut out);
+            result.excerpt.render(
+                result.lower_confidence,
+                result.exact_name,
+                result.tag.as_deref(),
+                &mut out,
+            );
         }
         for related in &self.related {
             let relation = match related.relation {
@@ -1078,7 +1107,7 @@ impl ContextPacket {
                 "referenced from"
             };
             out.push_str(&format!("\n{relation} {verb} {anchor}:\n"));
-            related.excerpt.render(false, false, &mut out);
+            related.excerpt.render(false, false, None, &mut out);
         }
         if self.omitted {
             out.push_str("\nLower-ranked evidence was omitted to fit the response limit.\n");
@@ -1349,6 +1378,7 @@ fn build_packet_inner(
                 score: if score.is_finite() { *score } else { 0.0 },
                 lower_confidence,
                 exact_name,
+                tag: None,
                 compact,
             });
             continue;
@@ -1407,6 +1437,7 @@ fn build_packet_inner(
             score: if score.is_finite() { *score } else { 0.0 },
             lower_confidence,
             exact_name,
+            tag: None,
             compact,
         });
     }

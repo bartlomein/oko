@@ -252,11 +252,11 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     // Every agent turn pays for the tool definition, whether or not it searches.
     assert!(tools[0].get("outputSchema").is_none());
-    // Raised from 1,950 for `symbols` and `mode` (2026-09-24): about 90 more
-    // tokens on every turn, for two parameters that replace several calls.
+    // Raised from 1,950 for `symbols`, `mode` and `questions` (2026-09-24/25):
+    // about 140 more tokens on every turn, for parameters that replace calls.
     let definition = serde_json::to_vec(&tools[0]).unwrap().len();
     assert!(
-        definition <= 2_300,
+        definition <= 2_600,
         "tool definition grew to {definition} bytes"
     );
     // Brevity must not cost correctness: agents that read a completeness label
@@ -1047,6 +1047,10 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         }
         if excerpt["exactName"] == true {
             label.push_str(", exact name match");
+        }
+        if let Some(tag) = excerpt["tag"].as_str() {
+            label.push_str(", ");
+            label.push_str(tag);
         }
         let omitted: Vec<(u64, u64)> = excerpt["omitted"]
             .as_array()
@@ -2215,4 +2219,84 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
     assert_eq!(response["result"]["isError"], true, "{response}");
     let response = client.search(json!({"question":"how are files stored","mode":"enumerate"}));
     assert_eq!(response["result"]["isError"], true, "{response}");
+}
+
+#[test]
+fn several_questions_share_one_call_with_labelled_excerpts_and_one_set_of_side_requests() {
+    let root = tempfile::tempdir().unwrap();
+    for (name, body) in [
+        (
+            "auth",
+            "pub fn authenticate_token(token: &str) -> bool {\n    validate_signature(token)\n}\n",
+        ),
+        (
+            "routes",
+            "pub fn dispatch_route(path: &str) -> Handler {\n    lookup_route_table(path)\n}\n",
+        ),
+        (
+            "cache",
+            "pub fn evict_cache_entry(key: &str) {\n    drop_entry(key)\n}\n",
+        ),
+    ] {
+        fs::write(root.path().join(format!("{name}.rs")), body).unwrap();
+    }
+    let (response, requests, beside) = search_with_provider(
+        root.path(),
+        json!({"questions":["where is the auth token validated", "how is a route dispatched", "how are cache entries evicted"]}),
+        |request| {
+            relevance_response(request, |candidate| {
+                let source = candidate["source"].as_str().unwrap();
+                // The user's question is somewhere in the request text.
+                let asked = request.to_string();
+                let want = if asked.contains("auth token") {
+                    "auth.rs"
+                } else if asked.contains("route dispatched") {
+                    "routes.rs"
+                } else {
+                    "cache.rs"
+                };
+                if source.starts_with(want) { 0.9 } else { 0.05 }
+            })
+        },
+        |_| None,
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    // One shortlist request per question; only the leading question sends the
+    // requests judged beside it.
+    assert_eq!(requests.len(), 3, "{}", requests.len());
+    assert!(
+        beside.len() <= 2,
+        "{:?}",
+        beside.iter().map(|(p, _)| p).collect::<Vec<_>>()
+    );
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(text.contains("auth.rs:1-3 (whole file, Q1)\n"), "{text}");
+    assert!(text.contains("routes.rs:1-3 (whole file, Q2)\n"), "{text}");
+    assert!(text.contains("cache.rs:1-3 (whole file, Q3)\n"), "{text}");
+    assert!(
+        text.find("Q1").unwrap() < text.find("Q2").unwrap(),
+        "the first question leads: {text}"
+    );
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(
+        packet["retrieval"]["questions"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(packet["retrieval"]["questions"][1]["tag"], "Q2");
+    assert_eq!(packet["responseLimitBytes"], 26_000);
+    // Validation: one question, or questions with deep, is an error.
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let response = client.search(json!({"questions":["only one"]}));
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let response = client.search(json!({"questions":["a b", "c d"],"deep":true}));
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    // Lexical mode answers several questions too, with labels.
+    let response = client.search(json!({"questions":["authenticate token", "dispatch route"]}));
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(
+        text.contains("auth.rs:1-3 (whole file, Q1)\n")
+            && text.contains("routes.rs:1-3 (whole file, Q2)\n"),
+        "{text}"
+    );
 }
