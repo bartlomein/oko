@@ -151,7 +151,7 @@ def score(order, targets, files):
     return row
 
 
-def run(case, binary, live, timeout):
+def run(case, binary, live, timeout, extra_env=None):
     row = {key: case[key] for key in ('instance_id', 'repo', 'category')}
     question = case['problem_statement'].encode()[:QUESTION_BYTES].decode(errors='ignore')
     row['questionTrimmed'] = len(question.encode()) < len(case['problem_statement'].encode())
@@ -167,7 +167,7 @@ def run(case, binary, live, timeout):
         with tempfile.TemporaryDirectory(prefix='oko-locbench-cache-') as cache:
             client = module.Client(Path(binary), workspace, Path(cache), timeout, live=live,
                                    api_key=replay.api_key() if live else None,
-                                   model=replay.JEV_MODEL if live else None)
+                                   model=replay.JEV_MODEL if live else None, extra_env=extra_env)
             try:
                 client.initialize()
                 response = client.request('tools/call', {'name': 'search', 'arguments': {
@@ -213,6 +213,7 @@ def main():
     parser.add_argument('--jev', action='store_true', help='Rank with Jev: paid calls')
     parser.add_argument('--binary', default=str(replay.PROJECT / 'target/release/oko'))
     parser.add_argument('--label', default=None)
+    parser.add_argument('--env', action='append', default=[], help='KEY=VALUE passed to the Oko process (experiment knobs)')
     parser.add_argument('--timeout', type=float, default=180)
     args = parser.parse_args()
     if args.fetch:
@@ -227,7 +228,7 @@ def main():
     rows = []
     with out.open('w') as handle:
         for index, case in enumerate(cases, 1):
-            row = run(case, args.binary, args.jev, args.timeout)
+            row = run(case, args.binary, args.jev, args.timeout, extra_env=dict(item.split('=', 1) for item in args.env))
             rows.append(row)
             handle.write(json.dumps(row) + '\n')
             handle.flush()
