@@ -320,9 +320,16 @@ pub fn chunk_definitions(
         let end = definition.end_line.min(lines.len());
         (start < end).then_some((start, end))
     };
+    // Functions and methods whole; a type alias or interface too when it is
+    // short (`AppPageRender` lives in a 300 KB file and is asked for by
+    // name). Constants stay out: a generated table is the reason the file is
+    // this big.
     let mut spans = definitions
         .iter()
-        .filter(|d| matches!(d.kind, DefinitionKind::Function | DefinitionKind::Method))
+        .filter(|d| {
+            matches!(d.kind, DefinitionKind::Function | DefinitionKind::Method)
+                || (d.kind == DefinitionKind::Type && d.end_line - d.start_line < CHUNK_LINES)
+        })
         .filter_map(bounds)
         .collect::<Vec<_>>();
     // The class header names the class; its members are their own chunks, so
