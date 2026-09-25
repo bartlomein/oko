@@ -67,8 +67,14 @@ def main():
     for (repo, session), session_calls in by_session.items():
         for run in runs_of(session_calls):
             if len(run) >= 2:
-                for start in range(0, len(run), MAX_BATCH):
-                    batches.append((repo, run[start:start + MAX_BATCH]))
+                pieces = [run[start:start + MAX_BATCH] for start in range(0, len(run), MAX_BATCH)]
+                # A leftover single call joins the previous batch when it has room,
+                # else it is not a batch.
+                if len(pieces) > 1 and len(pieces[-1]) == 1:
+                    last = pieces.pop()
+                    if len(pieces[-1]) < MAX_BATCH:
+                        pieces[-1].extend(last)
+                batches.extend((repo, piece) for piece in pieces if len(piece) >= 2)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f'{args.label}-sessions-{"jev" if args.jev else "nojev"}-{time.strftime("%Y%m%d-%H%M%S")}.jsonl'
