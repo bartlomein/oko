@@ -16,7 +16,8 @@ pub const PACKET_MAX_BYTES: usize = 16_000;
 // Five was measured on 169 replayed agent questions: Jev rarely accepts more
 // than three candidates, so coverage did not move, while keyword-ranked
 // responses grew by half. Further candidates are named by path instead.
-const RESULT_LIMIT: usize = 3;
+/// Excerpts one question may show; a several-question call gets more.
+pub const RESULT_LIMIT: usize = 3;
 const RELATED_LIMIT: usize = 2;
 const EXCERPT_LINES: usize = 60;
 // Return a proven implementation whole: a window that stops short of the
@@ -1206,6 +1207,26 @@ pub fn build_packet_with_navigation(
 /// As `build_packet_with_runners_up`, also showing `pins`: definitions of
 /// names the question used, labelled `exact name match` unless the ranker
 /// accepted them itself. A pin alone is an answer.
+pub fn build_packet_for_questions(
+    corpus: &[Chunk],
+    winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
+    question: &str,
+    navigation: &NavigationIndex,
+    max_results: usize,
+) -> ContextPacket {
+    build_packet_limited(
+        corpus,
+        winners,
+        pins,
+        runners_up,
+        question,
+        Some(navigation),
+        max_results,
+    )
+}
+
 pub fn build_packet_with_pins(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
@@ -1245,6 +1266,29 @@ fn build_packet_inner(
     question: &str,
     navigation: Option<&NavigationIndex>,
 ) -> ContextPacket {
+    build_packet_limited(
+        corpus,
+        winners,
+        pins,
+        runners_up,
+        question,
+        navigation,
+        RESULT_LIMIT,
+    )
+}
+
+/// As `build_packet_inner`, with the number of excerpts a call may show: a
+/// call that asked several questions gets room for each of them.
+#[allow(clippy::too_many_arguments)]
+fn build_packet_limited(
+    corpus: &[Chunk],
+    winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
+    question: &str,
+    navigation: Option<&NavigationIndex>,
+    max_results: usize,
+) -> ContextPacket {
     let mut packet = ContextPacket {
         results: vec![],
         related: vec![],
@@ -1279,7 +1323,7 @@ fn build_packet_inner(
         .chain(winners.iter().skip(1).map(|winner| (winner, false, false)))
         .chain(runners_up.iter().map(|runner_up| (runner_up, true, false)));
     for ((chunk, score), lower_confidence, exact_name) in ranked {
-        if packet.results.len() == RESULT_LIMIT {
+        if packet.results.len() == max_results {
             // Further accepted matches are named by path after the excerpts;
             // nothing was cut for size.
             packet.truncated |= !lower_confidence;

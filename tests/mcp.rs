@@ -1102,7 +1102,11 @@ fn assert_packet_envelope(response: &Value) -> &Value {
     if packet["results"].as_array().unwrap().is_empty() {
         assert!(body(text).starts_with("No relevant code found."), "{text}");
     }
-    assert!(packet["results"].as_array().unwrap().len() <= 3);
+    // Three excerpts for one question; a several-question call may show up to twelve.
+    let asked = packet["retrieval"]["questions"]
+        .as_array()
+        .map_or(1, Vec::len);
+    assert!(packet["results"].as_array().unwrap().len() <= (3 + 2 * (asked - 1)).min(12));
     assert!(packet["related"].as_array().unwrap().len() <= 2);
     assert!(packet["truncated"].is_boolean());
     for phase in [

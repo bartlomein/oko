@@ -95,6 +95,10 @@ const MAX_QUESTIONS: usize = 8;
 /// up to `MAX_MULTI_RESULT_BYTES`: below Claude Code's 10,000-token warning.
 const EXTRA_QUESTION_BYTES: usize = 5_000;
 const MAX_MULTI_RESULT_BYTES: usize = 36_000;
+/// Excerpts a several-question call may show: two more per extra question,
+/// so each question keeps at least its best result.
+const EXTRA_QUESTION_RESULTS: usize = 2;
+const MAX_MULTI_RESULTS: usize = 12;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -581,13 +585,17 @@ impl OkoServer {
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
-        let mut packet = oko::context::build_packet_with_pins(
+        let max_results = (oko::context::RESULT_LIMIT
+            + EXTRA_QUESTION_RESULTS * questions.len().saturating_sub(1))
+        .min(MAX_MULTI_RESULTS);
+        let mut packet = oko::context::build_packet_for_questions(
             corpus,
             &winners,
             &pins,
             &runners_up,
             question,
             snapshot.navigation(),
+            max_results,
         );
         if !tagged.is_empty() {
             packet.tag_results(|excerpt| {
@@ -699,8 +707,47 @@ impl OkoServer {
             text: r.text.clone(),
             lexical_score: 0.0,
         };
+        let outcomes: Vec<Outcome> = outcomes.into_iter().collect::<Result<_>>()?;
+        // Round-robin: every question's best result before any question's
+        // second, so the excerpt cap never lets the first question crowd out
+        // the rest.
+        let mut tagged_winners: Vec<Vec<(search::Chunk, f64, String)>> = Vec::new();
+        let mut tagged_pins: Vec<Vec<(search::Chunk, String)>> = Vec::new();
+        for (index, outcome) in outcomes.iter().enumerate() {
+            let tag = format!("Q{}", index + 1);
+            tagged_winners.push(
+                outcome
+                    .results
+                    .iter()
+                    .map(|r| (chunk_of(r), r.score, tag.clone()))
+                    .collect(),
+            );
+            tagged_pins.push(
+                outcome
+                    .found
+                    .pins
+                    .iter()
+                    .map(|pin| (pin.chunk.clone(), tag.clone()))
+                    .collect(),
+            );
+        }
+        for round in 0..tagged_winners.iter().map(Vec::len).max().unwrap_or(0) {
+            for list in &tagged_winners {
+                if let Some((chunk, score, tag)) = list.get(round) {
+                    many.tagged.push((chunk.clone(), tag.clone()));
+                    many.winners.push((chunk.clone(), *score));
+                }
+            }
+        }
+        for round in 0..tagged_pins.iter().map(Vec::len).max().unwrap_or(0) {
+            for list in &tagged_pins {
+                if let Some((chunk, tag)) = list.get(round) {
+                    many.tagged.push((chunk.clone(), tag.clone()));
+                    many.pins.push((chunk.clone(), 0.0));
+                }
+            }
+        }
         for (index, outcome) in outcomes.into_iter().enumerate() {
-            let outcome = outcome?;
             let tag = format!("Q{}", index + 1);
             per_question.push(json!({
                 "tag": tag,
@@ -716,14 +763,6 @@ impl OkoServer {
             }
             if outcome.stats.lexical_fallback.is_some() {
                 many.lexical_fallback = outcome.stats.lexical_fallback;
-            }
-            for result in &outcome.results {
-                many.tagged.push((chunk_of(result), tag.clone()));
-                many.winners.push((chunk_of(result), result.score));
-            }
-            for pin in &outcome.found.pins {
-                many.tagged.push((pin.chunk.clone(), tag.clone()));
-                many.pins.push((pin.chunk.clone(), 0.0));
             }
             if index == 0 {
                 many.runners_up = outcome
