@@ -22,7 +22,7 @@ use std::{
 };
 
 // Bump whenever chunking, tokenization, symbol extraction, or ranking features change.
-const FORMAT_VERSION: u32 = 6;
+const FORMAT_VERSION: u32 = 7;
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Serialize)]

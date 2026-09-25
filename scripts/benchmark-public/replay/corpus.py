@@ -110,6 +110,7 @@ def declaration_hits(packet, names):
     """Names from the question that a shown excerpt declares (any line of any result)."""
     hits = set()
     excerpts = [e for kind in ('results', 'related') for e in packet.get(kind) or []]
+    pins = (packet.get('floor') or {}).get('pins') or []
     for name in names:
         wanted = leaf(name)
         for excerpt in excerpts:
@@ -117,6 +118,15 @@ def declaration_hits(packet, names):
             if symbol == wanted or any(declares(line, wanted) for line in (excerpt.get('text') or '').splitlines()):
                 hits.add(name)
                 break
+        else:
+            # The name was pinned and a shown excerpt lies inside its body: a
+            # member of the named class answers a question about that class.
+            for pin in pins:
+                if pin.get('name') == wanted and any(
+                        e.get('path') == pin.get('path') and pin.get('startLine', 0) <= (e.get('startLine') or 0)
+                        and (e.get('endLine') or 0) <= pin.get('endLine', 0) for e in excerpts):
+                    hits.add(name)
+                    break
     return hits
 
 
@@ -142,7 +152,7 @@ def first_line_kind(excerpt):
 def answer_body(text):
     """The answer after its coverage line and any notes."""
     lines = text.split('\n')
-    while lines and (lines[0].startswith('Index: ') or lines[0] == '' or lines[0].startswith('`') and ' defined in ' in lines[0]
+    while lines and (lines[0].startswith('Index: ') or lines[0] == '' or lines[0].startswith('`') and (' defined in ' in lines[0] or ' is used by ' in lines[0])
                      or lines[0].startswith('Paths are relative')):
         lines.pop(0)
     return '\n'.join(lines)

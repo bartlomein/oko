@@ -177,6 +177,8 @@ enum Language {
     Go,
     Rust,
     Ruby,
+    Java,
+    Kotlin,
 }
 impl Language {
     fn of(path: &str) -> Option<Self> {
@@ -188,6 +190,8 @@ impl Language {
             "go" => Self::Go,
             "rs" => Self::Rust,
             "rb" | "rake" | "gemspec" => Self::Ruby,
+            "java" => Self::Java,
+            "kt" | "kts" => Self::Kotlin,
             _ => return None,
         })
     }
@@ -205,6 +209,8 @@ impl Language {
             Self::Go => tree_sitter_go::LANGUAGE.into(),
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
             Self::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+            Self::Java => tree_sitter_java::LANGUAGE.into(),
+            Self::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         }
     }
 }
@@ -342,6 +348,8 @@ impl<'a> Definitions<'a> {
             Language::Go => self.go(node, container),
             Language::Rust => self.rust(node, container),
             Language::Ruby => self.ruby(node, container),
+            Language::Java => self.java(node, container),
+            Language::Kotlin => self.kotlin(node, container),
             _ => {}
         }
         self.depth -= 1;
@@ -563,6 +571,226 @@ impl<'a> Definitions<'a> {
                     self.push(name, None, kind, container, node, true);
                 }
             }
+            _ => self.children(node, container),
+        }
+    }
+    fn kotlin(&mut self, node: Node<'_>, container: Option<usize>) {
+        // Keywords and modifiers are unnamed children; annotations live in
+        // `modifiers`, which the declaration's span already covers.
+        let words = |node: Node<'_>| -> Vec<&'a str> {
+            let mut cursor = node.walk();
+            let mut words: Vec<&'a str> = node
+                .children(&mut cursor)
+                .filter(|c| !c.is_named())
+                .map(|c| self.text(c))
+                .collect();
+            let mut cursor = node.walk();
+            if let Some(m) = node.children(&mut cursor).find(|c| c.kind() == "modifiers") {
+                let mut cursor = m.walk();
+                words.extend(m.children(&mut cursor).map(|c| self.text(c)));
+            }
+            words
+        };
+        // Kotlin is public unless it says otherwise.
+        let exported = |words: &[&str]| {
+            !words
+                .iter()
+                .any(|w| matches!(*w, "private" | "internal" | "protected"))
+        };
+        let first_identifier = |node: Node<'_>| -> Option<&'a str> {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|c| c.kind() == "identifier")
+                .map(|c| self.text(c))
+        };
+        match node.kind() {
+            "class_declaration" | "object_declaration" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                let words = words(node);
+                let kind = if words.contains(&"interface") {
+                    DefinitionKind::Type
+                } else {
+                    DefinitionKind::Class
+                };
+                let id = self.push(name, None, kind, container, node, exported(&words));
+                let mut cursor = node.walk();
+                let bodies: Vec<Node<'_>> = node
+                    .children(&mut cursor)
+                    .filter(|c| matches!(c.kind(), "class_body" | "enum_class_body"))
+                    .collect();
+                for body in bodies {
+                    self.children(body, Some(id));
+                }
+            }
+            // `companion object` members are addressed through the class.
+            "companion_object" => {
+                let mut cursor = node.walk();
+                let bodies: Vec<Node<'_>> = node
+                    .children(&mut cursor)
+                    .filter(|c| c.kind() == "class_body")
+                    .collect();
+                for body in bodies {
+                    self.children(body, container);
+                }
+            }
+            "function_declaration" => {
+                if let Some(name) = self.name_of(node) {
+                    let kind = if container.is_some() {
+                        DefinitionKind::Method
+                    } else {
+                        DefinitionKind::Function
+                    };
+                    let exported = exported(&words(node));
+                    self.push(name, None, kind, container, node, exported);
+                }
+            }
+            "secondary_constructor" => {
+                if let Some(owner) = container.and_then(|i| self.facts.definitions.get(i)) {
+                    let name = owner.name.clone();
+                    let exported = exported(&words(node));
+                    self.push(
+                        &name,
+                        None,
+                        DefinitionKind::Method,
+                        container,
+                        node,
+                        exported,
+                    );
+                }
+            }
+            // `val` properties are the named values agents ask for
+            // (`JavalinConfig.routes`, `const val DEFAULT_PORT`); `var` state
+            // is not a definition.
+            "property_declaration" => {
+                let words = words(node);
+                if !words.contains(&"val") {
+                    return;
+                }
+                let mut cursor = node.walk();
+                let names: Vec<&'a str> = node
+                    .children(&mut cursor)
+                    .filter(|c| c.kind() == "variable_declaration")
+                    .filter_map(first_identifier)
+                    .collect();
+                for name in names {
+                    self.push(
+                        name,
+                        None,
+                        DefinitionKind::Constant,
+                        container,
+                        node,
+                        exported(&words),
+                    );
+                }
+            }
+            "enum_entry" => {
+                if let Some(name) = first_identifier(node) {
+                    self.push(name, None, DefinitionKind::Constant, container, node, true);
+                }
+            }
+            "type_alias" => {
+                if let Some(name) = node.child_by_field_name("type").map(|n| self.text(n)) {
+                    let exported = exported(&words(node));
+                    self.push(name, None, DefinitionKind::Type, container, node, exported);
+                }
+            }
+            // Function bodies are not visited; statement and member wrappers
+            // pass through.
+            "function_body" | "block" => {}
+            _ => self.children(node, container),
+        }
+    }
+    fn java(&mut self, node: Node<'_>, container: Option<usize>) {
+        // Annotations sit inside the declaration's `modifiers` child, so a
+        // declaration's own span already covers them.
+        let modifiers = |node: Node<'_>| -> Vec<&'a str> {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|c| c.kind() == "modifiers")
+                .map(|m| {
+                    let mut cursor = m.walk();
+                    m.children(&mut cursor)
+                        .filter(|c| !c.is_named())
+                        .map(|c| self.text(c))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        // Interface members are public without saying so.
+        let in_interface = |node: Node<'_>| {
+            node.parent()
+                .is_some_and(|p| matches!(p.kind(), "interface_body" | "annotation_type_body"))
+        };
+        match node.kind() {
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration"
+            | "annotation_type_declaration" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                let kind = if node.kind() == "interface_declaration" {
+                    DefinitionKind::Type
+                } else {
+                    DefinitionKind::Class
+                };
+                let exported = modifiers(node).contains(&"public") || in_interface(node);
+                let id = self.push(name, None, kind, container, node, exported);
+                if let Some(body) = node.child_by_field_name("body") {
+                    self.children(body, Some(id));
+                }
+            }
+            "method_declaration"
+            | "constructor_declaration"
+            | "compact_constructor_declaration" => {
+                if let Some(name) = self.name_of(node) {
+                    let exported = modifiers(node).contains(&"public") || in_interface(node);
+                    let kind = if container.is_some() {
+                        DefinitionKind::Method
+                    } else {
+                        DefinitionKind::Function
+                    };
+                    self.push(name, None, kind, container, node, exported);
+                }
+            }
+            // `static final` fields and interface constants are the named
+            // values agents ask for; instance fields are not definitions.
+            "field_declaration" | "constant_declaration" => {
+                let mods = modifiers(node);
+                let constant = node.kind() == "constant_declaration"
+                    || (mods.contains(&"static") && mods.contains(&"final"));
+                if !constant {
+                    return;
+                }
+                let exported = mods.contains(&"public") || in_interface(node);
+                let mut cursor = node.walk();
+                let declarators: Vec<Node<'_>> = node
+                    .children_by_field_name("declarator", &mut cursor)
+                    .collect();
+                for declarator in declarators {
+                    if let Some(name) = self.name_of(declarator) {
+                        self.push(
+                            name,
+                            None,
+                            DefinitionKind::Constant,
+                            container,
+                            node,
+                            exported,
+                        );
+                    }
+                }
+            }
+            "enum_constant" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Constant, container, node, true);
+                }
+            }
+            // Method bodies are not visited, so local and anonymous classes
+            // stay out of the index; wrappers such as `enum_body_declarations`
+            // pass through.
             _ => self.children(node, container),
         }
     }
@@ -2264,6 +2492,209 @@ mod tests {
                 .lookup_qualified("Foo::Bar".replace("::", ".").as_str())
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn java_definitions_nest_members_constants_and_enum_values() {
+        let source = "package io.javalin;\n\nimport java.util.List;\n\n@Component\npublic class Javalin implements AutoCloseable {\n    public static final int DEFAULT_PORT = 8080;\n    private int port;\n\n    public Javalin(int port) { this.port = port; }\n\n    @Override\n    public Javalin start() { return this; }\n\n    private void stop() {}\n\n    public static class Config { public boolean debug; }\n\n    public enum Mode { DEV, PROD; public String label() { return name(); } }\n}\n\ninterface Handler {\n    int LIMIT = 1;\n    void handle(Context ctx);\n}\n\nrecord Point(int x, int y) {}\n";
+        let got = summary("Javalin.java", source);
+        let want = [
+            ("Javalin", DefinitionKind::Class, 5, 20, None, true),
+            (
+                "Javalin.DEFAULT_PORT",
+                DefinitionKind::Constant,
+                7,
+                7,
+                Some(0),
+                true,
+            ),
+            (
+                "Javalin.Javalin",
+                DefinitionKind::Method,
+                10,
+                10,
+                Some(0),
+                true,
+            ),
+            (
+                "Javalin.start",
+                DefinitionKind::Method,
+                12,
+                13,
+                Some(0),
+                true,
+            ),
+            (
+                "Javalin.stop",
+                DefinitionKind::Method,
+                15,
+                15,
+                Some(0),
+                false,
+            ),
+            (
+                "Javalin.Config",
+                DefinitionKind::Class,
+                17,
+                17,
+                Some(0),
+                true,
+            ),
+            ("Javalin.Mode", DefinitionKind::Class, 19, 19, Some(0), true),
+            (
+                "Javalin.Mode.DEV",
+                DefinitionKind::Constant,
+                19,
+                19,
+                Some(6),
+                true,
+            ),
+            (
+                "Javalin.Mode.PROD",
+                DefinitionKind::Constant,
+                19,
+                19,
+                Some(6),
+                true,
+            ),
+            (
+                "Javalin.Mode.label",
+                DefinitionKind::Method,
+                19,
+                19,
+                Some(6),
+                true,
+            ),
+            ("Handler", DefinitionKind::Type, 22, 25, None, false),
+            (
+                "Handler.LIMIT",
+                DefinitionKind::Constant,
+                23,
+                23,
+                Some(10),
+                true,
+            ),
+            (
+                "Handler.handle",
+                DefinitionKind::Method,
+                24,
+                24,
+                Some(10),
+                true,
+            ),
+            ("Point", DefinitionKind::Class, 27, 27, None, false),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+        let index = NavigationIndex::new_shared([(
+            "Javalin.java",
+            Arc::new(NavigationPreparer::default().prepare("Javalin.java", source)),
+        )]);
+        assert_eq!(index.lookup("start").len(), 1);
+        assert_eq!(index.lookup_qualified("Javalin.start").len(), 1);
+        assert_eq!(index.lookup_qualified("Mode.DEV").len(), 1);
+    }
+
+    #[test]
+    fn kotlin_definitions_cover_classes_objects_properties_and_enums() {
+        let source = "package io.javalin\n\nimport java.util.List\n\nconst val DEFAULT_PORT = 8080\n\nclass JavalinConfig(val port: Int) {\n    @JvmField val routes = Routes()\n    var started = false\n\n    fun start(): JavalinConfig {\n        val local = 1\n        return this\n    }\n\n    private fun stop() {}\n\n    constructor() : this(0)\n\n    companion object {\n        @JvmStatic fun create() = JavalinConfig()\n    }\n\n    inner class Http {\n        fun bind() {}\n    }\n}\n\ninterface Handler {\n    fun handle(ctx: Context)\n}\n\nobject Defaults {\n    val limit = 1\n}\n\nenum class Mode {\n    DEV,\n    PROD\n}\n\ntypealias Ctx = Context\n\ninternal fun helper() = 1\n";
+        let got = summary("JavalinConfig.kt", source);
+        let want = [
+            ("DEFAULT_PORT", DefinitionKind::Constant, 5, 5, None, true),
+            ("JavalinConfig", DefinitionKind::Class, 7, 27, None, true),
+            (
+                "JavalinConfig.routes",
+                DefinitionKind::Constant,
+                8,
+                8,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.start",
+                DefinitionKind::Method,
+                11,
+                14,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.stop",
+                DefinitionKind::Method,
+                16,
+                16,
+                Some(1),
+                false,
+            ),
+            (
+                "JavalinConfig.JavalinConfig",
+                DefinitionKind::Method,
+                18,
+                18,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.create",
+                DefinitionKind::Method,
+                21,
+                21,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.Http",
+                DefinitionKind::Class,
+                24,
+                26,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.Http.bind",
+                DefinitionKind::Method,
+                25,
+                25,
+                Some(7),
+                true,
+            ),
+            ("Handler", DefinitionKind::Type, 29, 31, None, true),
+            (
+                "Handler.handle",
+                DefinitionKind::Method,
+                30,
+                30,
+                Some(9),
+                true,
+            ),
+            ("Defaults", DefinitionKind::Class, 33, 35, None, true),
+            (
+                "Defaults.limit",
+                DefinitionKind::Constant,
+                34,
+                34,
+                Some(11),
+                true,
+            ),
+            ("Mode", DefinitionKind::Class, 37, 40, None, true),
+            ("Mode.DEV", DefinitionKind::Constant, 38, 38, Some(13), true),
+            (
+                "Mode.PROD",
+                DefinitionKind::Constant,
+                39,
+                39,
+                Some(13),
+                true,
+            ),
+            ("Ctx", DefinitionKind::Type, 42, 42, None, true),
+            ("helper", DefinitionKind::Function, 44, 44, None, false),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
         );
     }
 

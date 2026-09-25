@@ -373,14 +373,23 @@ pub fn identifiers(question: &str) -> Vec<String> {
                 .split(['.', '#'])
                 .flat_map(|s| s.split("::"))
                 .collect();
-            if segments
+            let plausible = segments
                 .iter()
-                .all(|s| s.len() >= 2 && s.chars().any(|c| c.is_alphabetic()))
-                && !segments
-                    .last()
-                    .is_some_and(|ext| FILE_EXTENSIONS.contains(ext))
-            {
+                .all(|s| s.len() >= 2 && s.chars().any(|c| c.is_alphabetic()));
+            let file = segments
+                .last()
+                .is_some_and(|ext| FILE_EXTENSIONS.contains(ext));
+            if plausible && !file {
                 push(token);
+            } else if plausible && file && segments.len() == 2 {
+                // `Javalin.java` or `upload_serializer.rb`: the file stem is
+                // the class or module agents mean, when it is shaped like one.
+                let stem = segments[0];
+                let capitalized = stem.starts_with(|c: char| c.is_uppercase())
+                    && stem.chars().any(|c| c.is_lowercase());
+                if stem.contains('_') || p.camel.is_match(stem) || capitalized {
+                    push(stem);
+                }
             }
             continue;
         }
@@ -852,6 +861,11 @@ mod tests {
                 &[],
             ),
             ("where is `Context` used in the router", &["Context"]),
+            (
+                "Javalin.java get() post() delete() method definitions",
+                &["Javalin"],
+            ),
+            ("tests in app.py for the wsgi path", &[]),
             (
                 "replacement expansion: Captures trait interpolate",
                 &["Captures"],

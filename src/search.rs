@@ -143,7 +143,9 @@ fn patterns() -> &'static Patterns {
             symbol_extension: Regex::new(r"\.(?:rs|[cm]?js|jsx|ts|tsx|py|go|java|cs|c|h|cc|cpp|hpp|rb|php|swift|kt)$").unwrap(),
             // Conventional test locations and file names across ecosystems; a
             // naming hint, never a parse of the file.
-            test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$").unwrap(),
+            // The last alternative is the JVM and C# habit of `FooTest.java`,
+            // `FooTests.kt` or `TestFoo.scala` beside the code (case matters).
+            test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$|(?-i:(?:^|/)(?:Test[A-Z][^/]*|[^/]+Tests?)\.(?:java|kt|kts|scala|cs)$)").unwrap(),
             // Functions, methods, arrow constants (with or without a type
             // annotation) and the type-level declarations of every supported
             // language: `class`, `struct`, `impl Trait for X`, `module`...
@@ -1542,6 +1544,29 @@ fn read_workspace_paths_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jvm_test_files_are_test_paths_by_stem() {
+        for path in [
+            "src/test/java/io/javalin/RoutingTest.java",
+            "io/javalin/RoutingTest.java",
+            "io/javalin/RoutingTests.kt",
+            "io/javalin/TestRouting.scala",
+            "Api/UsersTests.cs",
+            "tests/test_app.py",
+            "src/app.test.ts",
+        ] {
+            assert!(is_test_path(path), "{path}");
+        }
+        for path in [
+            "io/javalin/Javalin.java",
+            "io/javalin/Contest.java",
+            "io/javalin/testing/Latest.java",
+            "src/attest.rs",
+        ] {
+            assert!(!is_test_path(path), "{path}");
+        }
+    }
 
     #[test]
     fn parallel_file_reads_preserve_order_bytes_and_eligibility() {
