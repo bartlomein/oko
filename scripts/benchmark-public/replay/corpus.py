@@ -88,8 +88,15 @@ def identifiers(question):
     return found
 
 
+FILE_EXTENSIONS = {'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'rs', 'go', 'java', 'kt', 'cs', 'php', 'swift', 'scala'}
+
+
 def leaf(identifier):
-    return re.split(r'\.|::|#', identifier)[-1]
+    parts = re.split(r'\.|::|#', identifier)
+    # `Javalin.java` names the class Javalin, not a member called java.
+    if len(parts) >= 2 and parts[-1] in FILE_EXTENSIONS:
+        return parts[-2]
+    return parts[-1]
 
 
 def declares(line, name):

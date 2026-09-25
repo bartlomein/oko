@@ -660,12 +660,12 @@ impl<'a> Definitions<'a> {
                     );
                 }
             }
-            // `val` properties are the named values agents ask for
-            // (`JavalinConfig.routes`, `const val DEFAULT_PORT`); `var` state
-            // is not a definition.
+            // Properties are the named values agents ask for
+            // (`JavalinConfig.routes`, `const val DEFAULT_PORT`, the `var`
+            // settings of a config class); locals are never reached.
             "property_declaration" => {
                 let words = words(node);
-                if !words.contains(&"val") {
+                if !words.contains(&"val") && !words.contains(&"var") {
                     return;
                 }
                 let mut cursor = node.walk();
@@ -2614,6 +2614,14 @@ mod tests {
                 true,
             ),
             (
+                "JavalinConfig.started",
+                DefinitionKind::Constant,
+                9,
+                9,
+                Some(1),
+                true,
+            ),
+            (
                 "JavalinConfig.start",
                 DefinitionKind::Method,
                 11,
@@ -2658,7 +2666,7 @@ mod tests {
                 DefinitionKind::Method,
                 25,
                 25,
-                Some(7),
+                Some(8),
                 true,
             ),
             ("Handler", DefinitionKind::Type, 29, 31, None, true),
@@ -2667,7 +2675,7 @@ mod tests {
                 DefinitionKind::Method,
                 30,
                 30,
-                Some(9),
+                Some(10),
                 true,
             ),
             ("Defaults", DefinitionKind::Class, 33, 35, None, true),
@@ -2676,17 +2684,17 @@ mod tests {
                 DefinitionKind::Constant,
                 34,
                 34,
-                Some(11),
+                Some(12),
                 true,
             ),
             ("Mode", DefinitionKind::Class, 37, 40, None, true),
-            ("Mode.DEV", DefinitionKind::Constant, 38, 38, Some(13), true),
+            ("Mode.DEV", DefinitionKind::Constant, 38, 38, Some(14), true),
             (
                 "Mode.PROD",
                 DefinitionKind::Constant,
                 39,
                 39,
-                Some(13),
+                Some(14),
                 true,
             ),
             ("Ctx", DefinitionKind::Type, 42, 42, None, true),
