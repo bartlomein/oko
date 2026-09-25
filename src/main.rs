@@ -287,7 +287,7 @@ fn judge_beside(
                 &items,
                 &RankOptions {
                     api_key: key.map(str::to_owned),
-                    limit: 30,
+                    limit: ranking::max_items(),
                     no_jev: false,
                     intent,
                     timeout,
@@ -410,7 +410,7 @@ pub(crate) fn rank_code_with_stats(
                 &items,
                 &RankOptions {
                     api_key: key.map(str::to_owned),
-                    limit: 30,
+                    limit: ranking::max_items(),
                     no_jev: false,
                     intent,
                     timeout,
@@ -499,7 +499,7 @@ pub(crate) fn rank_code_with_stats(
                     &recovery_items,
                     &RankOptions {
                         api_key: key,
-                        limit: 30,
+                        limit: ranking::max_items(),
                         no_jev: false,
                         intent,
                         timeout,

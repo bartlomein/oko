@@ -103,7 +103,7 @@ fn search_actions_prepared(
             .rank(&query, |_| true)
             .into_iter()
             .take(if query == question {
-                search::SHORTLIST_LIMIT
+                search::shortlist_limit()
             } else {
                 8
             })
@@ -292,7 +292,7 @@ fn investigate_prepared_with(
         pool.extend(findings.iter().skip(1).map(|f| f.chunk.clone()));
         let mut unique = HashSet::new();
         pool.retain(|c| unique.insert(location(c)));
-        pool.truncate(ranking::MAX_ITEMS);
+        pool.truncate(ranking::max_items());
         let mut sent = 0;
         let mut omitted = 0;
         if !pool.is_empty() && new_chunks > 0 {
@@ -355,7 +355,7 @@ fn investigate_prepared_with(
         }
         let request = loop {
             let request = next_request(question, intent, &findings, &options);
-            if serde_json::to_vec(&request)?.len() <= ranking::MAX_JEV_REQUEST_BYTES {
+            if serde_json::to_vec(&request)?.len() <= ranking::max_request_bytes() {
                 break request;
             }
             options.pop();
@@ -414,7 +414,7 @@ mod tests {
                         search::rank_lexically(&corpus, &query)
                             .into_iter()
                             .take(if query == question {
-                                search::SHORTLIST_LIMIT
+                                search::shortlist_limit()
                             } else {
                                 8
                             })

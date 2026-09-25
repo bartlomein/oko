@@ -111,14 +111,14 @@ fn implementation_source_quota_preserves_broad_evidence_and_filters() {
             .iter()
             .filter(|chunk| chunk.path.ends_with(".rs"))
             .count(),
-        IMPLEMENTATION_SOURCE_SLOTS
+        implementation_source_slots()
     );
     assert_eq!(
         ranked
             .iter()
             .filter(|chunk| chunk.path.ends_with(".md"))
             .count(),
-        SHORTLIST_LIMIT - IMPLEMENTATION_SOURCE_SLOTS
+        SHORTLIST_LIMIT - implementation_source_slots()
     );
     let restricted = prepared.rank_with_intent(
         "quartz amber",

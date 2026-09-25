@@ -9,6 +9,28 @@ use std::{
 
 pub const MAX_ITEMS: usize = 30;
 pub const MAX_JEV_REQUEST_BYTES: usize = 32_000;
+/// Candidates per request in effect: `MAX_ITEMS`, or `OKO_JEV_ITEMS` (30–120)
+/// for the request-budget experiment; read once.
+pub fn max_items() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        env_value("OKO_JEV_ITEMS")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map_or(MAX_ITEMS, |n| n.clamp(MAX_ITEMS, 120))
+    })
+}
+/// Request budget in effect: `MAX_JEV_REQUEST_BYTES`, or `OKO_JEV_REQUEST_BYTES`
+/// (32,000–96,000; the provider's state limit is about 96 KB); read once.
+pub fn max_request_bytes() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        env_value("OKO_JEV_REQUEST_BYTES")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map_or(MAX_JEV_REQUEST_BYTES, |n| {
+                n.clamp(MAX_JEV_REQUEST_BYTES, 96_000)
+            })
+    })
+}
 // Provisional yes/no decision boundary, not a calibrated relevance cutoff.
 // Independent Noul scores do not share Choice's former `none` probability.
 pub const RELEVANCE_THRESHOLD: f64 = 0.5;
@@ -188,7 +210,7 @@ fn trim(value: &str) -> &str {
 pub fn parse_items(value: Value) -> Result<Vec<RankItem>> {
     let items = value
         .as_array()
-        .filter(|a| a.len() <= MAX_ITEMS)
+        .filter(|a| a.len() <= max_items())
         .context("Input must be a JSON array of at most 30 items.")?;
     let mut ids = HashSet::new();
     items
@@ -289,12 +311,12 @@ pub fn prepare_request_with_intent(
     items: &[RankItem],
     intent: RankingIntent,
 ) -> Result<(Value, Vec<RankItem>)> {
-    if items.len() > MAX_ITEMS {
-        bail!("Input must contain at most {MAX_ITEMS} items.");
+    if items.len() > max_items() {
+        bail!("Input must contain at most {} items.", max_items());
     }
     let mut candidates = items.to_vec();
     let mut request = create_request(question, &candidates, intent);
-    while !candidates.is_empty() && serde_json::to_vec(&request)?.len() > MAX_JEV_REQUEST_BYTES {
+    while !candidates.is_empty() && serde_json::to_vec(&request)?.len() > max_request_bytes() {
         candidates.pop();
         request = create_request(question, &candidates, intent);
     }
@@ -622,8 +644,8 @@ pub fn rank_items_with_stats(
         bail!("A non-empty question is required.");
     }
     let items = parse_items(serde_json::to_value(input)?)?;
-    if !(1..=MAX_ITEMS).contains(&options.limit) {
-        bail!("limit must be between 1 and {MAX_ITEMS}.");
+    if !(1..=max_items()).contains(&options.limit) {
+        bail!("limit must be between 1 and {}.", max_items());
     }
     if options.no_jev {
         return Ok(ItemRanking {

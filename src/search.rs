@@ -71,14 +71,30 @@ pub const CHUNK_LINES: usize = 40;
 pub const CHUNK_OVERLAP: usize = 5;
 pub const FUNCTION_CHUNK_LINES: usize = 120;
 pub const SHORTLIST_LIMIT: usize = 30;
+/// The shortlist size in effect: `SHORTLIST_LIMIT`, or `OKO_SHORTLIST_LIMIT`
+/// (30–120) for the request-budget experiment. Read once.
+pub fn shortlist_limit() -> usize {
+    static LIMIT: OnceLock<usize> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var("OKO_SHORTLIST_LIMIT")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map_or(SHORTLIST_LIMIT, |n| n.clamp(SHORTLIST_LIMIT, 120))
+    })
+}
 pub const RESULT_LIMIT: usize = 5;
 // Retrieve broadly in memory, then keep the existing small Jev request.
 const RETRIEVAL_WINDOW: usize = 100;
+fn retrieval_window() -> usize {
+    RETRIEVAL_WINDOW.max(2 * shortlist_limit())
+}
 const RRF_CONSTANT: f64 = 60.0;
 // Implementation searches protect half the bounded reranking request for
 // source matches. The other half remains available to the broad ranking so
 // prose and unsupported source formats can still supply useful evidence.
-const IMPLEMENTATION_SOURCE_SLOTS: usize = SHORTLIST_LIMIT / 2;
+fn implementation_source_slots() -> usize {
+    shortlist_limit() / 2
+}
 // A helper a few lines long has too few words to rank on its own, yet it is
 // often what a question about its larger neighbour also needs.
 const NEIGHBOR_SOURCES: usize = 5;
@@ -376,6 +392,65 @@ pub fn chunk_definitions(
     }
     chunks
 }
+/// Long prompts from Codex and OpenCode carry constraint clauses ("must
+/// remain unchanged", "do not touch") whose words crowd the shortlist. A
+/// second, focused query keeps the identifiers, quoted literals and the first
+/// sentence, and drops the constraint clauses; its ranking is fused with the
+/// raw question's, never used instead of it, and Jev still sees the raw text.
+pub fn focused_terms(question: &str) -> Option<String> {
+    static P: OnceLock<(Regex, Regex, Regex)> = OnceLock::new();
+    let (identifier, literal, constraint) = P.get_or_init(|| {
+        (
+            Regex::new(r"[A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.|#)[A-Za-z_][A-Za-z0-9_]*)+|[a-z0-9]+_[a-z0-9_]+|[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*").unwrap(),
+            Regex::new(r#"`([^`\n]{1,80})`|"([^"\n]{2,80})"|'([^'\n]{2,80})'"#).unwrap(),
+            Regex::new(r"(?i)\b(?:must|should|do not|don't|never|leave|keep|only|without|except)\b[^.;\n]*").unwrap(),
+        )
+    });
+    if question.split_whitespace().count() < 25 {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |text: &str| {
+        let text = text.trim();
+        if !text.is_empty() && !parts.iter().any(|p| p == text) {
+            parts.push(text.to_owned());
+        }
+    };
+    for m in identifier.find_iter(question) {
+        push(m.as_str());
+    }
+    for c in literal.captures_iter(question) {
+        if let Some(inner) = c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)) {
+            push(inner.as_str());
+        }
+    }
+    let first = question.split(['.', '\n']).next().unwrap_or(question);
+    let first = constraint.replace_all(first, "");
+    push(&first);
+    let focused = parts.join(" ");
+    let same = tokenize(&focused) == tokenize(question);
+    (!same && tokenize(&focused).len() >= 2).then_some(focused)
+}
+
+/// Reciprocal-rank fusion of two rankings of the same corpus, the first
+/// ranking's order breaking ties, cut to the shortlist size.
+pub fn fuse_rankings(raw: Vec<Chunk>, focused: Vec<Chunk>) -> Vec<Chunk> {
+    let key = |c: &Chunk| (c.path.clone(), c.start_line, c.end_line);
+    let mut score: HashMap<(String, usize, usize), (f64, usize, Chunk)> = HashMap::new();
+    for (list_index, list) in [raw, focused].into_iter().enumerate() {
+        for (rank, chunk) in list.into_iter().enumerate() {
+            let entry = score
+                .entry(key(&chunk))
+                .or_insert_with(|| (0.0, list_index * 1000 + rank, chunk));
+            entry.0 += 1.0 / (RRF_CONSTANT + rank as f64 + 1.0);
+        }
+    }
+    let mut fused: Vec<(f64, usize, Chunk)> = score.into_values().collect();
+    fused.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    fused.truncate(shortlist_limit());
+    fused.into_iter().map(|(_, _, chunk)| chunk).collect()
+}
+
 fn normalize(term: String, stems: &mut HashMap<String, String>) -> String {
     stems.entry(term).or_insert_with_key(|s| stemmer(s)).clone()
 }
@@ -676,7 +751,7 @@ fn lift_neighbors(selected: &mut Vec<Chunk>, candidates: &[Candidate<'_>]) {
     if neighbors.is_empty() {
         return;
     }
-    selected.truncate(SHORTLIST_LIMIT - neighbors.len());
+    selected.truncate(shortlist_limit() - neighbors.len());
     for (_, candidate) in neighbors {
         let mut chunk = candidate.chunk.clone();
         chunk.lexical_score = candidate.symbol_aware;
@@ -703,9 +778,9 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
                 .total_cmp(&score(&candidates[a]))
                 .then_with(|| compare_sources(candidates[a].chunk, candidates[b].chunk))
         };
-        if order.len() > RETRIEVAL_WINDOW {
-            order.select_nth_unstable_by(RETRIEVAL_WINDOW, compare);
-            order.truncate(RETRIEVAL_WINDOW);
+        if order.len() > retrieval_window() {
+            order.select_nth_unstable_by(retrieval_window(), compare);
+            order.truncate(retrieval_window());
         }
         order.sort_unstable_by(compare);
         for (rank, index) in order.into_iter().enumerate() {
@@ -718,7 +793,7 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
             .total_cmp(&a.fusion)
             .then_with(|| compare_sources(a.chunk, b.chunk))
     });
-    let mut ranked = Vec::with_capacity(SHORTLIST_LIMIT);
+    let mut ranked = Vec::with_capacity(shortlist_limit());
     for candidate in candidates {
         if ranked
             .iter()
@@ -732,7 +807,7 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
         // replacement for relevance values compared across filtered searches.
         selected.lexical_score = candidate.symbol_aware;
         ranked.push(selected);
-        if ranked.len() == SHORTLIST_LIMIT {
+        if ranked.len() == shortlist_limit() {
             break;
         }
     }
@@ -1124,7 +1199,7 @@ impl PreparedCorpus {
         let broad = fuse_candidates(candidates.clone());
         let mut selected: Vec<_> = source
             .into_iter()
-            .take(IMPLEMENTATION_SOURCE_SLOTS)
+            .take(implementation_source_slots())
             .collect();
         for candidate in broad {
             if !selected
@@ -1133,7 +1208,7 @@ impl PreparedCorpus {
             {
                 selected.push(candidate);
             }
-            if selected.len() == SHORTLIST_LIMIT {
+            if selected.len() == shortlist_limit() {
                 break;
             }
         }
@@ -1715,6 +1790,34 @@ mod tests {
             read.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
             ["big.ts"]
         );
+    }
+
+    #[test]
+    fn focused_terms_keep_identifiers_and_literals_and_drop_constraint_clauses() {
+        let short = "where is the session cookie signed";
+        assert!(focused_terms(short).is_none());
+        let long = "Locate the code that selects the response decoder from the Content-Encoding header in `_decoders.py` and returns a MultiDecoder for several encodings. The existing DecodingError behaviour must remain unchanged and the public API should not change; only the selection logic may be touched. Do not modify tests.";
+        let focused = focused_terms(long).unwrap();
+        for word in [
+            "_decoders.py",
+            "MultiDecoder",
+            "DecodingError",
+            "Content-Encoding",
+        ] {
+            assert!(focused.contains(word), "{focused}");
+        }
+        assert!(
+            !focused.contains("must remain unchanged") && !focused.contains("modify tests"),
+            "{focused}"
+        );
+        let raw = chunk_text(
+            "a.py",
+            "def select_decoder(header):\n    return MultiDecoder([])\n",
+        );
+        let other = chunk_text("b.py", "class DecodingError(Exception):\n    pass\n");
+        let fused = fuse_rankings(raw.clone(), other.clone());
+        assert_eq!(fused.len(), 2);
+        assert_eq!(fused[0].path, "a.py", "the raw ranking's order breaks ties");
     }
 
     #[test]

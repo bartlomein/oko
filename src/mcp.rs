@@ -283,6 +283,8 @@ impl OkoServer {
         // notes about the ones that found nothing.
         let mut tagged: Vec<(search::Chunk, String)> = Vec::new();
         let mut extra_notes: Vec<String> = Vec::new();
+        // The focused query fused into a long prompt's shortlist, for the metrics.
+        let mut focused_terms: Option<Value> = None;
         let winners = if input.deep {
             let investigation_started = Instant::now();
             let mut provider_calls = Vec::new();
@@ -345,6 +347,25 @@ impl OkoServer {
             } else {
                 snapshot.rank_with_intent(question, input.intent.into())
             };
+            // A long prompt's constraint clauses crowd the shortlist: fuse in
+            // the ranking of its identifiers, literals and first sentence.
+            let (shortlist, focused) = match search::focused_terms(question) {
+                Some(terms) if !self.no_jev => {
+                    let focused_list = snapshot.rank_with_intent(&terms, input.intent.into());
+                    let before: std::collections::HashSet<(String, usize, usize)> = shortlist
+                        .iter()
+                        .map(|c| (c.path.clone(), c.start_line, c.end_line))
+                        .collect();
+                    let fused = search::fuse_rankings(shortlist, focused_list);
+                    let added = fused
+                        .iter()
+                        .filter(|c| !before.contains(&(c.path.clone(), c.start_line, c.end_line)))
+                        .count();
+                    (fused, Some(json!({"terms": terms, "added": added})))
+                }
+                _ => (shortlist, None),
+            };
+            focused_terms = focused;
             // Definitions the question names lead the shortlist and are shown
             // even if the ranker rejects them.
             let found = if symbols.is_empty() {
@@ -579,7 +600,7 @@ impl OkoServer {
         let shown_question = prefix(question, 512);
         let metadata = json!({"question":shown_question, "questionTruncated":shown_question.len() < question.len(), "directory":directory,
             "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
-            "investigation":investigation, "retrieval":retrieval, "floor":floor,
+            "investigation":investigation, "retrieval":retrieval, "floor":floor, "focused":focused_terms,
             "coverage":{"files":snapshot.coverage(), "parsedFiles":snapshot.navigation().coverage().parsed_files,
                 "partialFiles":snapshot.navigation().coverage().partial_files, "definitions":snapshot.navigation().coverage().definitions},
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
