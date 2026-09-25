@@ -400,6 +400,17 @@ shorter path. A name defined five or more times outside tests (`render`,
 Other definitions of a pinned name are listed in a note. The metrics record
 the identifiers found, the pins and the notes under `floor`.
 
+## Long prompts
+
+A prompt of 25 words or more (Codex and OpenCode send the task text rather
+than a question) gets a second, focused query beside the raw one: its
+identifiers, quoted literals and first sentence, with constraint clauses
+("must remain unchanged", "do not touch the tests") dropped. The two keyword
+rankings are fused by reciprocal rank, the raw order breaking ties, so
+nothing the raw question found is lost; Jev still judges against the raw
+text, which is where the exclusions belong. The metrics record the focused
+terms and how many candidates they added under `focused`.
+
 ## Several questions in one call
 
 `questions` takes two to eight independent questions. Each gets its own
