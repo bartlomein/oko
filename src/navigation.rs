@@ -1657,6 +1657,15 @@ impl NavigationIndex {
         }
         index
     }
+    /// Every definition of every parsed file, with its path.
+    pub fn all_definitions(&self) -> impl Iterator<Item = (&str, &Definition)> {
+        self.files.iter().flat_map(|(path, facts)| {
+            facts
+                .definitions
+                .iter()
+                .map(move |definition| (path.as_str(), definition))
+        })
+    }
     pub fn definitions(&self, path: &str) -> &[Definition] {
         self.paths
             .get(path)

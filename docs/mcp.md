@@ -478,6 +478,28 @@ function for each mention, and then the ranked code as usual. The target of
 either question may be a plain word the index defines, not only an
 identifier-shaped one.
 
+## Unused definitions
+
+A question that asks what nothing uses ("dead code in the gin package",
+"unused helpers", "functions that are never called"), or a search with
+`mode: unused`, is answered with a listing: every definition of the searched
+directory whose name appears nowhere in non-test code outside the
+definition itself. Private names come first, then exported ones (other
+repositories may use them), then names only test files use (private ones first, exported ones capped at 12), each row
+`path:line`, kind and qualified name, up to 60 rows. Pass names in `symbols`
+to check only those. The check is by name over the indexed code, so a
+method that implements an interface, a name reached through reflection, a
+route or a template, and public API can look unused; the answer says so.
+A long question that mentions dead code among other things gets the
+listing as a note above the ranked code.
+
+```
+Unused definitions in . — 9 of 1,431 checked have no use in non-test code outside their own definition; 3 used only by tests
+private (7):
+  gin.go:112	function readNthLine
+  path.go:140	function bufApp
+```
+
 ## Coverage
 
 The first line of every answer says what was searched:

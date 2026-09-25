@@ -2219,6 +2219,14 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
         text.starts_with("Callers of Upload — 10 references; 2 in tests hidden\n"),
         "{text}"
     );
+    // mode: unused needs no name and lists what nothing uses.
+    let response = client.search(json!({"mode":"unused","question":"dead code"}));
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(
+        text.starts_with("Unused definitions in the workspace — "),
+        "{text}"
+    );
+    assert!(text.contains("Confirm before deleting."), "{text}");
     // Neither a question nor symbols is an error, as is mode without a name.
     let response = client.search(json!({"symbols":" "}));
     assert_eq!(response["result"]["isError"], true, "{response}");

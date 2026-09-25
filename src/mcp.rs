@@ -85,6 +85,7 @@ fn split_names(text: &str) -> Vec<String> {
 enum Mode {
     Usages,
     Enumerate,
+    Unused,
 }
 
 /// Names per call in `symbols`.
@@ -110,7 +111,8 @@ struct SearchInput {
     /// unranked. "wsgi_app, Flask.dispatch_request"
     symbols: Option<String>,
     /// usages: every use of the named definition, by line; enumerate: every
-    /// file using it. Needs a name.
+    /// file using it (both need a name). unused: definitions in the directory
+    /// nothing uses.
     mode: Option<Mode>,
     /// 2-8 independent questions answered in one call, ranked in parallel;
     /// each excerpt is labelled Q1, Q2... The first question leads.
@@ -155,6 +157,7 @@ impl OkoServer {
             .is_some_and(|qs| qs.iter().any(|q| !q.trim().is_empty()));
         if symbols.is_empty()
             && !has_questions
+            && input.mode != Some(Mode::Unused)
             && (question.trim().is_empty() || question.len() > 4096)
         {
             bail!("Question must contain 1–4096 bytes of nonblank text, or name symbols.");
@@ -208,6 +211,12 @@ impl OkoServer {
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
         let started = Instant::now();
         let directory = self.directory(&input)?;
+        let scope = input
+            .directory
+            .as_deref()
+            .filter(|d| !d.is_empty() && *d != ".")
+            .unwrap_or("the workspace")
+            .to_owned();
         let symbols = input
             .symbols
             .as_deref()
@@ -373,8 +382,71 @@ impl OkoServer {
             } else {
                 oko::floor::pins_for_names(&symbols, snapshot.navigation(), corpus)
             };
-            // `mode: enumerate`: every file that uses the name; no ranking.
-            if input.mode == Some(Mode::Enumerate) {
+            // `mode: unused` or "dead code in this package": the definitions
+            // nothing uses; no ranking.
+            let asks_unused = input.mode == Some(Mode::Unused)
+                || (input.mode.is_none()
+                    && !matches!(input.intent, Intent::Callers)
+                    && oko::usages::asks_for_unused(question));
+            // "unused definitions in src/" names the listing's own subject, so
+            // the code-words test of callers questions does not apply.
+            let unused_alone = input.mode == Some(Mode::Unused)
+                || (question.len() <= 120 && question.split_whitespace().count() <= 16);
+            // Uses are counted over the whole workspace; only the candidates
+            // come from the searched directory.
+            let unused_prefix = directory
+                .strip_prefix(&self.root)
+                .ok()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .filter(|p| !p.is_empty())
+                .map(|p| format!("{}/", p.trim_end_matches('/')))
+                .unwrap_or_default();
+            let unused_summary = if asks_unused {
+                let prefix = unused_prefix.clone();
+                if prefix.is_empty() {
+                    Some(oko::usages::unused(
+                        snapshot.navigation(),
+                        corpus,
+                        &symbols,
+                        "",
+                    ))
+                } else {
+                    let whole = self
+                        .cache
+                        .lock()
+                        .map_err(|_| {
+                            anyhow::anyhow!("Search cache worker failed. Restart the server.")
+                        })?
+                        .load(&self.root)?
+                        .snapshot;
+                    Some(oko::usages::unused(
+                        whole.navigation(),
+                        whole.chunks(),
+                        &symbols,
+                        &prefix,
+                    ))
+                }
+            } else {
+                None
+            };
+            if let Some(summary) = unused_summary.as_ref().filter(|_| !unused_alone) {
+                accompanying = Some(oko::usages::render_unused(summary, &scope, &unused_prefix));
+            }
+            if let Some(summary) = unused_summary.filter(|_| unused_alone) {
+                direct = Some(oko::usages::render_unused(&summary, &scope, &unused_prefix));
+                floor = Some(found);
+                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+                (
+                    Vec::new(),
+                    None,
+                    Some(json!({"unused": {
+                        "checked": summary.checked,
+                        "private": summary.private.len(),
+                        "exported": summary.exported.len(),
+                        "testsOnly": summary.tests_only.len(),
+                    }})),
+                )
+            } else if input.mode == Some(Mode::Enumerate) {
                 let Some(pin) =
                     found.pins.first().cloned().or_else(|| {
                         oko::floor::named_target(question, snapshot.navigation(), corpus)
