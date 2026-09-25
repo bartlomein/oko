@@ -94,10 +94,10 @@ fn implementation_intent_keeps_source_only_and_fallback_corpora_unchanged() {
 
 #[test]
 fn implementation_source_quota_preserves_broad_evidence_and_filters() {
-    let mut chunks: Vec<_> = (0..50)
+    let mut chunks: Vec<_> = (0..70)
         .map(|i| document(&format!("notes/{i:02}.md"), "quartz amber"))
         .collect();
-    chunks.extend((0..25).map(|i| {
+    chunks.extend((0..40).map(|i| {
         document(
             &format!("src/{i:02}.rs"),
             &format!("quartz {}", "filler ".repeat(100)),
@@ -270,7 +270,7 @@ fn declaration_lane_recovers_long_implementations_across_languages() {
 
 #[test]
 fn single_file_corpora_keep_distinct_nonoverlapping_matches() {
-    let mut chunks: Vec<_> = (1..=40)
+    let mut chunks: Vec<_> = (1..=80)
         .map(|line| {
             let mut chunk = document("large.txt", "quartz");
             chunk.start_line = line;

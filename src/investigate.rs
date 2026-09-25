@@ -475,7 +475,7 @@ mod tests {
     }
     fn corpus() -> Vec<Chunk> {
         let mut chunks = Vec::new();
-        for i in 0..35 {
+        for i in 0..70 {
             chunks.extend(search::chunk_text(
                 &format!("docs/{i:02}.md"),
                 "two optional telemetry values interpolated preserving available missing\n",

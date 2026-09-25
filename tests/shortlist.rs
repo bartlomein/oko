@@ -65,7 +65,7 @@ fn distinct_implementations_in_one_file_survive_competing_prose() {
                 implementation.start_line,
             );
         }
-        assert_eq!(ranked.len(), SHORTLIST_LIMIT);
+        assert_eq!(ranked.len(), SHORTLIST_LIMIT.min(corpus.len()));
         assert!(ranked.iter().any(|chunk| chunk.path.starts_with("docs/")));
     }
 }
@@ -145,10 +145,10 @@ fn duplicate_candidates_cannot_fill_the_shortlist_or_hide_other_files() {
 
     let ranked = rank_lexically(&corpus, "archive recovery");
     assert_eq!(ranked, rank_lexically(&unique, "archive recovery"));
-    assert_eq!(ranked.len(), SHORTLIST_LIMIT);
+    assert_eq!(ranked.len(), SHORTLIST_LIMIT.min(unique.len()));
     assert_eq!(
         locations(&ranked).into_iter().collect::<HashSet<_>>().len(),
-        SHORTLIST_LIMIT,
+        SHORTLIST_LIMIT.min(unique.len()),
     );
     assert_eq!(
         ranked
@@ -225,7 +225,7 @@ fn tests_do_not_take_the_slots_reserved_for_implementations() {
     let question = "where is the async auth flow response body closed";
     let implementation =
         rank_lexically_with_intent(&corpus, question, RankingIntent::Implementation);
-    assert_eq!(implementation.len(), SHORTLIST_LIMIT);
+    assert_eq!(implementation.len(), SHORTLIST_LIMIT.min(corpus.len()));
     assert_eq!(
         implementation[0].path, "httpx/_client.py",
         "the only implementation leads the reserved source slots"
@@ -260,8 +260,8 @@ fn tests_do_not_take_the_slots_reserved_for_implementations() {
 
 #[test]
 fn a_short_helper_beside_a_strong_match_reaches_the_shortlist() {
-    // Forty files outrank the helper on words alone; one match beats them all.
-    let mut corpus: Vec<_> = (0..40)
+    // Eighty files outrank the helper on words alone; one match beats them all.
+    let mut corpus: Vec<_> = (0..80)
         .map(|index| {
             source(
                 &format!("src/other_{index}.rs"),
@@ -283,7 +283,7 @@ fn a_short_helper_beside_a_strong_match_reaches_the_shortlist() {
     corpus.push(helper.clone());
     let question = "capture name reference parsing in the replacement";
     let ranked = rank_lexically(&corpus, question);
-    assert_eq!(ranked.len(), SHORTLIST_LIMIT);
+    assert_eq!(ranked.len(), SHORTLIST_LIMIT.min(corpus.len()));
     assert_eq!(locations(&ranked)[0], ("src/interpolate.rs", 92, 94));
     assert!(
         locations(&ranked).contains(&("src/interpolate.rs", 95, 98)),

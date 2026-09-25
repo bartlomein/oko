@@ -70,7 +70,8 @@ pub fn is_minified(text: &str) -> bool {
 pub const CHUNK_LINES: usize = 40;
 pub const CHUNK_OVERLAP: usize = 5;
 pub const FUNCTION_CHUNK_LINES: usize = 120;
-pub const SHORTLIST_LIMIT: usize = 30;
+// 60 since 2026-09-25, with `ranking::MAX_ITEMS`; see the note there.
+pub const SHORTLIST_LIMIT: usize = 60;
 /// The shortlist size in effect: `SHORTLIST_LIMIT`, or `OKO_SHORTLIST_LIMIT`
 /// (30–120) for the request-budget experiment. Read once.
 pub fn shortlist_limit() -> usize {
@@ -1722,14 +1723,14 @@ mod tests {
     #[test]
     fn deterministic_utf16_ties_and_limit() {
         assert_eq!(compare_text("\u{10000}", "\u{e000}"), Ordering::Less);
-        let chunks: Vec<_> = (0..40)
+        let chunks: Vec<_> = (0..80)
             .rev()
             .flat_map(|i| chunk_text(&format!("{i:02}.txt"), "needle"))
             .collect();
         let ranked = rank_lexically(&chunks, "needle");
-        assert_eq!(ranked.len(), 30);
+        assert_eq!(ranked.len(), SHORTLIST_LIMIT);
         assert_eq!(ranked[0].path, "00.txt");
-        assert_eq!(ranked[29].path, "29.txt");
+        assert_eq!(ranked[SHORTLIST_LIMIT - 1].path, "59.txt");
         assert!(rank_lexically(&chunks, "where is it").is_empty());
     }
     #[test]

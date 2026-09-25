@@ -1146,7 +1146,7 @@ fn implementation_intent_recovers_prose_crowded_source_in_one_request() {
     fs::write(root.path().join("decision.rs"), &source).unwrap();
     let corpus = oko::search::workspace_chunks(root.path()).unwrap();
     let broad = oko::search::rank_lexically(&corpus, question);
-    assert_eq!(broad.len(), 30);
+    assert_eq!(broad.len(), oko::search::SHORTLIST_LIMIT);
     assert!(broad.iter().all(|chunk| chunk.path != "decision.rs"));
 
     for intent in [None, Some("general"), Some("explanation")] {
@@ -1174,7 +1174,7 @@ fn implementation_intent_recovers_prose_crowded_source_in_one_request() {
         application_request.as_object_mut().unwrap().remove("model");
         assert!(serde_json::to_vec(&application_request).unwrap().len() <= 32_000);
         let candidates = requests[0]["state"]["candidates"].as_array().unwrap();
-        assert_eq!(candidates.len(), 30);
+        assert_eq!(candidates.len(), oko::ranking::MAX_ITEMS);
         let paths: Vec<_> = candidates
             .iter()
             .map(|candidate| {
@@ -1925,7 +1925,8 @@ fn cached_syntax_supports_validators_with_one_provider_call_and_bounded_wire_out
 fn empty_search_recovers_unseen_candidates_once_and_preserves_constraints() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let root = tempfile::tempdir().unwrap();
-    for index in 0..40 {
+    // More files than the shortlist holds, so recovery has unseen candidates.
+    for index in 0..80 {
         fs::write(
             root.path().join(format!("parcel{index:02}.rs")),
             "fn parcel_dispatch() { deliver_parcel(); }\n",
@@ -1973,7 +1974,7 @@ fn empty_search_recovers_unseen_candidates_once_and_preserves_constraints() {
 #[test]
 fn persistent_miss_stops_after_two_requests_without_lowering_threshold() {
     let root = tempfile::tempdir().unwrap();
-    for index in 0..40 {
+    for index in 0..80 {
         fs::write(
             root.path().join(format!("parcel{index:02}.rs")),
             "fn parcel_dispatch() {}\n",

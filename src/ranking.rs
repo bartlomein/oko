@@ -7,7 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const MAX_ITEMS: usize = 30;
+// 60 since 2026-09-25: the four-arm experiment (plans/baselines) put 60
+// candidates in a 32 KB request ahead of 30 on Loc-Bench (file@5 78 → 84) and
+// on the real-question replay (named hit 69 → 73%) for 30% more Jev tokens.
+pub const MAX_ITEMS: usize = 60;
 pub const MAX_JEV_REQUEST_BYTES: usize = 32_000;
 /// Candidates per request in effect: `MAX_ITEMS`, or `OKO_JEV_ITEMS` (30–120)
 /// for the request-budget experiment; read once.
