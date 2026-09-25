@@ -11,6 +11,6 @@ After an Oko search, if you can name the exact code to cite or change, act: answ
 - Bad: Oko search, then `sed`, `nl`, `cat`, or a read of the same range to verify it.
 - Bad: Oko search, then grep for a name the excerpts already show.
 
-When you answer from search results, say what you did not check: a path you did not follow, a caller you did not read, a file the excerpts only referenced. Do not present a partial trace as complete.
+When you answer in prose from search results, say inside the answer what you did not check: a path you did not follow, a caller you did not read, a file the excerpts only referenced. Do not present a partial trace as complete. When the user asks for a fixed format (JSON, a single value, a patch), return exactly that and nothing after it.
 
 Start with normal search; use deep mode only if it was insufficient. If Oko is unavailable or returns nothing relevant, fall back to native search.
