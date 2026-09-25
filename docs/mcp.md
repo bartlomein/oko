@@ -400,6 +400,30 @@ shorter path. A name defined five or more times outside tests (`render`,
 Other definitions of a pinned name are listed in a note. The metrics record
 the identifiers found, the pins and the notes under `floor`.
 
+## Names as a parameter
+
+`symbols` takes exact names, comma-separated, up to twelve ("wsgi_app,
+Flask.dispatch_request, Upload"), and returns their definitions whole, in
+that order, with no ranking and no Jev call: a function or short class as
+its full text, a long class as an outline. A name the index does not define
+is reported in a note (`` `Nope`: no definition in the index. ``) while the
+others answer. `question` may be omitted when `symbols` is given. The
+parameter is a string rather than an array because an array costs an
+`anyOf` in every turn's schema and Codex sends arrays as strings anyway.
+
+`mode` turns the answer into a listing for the named definition (from
+`symbols` or the question): `usages` is every use by line, as for a callers
+question; `enumerate` is every file that uses it, one row per file with the
+count and first line, up to 40 files, test files counted separately.
+
+When a question names a definition that four or more code files use, the
+answer carries one line summarising the dependents, most uses first, so
+"what depends on X" needs no second call:
+
+```
+`Upload` is used by 129 files (368 uses): lib/tasks/uploads.rake (33), lib/file_store/to_s3_migration.rb (16), …, +121 more; 87 test files. Ask "who uses Upload" for every line.
+```
+
 ## Callers and tests
 
 A question that asks who uses a name ("who calls `wsgi_app`", "callers of
