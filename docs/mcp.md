@@ -488,7 +488,9 @@ several-question answer), extra rows within a file go first, then the line
 text, then the definition name, leaving a bare `path:line` per file (a few
 hundred files fit); only past that are whole areas summarised by name with a
 hint to pass `directory`. Task, data, locale and script files are counted after the
-code, the definition's own file is counted, and a closing section lists the
+code, the definition's own file is counted, the header says the listing is
+complete for the indexed code and names what it cannot see (references built
+at runtime: reflection, `send`, names in strings), and a closing section lists the
 specs and tests that use the name as `path:line`, files named after the
 definition first, each pointing at the file's `describe` (or test class,
 `func Test…`, `def test_…`) of the name when it has one. For a Ruby class, lines that refer to it the Rails way

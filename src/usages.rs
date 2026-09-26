@@ -417,6 +417,8 @@ pub struct Dependents {
     /// named after the definition first, then most uses.
     pub test_rows: Vec<(String, usize, usize, String)>,
     pub in_comments: usize,
+    /// Rails association lines were counted as uses.
+    pub rails: bool,
 }
 
 /// Task, data, generated and script files: their uses are counted after the
@@ -455,6 +457,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
     };
     let mut by_area: BTreeMap<String, Vec<DependentFile>> = BTreeMap::new();
     let (files, associations) = lines_for(pin, corpus);
+    result.rails = associations.is_some();
     for (path, lines) in &files {
         if is_docs_path(path) {
             continue;
@@ -597,7 +600,12 @@ pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
             summary.test_files, summary.tests
         ));
     }
-    out.push_str(". One row per enclosing definition: path:line, definition, line.\n");
+    out.push_str(". One row per enclosing definition: path:line, definition, line.");
+    out.push_str(&format!(
+        " Complete for the indexed code: every line that names {}{}; not included: references built at runtime (reflection, `send`, names in strings).\n",
+        summary.name,
+        if summary.rails { " or its Rails associations" } else { "" }
+    ));
     let mut rows_per_file = usize::MAX;
     let mut with_text = true;
     let mut with_definition = true;
@@ -1108,7 +1116,7 @@ mod tests {
         );
         let text = render_dependents(&summary);
         assert!(
-            text.starts_with("Files using Upload — 3 files, 6 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last  (+1 more in this file)\napp/models (1 files)\n  app/models/user_profile.rb:2\tUserProfile\tbelongs_to :card_background_upload, class_name: \"Upload\"  (+1 more in this file)\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\tdescribe Upload do  (2 uses)\n"),
+            text.starts_with("Files using Upload — 3 files, 6 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line. Complete for the indexed code: every line that names Upload or its Rails associations; not included: references built at runtime (reflection, `send`, names in strings).\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last  (+1 more in this file)\napp/models (1 files)\n  app/models/user_profile.rb:2\tUserProfile\tbelongs_to :card_background_upload, class_name: \"Upload\"  (+1 more in this file)\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\tdescribe Upload do  (2 uses)\n"),
             "{text}"
         );
     }
