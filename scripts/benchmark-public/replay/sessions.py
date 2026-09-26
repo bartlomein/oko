@@ -55,6 +55,7 @@ def main():
     parser.add_argument('--jev', action='store_true')
     parser.add_argument('--only', help='Comma-separated repo names')
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--env', action='append', default=[], help='KEY=VALUE passed to the Oko process')
     args = parser.parse_args()
     calls = [json.loads(line) for line in Path(args.corpus).read_text().splitlines() if line.strip()]
     separate = {(r['session'], r['idx']): r for r in (json.loads(l) for l in Path(args.separate).read_text().splitlines())}
@@ -88,7 +89,8 @@ def main():
             with tempfile.TemporaryDirectory(prefix='oko-sessions-cache-') as cache:
                 client = module.Client(Path(args.binary), corpus.DEFAULT_REPOS[repo], Path(cache), args.timeout, live=args.jev,
                                        api_key=replay.api_key() if args.jev else None,
-                                       model=replay.JEV_MODEL if args.jev else None)
+                                       model=replay.JEV_MODEL if args.jev else None,
+                                       extra_env=dict(item.split('=', 1) for item in args.env))
                 client.initialize()
                 client.request('tools/call', {'name': 'search', 'arguments': {'question': 'warm up'}})
                 for run in by_repo[repo]:

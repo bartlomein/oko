@@ -61,6 +61,7 @@ def main():
     parser.add_argument('--label', required=True)
     parser.add_argument('--gold', action='store_true')
     parser.add_argument('--timeout', type=float, default=300)
+    parser.add_argument('--env', action='append', default=[], help='KEY=VALUE passed to the Oko process')
     args = parser.parse_args()
     module = replay.profiler()
     rows = []
@@ -73,7 +74,8 @@ def main():
             started = time.monotonic()
             with tempfile.TemporaryDirectory(prefix='oko-transcripts-') as cache:
                 client = module.Client(Path(args.binary), corpus.DEFAULT_REPOS[args.repo], Path(cache), args.timeout,
-                                       live=False, api_key=None, model=None)
+                                       live=False, api_key=None, model=None,
+                                       extra_env=dict(item.split('=', 1) for item in args.env))
                 client.initialize()
                 for arguments in calls:
                     try:

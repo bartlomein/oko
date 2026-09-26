@@ -99,6 +99,16 @@ const MAX_QUESTIONS: usize = 8;
 /// up to `MAX_MULTI_RESULT_BYTES`: below Claude Code's 10,000-token warning.
 const EXTRA_QUESTION_BYTES: usize = 5_000;
 const MAX_MULTI_RESULT_BYTES: usize = 36_000;
+
+/// Experiment knobs for the batch budget (`OKO_BATCH_EXTRA_BYTES`,
+/// `OKO_BATCH_MAX_BYTES`, `OKO_BATCH_EXTRA_RESULTS`), for replay comparisons
+/// of one build; the constants are the defaults.
+fn knob(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
 /// Excerpts a several-question call may show: two more per extra question,
 /// so each question keeps at least its best result.
 const EXTRA_QUESTION_RESULTS: usize = 2;
@@ -839,7 +849,8 @@ impl OkoServer {
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
         let max_results = (oko::context::RESULT_LIMIT
-            + EXTRA_QUESTION_RESULTS * questions.len().saturating_sub(1))
+            + knob("OKO_BATCH_EXTRA_RESULTS", EXTRA_QUESTION_RESULTS)
+                * questions.len().saturating_sub(1))
         .min(MAX_MULTI_RESULTS);
         let mut packet = oko::context::build_packet_for_questions(
             corpus,
@@ -864,8 +875,9 @@ impl OkoServer {
             });
         }
         let limit = (MAX_MCP_RESULT_BYTES
-            + EXTRA_QUESTION_BYTES * questions.len().saturating_sub(1))
-        .min(MAX_MULTI_RESULT_BYTES);
+            + knob("OKO_BATCH_EXTRA_BYTES", EXTRA_QUESTION_BYTES)
+                * questions.len().saturating_sub(1))
+        .min(knob("OKO_BATCH_MAX_BYTES", MAX_MULTI_RESULT_BYTES));
         let explicit = direct.is_some() || input.mode.is_some() || !symbols.is_empty() || parallel;
         packet_result(
             metadata,
