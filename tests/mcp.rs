@@ -2136,7 +2136,7 @@ fn callers_and_tests_questions_get_listings_instead_of_ranked_excerpts() {
     // Tests for X: paired by name and by mention, ahead of the ranked code.
     let tests = client.search(json!({"question":"tests for authenticate"}));
     let text = body(tests["result"]["content"][0]["text"].as_str().unwrap());
-    assert!(text.starts_with("Tests for authenticate:\n  tests/test_auth.py — named after it, mentions it, high: L1, test_authenticate (L4)\n"), "{text}");
+    assert!(text.starts_with("Tests for authenticate:\n  tests/test_auth.py:1 — named after it, mentions it, high: L1, test_authenticate (L4)\n"), "{text}");
     assert!(
         text.contains("src/auth.py:1-"),
         "the definition still follows: {text}"

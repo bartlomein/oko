@@ -338,6 +338,9 @@ pub struct Dependents {
     pub own_file_uses: usize,
     pub test_files: usize,
     pub tests: usize,
+    /// Test files: `(path, uses, first line)`, files named after the
+    /// definition first, then most uses.
+    pub test_rows: Vec<(String, usize, usize)>,
     pub in_comments: usize,
 }
 
@@ -384,6 +387,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
         let own = *path == pin.path;
         let data = !test && is_data_path(path);
         let mut count = 0;
+        let mut first = 0;
         // Rows keyed by the enclosing definition's start line, so one method
         // is one row however many times it names the symbol.
         let mut rows: BTreeMap<usize, DependentRow> = BTreeMap::new();
@@ -399,6 +403,9 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
                 continue;
             }
             count += 1;
+            if first == 0 {
+                first = *number;
+            }
             if test || own || data {
                 continue;
             }
@@ -426,6 +433,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
         if test {
             result.test_files += 1;
             result.tests += count;
+            result.test_rows.push(((*path).to_owned(), count, first));
         } else if own {
             result.own_file_uses = count;
         } else if data {
@@ -449,6 +457,13 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
     result
         .data_files
         .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let file_stem = stem(&pin.path);
+    result.test_rows.sort_by(|a, b| {
+        named_after(&b.0, file_stem, name)
+            .cmp(&named_after(&a.0, file_stem, name))
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.0.cmp(&b.0))
+    });
     result
 }
 
@@ -456,6 +471,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
 /// first row; extra rows go first, then whole areas are summarised.
 const DEPENDENTS_BYTES: usize = 12_000;
 const DATA_FILES_SHOWN: usize = 6;
+const TEST_FILES_SHOWN: usize = 12;
 
 /// `mode: enumerate` and long callers lists: `path:line<TAB>Enclosing<TAB>text`
 /// per enclosing definition, grouped by area with counts, code before data.
@@ -550,6 +566,22 @@ pub fn render_dependents(summary: &Dependents) -> String {
             ));
         }
         out.push('\n');
+    }
+    if !summary.test_rows.is_empty() {
+        out.push_str(&format!(
+            "Specs and tests using {} ({} files, {} uses), named after it first:\n",
+            summary.name, summary.test_files, summary.tests
+        ));
+        for (path, uses, first) in summary.test_rows.iter().take(TEST_FILES_SHOWN) {
+            out.push_str(&format!("  {path}:{first}\t{uses}\n"));
+        }
+        if summary.test_rows.len() > TEST_FILES_SHOWN {
+            out.push_str(&format!(
+                "  … {} more test files; ask \"tests for {}\" for the ones named after it.\n",
+                summary.test_rows.len() - TEST_FILES_SHOWN,
+                summary.name
+            ));
+        }
     }
     out
 }
@@ -837,9 +869,16 @@ pub fn render_tests(pin: &Pin, matches: &[TestMatch]) -> String {
                 None => lines.push(format!("L{number}")),
             }
         }
+        // The row leads with `path:line` of the first mention, so the file
+        // can be cited as a location; a file only named after the
+        // definition has no line to give.
+        let location = match found.lines.first() {
+            Some((number, _)) => format!("{}:{}", found.path, number),
+            None => found.path.clone(),
+        };
         out.push_str(&format!(
             "  {} — {}, {}{}\n",
-            found.path,
+            location,
             found.how,
             found.confidence,
             if lines.is_empty() {
@@ -912,7 +951,7 @@ mod tests {
         );
         let text = render_dependents(&summary);
         assert!(
-            text.starts_with("Files using Upload — 2 files, 4 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\n"),
+            text.starts_with("Files using Upload — 2 files, 4 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\t2\n"),
             "{text}"
         );
     }
@@ -1068,7 +1107,7 @@ mod tests {
         );
         let text = render_tests(pin, &tests);
         assert!(
-            text.contains("tests/test_basic.py — mentions it, medium: test_wsgi_app (L2)"),
+            text.contains("tests/test_basic.py:2 — mentions it, medium: test_wsgi_app (L2)"),
             "{text}"
         );
     }

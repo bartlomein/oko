@@ -471,12 +471,33 @@ gin.go
   766	call	serveError	c.Next()
 ```
 
+A callers listing of more than twelve files, and `mode: enumerate`, switch
+to the dependents shape: every production file that uses the name, one row
+per enclosing definition as `path:line`, the definition's qualified name and
+the line, grouped by area (`app/controllers (5 files)`) with counts. Nothing
+is dropped for having few uses: over a 12 KB budget, extra rows within a
+file go first, then whole areas are summarised by name with a hint to pass
+`directory`. Task, data, locale and script files are counted after the
+code, the definition's own file is counted, and a closing section lists the
+specs and tests that use the name as `path:line`, files named after the
+definition first.
+
+```
+Files using Upload — 106 files, 285 uses in code; 16 in its own file; 86 test files (415 uses). One row per enclosing definition: path:line, definition, line.
+app/controllers (5 files)
+  app/controllers/metadata_controller.rb:118	MetadataController.default_manifest	upload = Upload.find_by(sha1: Upload.extract_sha1(image))
+  app/controllers/uploads_controller.rb:89	UploadsController.create	render json: …  (+4 more in this file)
+…
+Specs and tests using Upload (86 files, 415 uses), named after it first:
+  spec/models/upload_spec.rb:12	61
+```
+
 A question that asks for tests ("tests for `MultiDecoder`", "which specs
 cover Upload") first lists the test files named after the definition's file
-or name (`high`) or mentioning it (`medium`), with the enclosing test
-function for each mention, and then the ranked code as usual. The target of
-either question may be a plain word the index defines, not only an
-identifier-shaped one.
+or name (`high`) or mentioning it (`medium`), each as `path:line` of its
+first mention with the enclosing test function, and then the ranked code as
+usual. The target of either question may be a plain word the index defines,
+not only an identifier-shaped one.
 
 ## Unused definitions
 
