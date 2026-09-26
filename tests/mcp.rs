@@ -1066,6 +1066,22 @@ fn assert_packet_envelope(response: &Value) -> &Value {
         } else if !omitted.is_empty() {
             label.push_str(", body abridged");
         }
+        if excerpt["seen"] == true {
+            // Sent whole earlier in the session: a citable stub, no body.
+            let mut stub = "shown in an earlier answer".to_owned();
+            if let Some(tag) = excerpt["tag"].as_str() {
+                stub.push_str(", ");
+                stub.push_str(tag);
+            }
+            let header = format!(
+                "{}:{}-{} ({stub})\n",
+                excerpt["path"].as_str().unwrap(),
+                excerpt["startLine"],
+                excerpt["endLine"]
+            );
+            assert!(text.contains(&header), "{header}: {text}");
+            continue;
+        }
         let header = format!(
             "{}:{}-{} ({label})\n",
             excerpt["path"].as_str().unwrap(),
@@ -2198,7 +2214,10 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
         text.contains("`Nope`: no definition in the index.\n"),
         "{text}"
     );
-    // A widely used definition carries its dependents in one line.
+    // A widely used definition carries its dependents in one line; a new
+    // session, since this one already had the line.
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
     let response = client.search(json!({"question":"Upload model class definition"}));
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
@@ -2209,6 +2228,10 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
         text.contains("; 1 test files. Ask \"who uses Upload\" for every file with path:line and the enclosing definition.\n"),
         "{text}"
     );
+    // Asked again in the same session, the line is not repeated.
+    let response = client.search(json!({"question":"Upload model class definition"}));
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(!text.contains("is used by"), "{text}");
     // mode: enumerate lists the files; mode: usages the lines.
     let response = client.search(json!({"symbols":"Upload","mode":"enumerate"}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
@@ -2222,15 +2245,12 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
         text.starts_with("Callers of Upload — 10 references; 2 in tests hidden\n"),
         "{text}"
     );
-    // In a batch, a callers question gets its listing and a pinned, widely
-    // used name its dependents line, as single questions do.
+    // In a batch, a callers question gets its listing, as single questions
+    // do; the dependents line was already sent in this session.
     let response =
         client.search(json!({"questions":["Upload model definition","who uses Upload"]}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
-    assert!(
-        text.contains("`Upload` is used by 5 files (10 uses): app/models/thing0.rb:2 (2), "),
-        "{text}"
-    );
+    assert!(!text.contains("is used by"), "{text}");
     assert!(text.contains("Q2: Callers of Upload — "), "{text}");
     // mode: unused needs no name and lists what nothing uses.
     let response = client.search(json!({"mode":"unused","question":"dead code"}));
@@ -2325,4 +2345,49 @@ fn several_questions_share_one_call_with_labelled_excerpts_and_one_set_of_side_r
             && text.contains("routes.rs:1-3 (whole file, Q2)\n"),
         "{text}"
     );
+}
+
+#[test]
+fn a_repeated_long_excerpt_becomes_a_citable_stub_unless_asked_for_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut body = String::from("pub fn reconcile_inventory_records(store: &Store) -> usize {\n");
+    for i in 0..20 {
+        body.push_str(&format!(
+            "    let batch_{i} = store.inventory_batch({i});\n"
+        ));
+    }
+    body.push_str("    0\n}\n");
+    fs::write(root.path().join("inventory.rs"), &body).unwrap();
+    fs::write(root.path().join("other.rs"), "pub fn unrelated() {}\n").unwrap();
+    let mut client = Client::start_with_cache(root.path(), true, None, cache.path());
+    client.initialize();
+    let question = json!({"question":"how are inventory records reconciled"});
+    let first = client.search(question.clone());
+    let first = first["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(first.contains("inventory_batch(19)"), "{first}");
+    // The same excerpt again: location and first line, not the body.
+    let second = client.search(question.clone());
+    let second = second["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        second.contains("inventory.rs:1-23 (shown in an earlier answer)\n1\tpub fn reconcile_inventory_records(store: &Store) -> usize {\nNot repeated. To see it again, search with symbols: \"reconcile_inventory_records\".\n"),
+        "{second}"
+    );
+    assert!(!second.contains("inventory_batch(19)"), "{second}");
+    // Asked for by name, it is always whole.
+    let named = client.search(json!({"symbols":"reconcile_inventory_records"}));
+    let named = named["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(named.contains("inventory_batch(19)"), "{named}");
+    // A new server remembers nothing.
+    let mut fresh = Client::start_with_cache(root.path(), true, None, cache.path());
+    fresh.initialize();
+    let again = fresh.search(question);
+    let again = again["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(again.contains("inventory_batch(19)"), "{again}");
 }

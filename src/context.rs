@@ -78,6 +78,10 @@ pub struct ContextMatch {
     /// before any match is dropped to fit the budget.
     #[serde(skip)]
     compact: Option<SourceExcerpt>,
+    /// Sent whole in an earlier answer of this session: rendered as a
+    /// citable one-line stub instead of the source.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub seen: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -993,6 +997,47 @@ impl SourceExcerpt {
     }
 }
 impl SourceExcerpt {
+    /// Lines the excerpt spans.
+    pub fn lines(&self) -> usize {
+        self.end_line + 1 - self.start_line
+    }
+
+    /// An excerpt already sent whole in this session: its location, its first
+    /// line (so it stays citable without the earlier answer) and how to get
+    /// it again.
+    fn render_seen(&self, tag: Option<&str>, out: &mut String) {
+        let mut label = "shown in an earlier answer".to_owned();
+        if let Some(tag) = tag {
+            label.push_str(", ");
+            label.push_str(tag);
+        }
+        out.push_str(&format!(
+            "{}:{}-{} ({label})\n",
+            self.path, self.start_line, self.end_line
+        ));
+        let (line, text) = match &self.symbol {
+            Some(symbol) => (symbol.line, symbol.text.as_str()),
+            None => (self.start_line, self.text.split('\n').next().unwrap_or("")),
+        };
+        let mut head = text.trim_end().to_owned();
+        if head.len() > 160 {
+            let mut end = 160;
+            while !head.is_char_boundary(end) {
+                end -= 1;
+            }
+            head.truncate(end);
+            head.push('…');
+        }
+        out.push_str(&format!("{line}\t{head}\n"));
+        match &self.symbol {
+            Some(symbol) => out.push_str(&format!(
+                "Not repeated. To see it again, search with symbols: \"{}\".\n",
+                symbol.name
+            )),
+            None => out.push_str("Not repeated. To see it again, read that range.\n"),
+        }
+    }
+
     /// `path:start-end (label)` followed by the exact source in a fence that
     /// the source itself cannot close. Every line carries its file line number
     /// and a tab: models count lines unreliably, so an agent asked for a
@@ -1077,6 +1122,10 @@ impl ContextPacket {
         for result in &self.results {
             if !out.is_empty() {
                 out.push('\n');
+            }
+            if result.seen {
+                result.excerpt.render_seen(result.tag.as_deref(), &mut out);
+                continue;
             }
             result.excerpt.render(
                 result.lower_confidence,
@@ -1424,6 +1473,7 @@ fn build_packet_limited(
                 exact_name,
                 tag: None,
                 compact,
+                seen: false,
             });
             continue;
         }
@@ -1483,6 +1533,7 @@ fn build_packet_limited(
             exact_name,
             tag: None,
             compact,
+            seen: false,
         });
     }
     if let Some(navigation) = navigation {

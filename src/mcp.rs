@@ -134,6 +134,81 @@ struct SearchInput {
     max_steps: Option<usize>,
 }
 
+/// What this server has already sent in the session, so a repeat can be a
+/// citable one-line stub instead of the same source again. The server cannot
+/// tell a subagent from its parent, nor see context compaction, so a repeat is
+/// only stubbed while the earlier answer is recent (within `SEEN_WINDOW_BYTES`
+/// of later output), only for long excerpts, and never on an explicit request
+/// (`symbols`, `mode`, a callers listing): asking by name always returns the
+/// full text.
+#[derive(Default)]
+struct Memory {
+    /// Bytes of answers sent so far.
+    bytes: usize,
+    /// Answers sent so far.
+    calls: usize,
+    /// When the last answer was sent.
+    last: Option<Instant>,
+    /// Excerpt `(path, start, end, text hash)` → `(bytes, calls)` when sent.
+    excerpts: std::collections::HashMap<(String, usize, usize, u64), (usize, usize)>,
+    /// Listing key (`listing:Upload`, `usedby:Upload`) → `(bytes, calls)`.
+    listings: std::collections::HashMap<String, (usize, usize)>,
+}
+/// Output after which an earlier answer may no longer be in the agent's
+/// context (about 30,000 tokens; OpenCode keeps the last 40,000 tokens of tool
+/// output when it prunes), so it is sent again in full.
+const SEEN_WINDOW_BYTES: usize = 120_000;
+/// Answers after which a repeat is sent in full again.
+const SEEN_WINDOW_CALLS: usize = 10;
+/// A pause this long often means the context was compacted or cleared.
+const SEEN_IDLE: std::time::Duration = std::time::Duration::from_secs(600);
+/// Shorter excerpts are cheaper to repeat than to stub.
+const SEEN_MIN_LINES: usize = 12;
+
+impl Memory {
+    fn key(excerpt: &oko::context::SourceExcerpt) -> (String, usize, usize, u64) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        excerpt.text.hash(&mut hasher);
+        (
+            excerpt.path.clone(),
+            excerpt.start_line,
+            excerpt.end_line,
+            hasher.finish(),
+        )
+    }
+    fn recent(&self, sent: Option<&(usize, usize)>) -> bool {
+        sent.is_some_and(|(bytes, calls)| {
+            self.bytes.saturating_sub(*bytes) <= SEEN_WINDOW_BYTES
+                && self.calls.saturating_sub(*calls) < SEEN_WINDOW_CALLS
+        })
+    }
+    /// Forget everything after a long pause.
+    fn expire(&mut self) {
+        if self.last.is_some_and(|last| last.elapsed() > SEEN_IDLE) {
+            *self = Memory::default();
+        }
+    }
+    fn now(&self) -> (usize, usize) {
+        (self.bytes, self.calls)
+    }
+    /// An automatic listing or line: the stub if it was sent recently, else
+    /// the text, remembered.
+    fn once(&mut self, key: String, text: String, stub: String) -> String {
+        self.expire();
+        if self.recent(self.listings.get(&key)) {
+            return stub;
+        }
+        let now = self.now();
+        self.listings.insert(key, now);
+        text
+    }
+    fn remember(&mut self, key: String) {
+        let now = self.now();
+        self.listings.insert(key, now);
+    }
+}
+
 /// Searches that run at once. The snapshot is shared and its refresh is locked,
 /// so parallel searches repeat no scan; each still sends up to three Jev
 /// requests and ranks on the CPU, so the rest wait for a slot.
@@ -145,6 +220,10 @@ struct OkoServer {
     no_jev: bool,
     gate: Arc<Semaphore>,
     cache: Arc<Mutex<WorkspaceCache>>,
+    memory: Arc<Mutex<Memory>>,
+    /// Searches in progress: more than one at once usually means parallel
+    /// subagents, which do not share each other's context.
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl OkoServer {
     fn directory(&self, input: &SearchInput) -> Result<PathBuf> {
@@ -211,7 +290,30 @@ impl OkoServer {
         Ok(directory)
     }
 
+    /// An automatic listing or line, once per recent stretch of the session;
+    /// always in full while another search runs at the same time.
+    fn once(&self, key: String, text: String, stub: String) -> String {
+        use std::sync::atomic::Ordering;
+        let Ok(mut memory) = self.memory.lock() else {
+            return text;
+        };
+        if self.in_flight.load(Ordering::SeqCst) > 1 {
+            memory.remember(key);
+            return text;
+        }
+        memory.once(key, text, stub)
+    }
+
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
+        use std::sync::atomic::Ordering;
+        struct Flight(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for Flight {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let parallel = self.in_flight.fetch_add(1, Ordering::SeqCst) > 0;
+        let _flight = Flight(Arc::clone(&self.in_flight));
         let started = Instant::now();
         let directory = self.directory(&input)?;
         let scope = input
@@ -546,12 +648,17 @@ impl OkoServer {
                         >= oko::usages::USED_BY_MIN_FILES
                 {
                     let all = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
-                    accompanying = Some(oko::usages::render_dependents_within(
-                        &all,
-                        BATCH_LISTING_BYTES,
+                    let text = oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES);
+                    accompanying = Some(self.once(
+                        format!("listing:{}", pin.qualified),
+                        text,
+                        listing_stub(&pin.qualified, all.files),
                     ));
                 }
                 if let Some(pin) = target.as_ref().filter(|_| listing_only) {
+                    if let Ok(mut memory) = self.memory.lock() {
+                        memory.remember(format!("listing:{}", pin.qualified));
+                    }
                     let (text, retrieval) = render(pin);
                     let retrieval = Some(retrieval);
                     direct = Some(text);
@@ -707,6 +814,15 @@ impl OkoServer {
             )
             && let Some(line) = oko::usages::render_used_by(&oko::usages::used_by(pin, corpus))
         {
+            // Asked for by name: the line is part of the answer, not a repeat.
+            let line = if input.mode.is_some() || !symbols.is_empty() {
+                if let Ok(mut memory) = self.memory.lock() {
+                    memory.remember(format!("usedby:{}", pin.qualified));
+                }
+                line
+            } else {
+                self.once(format!("usedby:{}", pin.qualified), line, String::new())
+            };
             notes.push_str(&line);
         }
         if let Some(text) = accompanying.as_ref().or(direct.as_ref()) {
@@ -750,6 +866,7 @@ impl OkoServer {
         let limit = (MAX_MCP_RESULT_BYTES
             + EXTRA_QUESTION_BYTES * questions.len().saturating_sub(1))
         .min(MAX_MULTI_RESULT_BYTES);
+        let explicit = direct.is_some() || input.mode.is_some() || !symbols.is_empty() || parallel;
         packet_result(
             metadata,
             packet,
@@ -759,6 +876,8 @@ impl OkoServer {
             limit,
             started,
             context_started,
+            &self.memory,
+            explicit,
         )
     }
 
@@ -908,6 +1027,18 @@ impl OkoServer {
                     oko::usages::render_usages(&listing)
                 };
                 noted.insert(target.name.clone());
+                let files = text.lines().filter(|l| l.starts_with("  ")).count();
+                let key = format!("listing:{}", target.qualified);
+                // "Who uses X" asks for the listing: always whole. An impact
+                // question only gets it attached, so a repeat is a stub.
+                let text = if callers {
+                    if let Ok(mut memory) = self.memory.lock() {
+                        memory.remember(key);
+                    }
+                    text
+                } else {
+                    self.once(key, text, listing_stub(&target.qualified, files))
+                };
                 many.notes.push(format!("{tag}: {text}"));
             }
             // The first question's pin gets its line from the shared path.
@@ -925,7 +1056,10 @@ impl OkoServer {
                 && let Some(line) = oko::usages::render_used_by(&oko::usages::used_by(pin, corpus))
             {
                 noted.insert(pin.name.clone());
-                many.notes.push(line.trim_end().to_owned());
+                let line = self.once(format!("usedby:{}", pin.qualified), line, String::new());
+                if !line.is_empty() {
+                    many.notes.push(line.trim_end().to_owned());
+                }
             }
             per_question.push(json!({
                 "tag": tag,
@@ -1149,7 +1283,25 @@ fn packet_result(
     limit: usize,
     started: Instant,
     context_started: Instant,
+    memory: &Mutex<Memory>,
+    // Asked for by name or mode: never stubbed.
+    explicit: bool,
 ) -> Result<CallToolResult> {
+    let mut memory = memory
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Search memory failed. Restart the server."))?;
+    memory.expire();
+    let mut stubbed = 0;
+    if !explicit {
+        for result in &mut packet.results {
+            if result.excerpt.lines() >= SEEN_MIN_LINES
+                && memory.recent(memory.excerpts.get(&Memory::key(&result.excerpt)))
+            {
+                result.seen = true;
+                stubbed += 1;
+            }
+        }
+    }
     let mut packet_budget = serde_json::to_vec(&packet)?.len().min(limit);
     loop {
         let mut text = notes.to_owned();
@@ -1172,6 +1324,14 @@ fn packet_result(
             metadata["timings"]["totalMs"] = json!(started.elapsed().as_millis() as u64);
             metadata["responseBytes"] = json!(size);
             metadata["responseLimitBytes"] = json!(limit);
+            metadata["seen"] = json!({"stubbed": stubbed, "sessionBytes": memory.bytes});
+            let at = memory.now();
+            for result in packet.results.iter().filter(|r| !r.seen) {
+                memory.excerpts.insert(Memory::key(&result.excerpt), at);
+            }
+            memory.bytes += size;
+            memory.calls += 1;
+            memory.last = Some(Instant::now());
             record_search(metadata, &packet);
             return Ok(result);
         }
@@ -1186,6 +1346,14 @@ fn packet_result(
             .max(128);
         packet.fit_to_budget(packet_budget);
     }
+}
+
+/// A dependents listing already sent in this session.
+fn listing_stub(qualified: &str, files: usize) -> String {
+    format!(
+        "Files using {qualified}: listed in an earlier answer ({files} files). Not repeated; ask \"who uses {}\" to list them again.\n",
+        qualified.rsplit('.').next().unwrap_or(qualified)
+    )
 }
 
 /// Append this search's metadata and structured packet as one JSON line.
@@ -1337,6 +1505,8 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         no_jev,
         gate: Arc::new(Semaphore::new(MAX_CONCURRENT_SEARCHES)),
         cache: Arc::new(Mutex::new(WorkspaceCache::new())),
+        memory: Arc::new(Mutex::new(Memory::default())),
+        in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     prewarm(&server);
     tokio::runtime::Builder::new_multi_thread()
