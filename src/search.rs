@@ -143,9 +143,11 @@ fn patterns() -> &'static Patterns {
             symbol_extension: Regex::new(r"\.(?:rs|[cm]?js|jsx|ts|tsx|py|go|java|cs|c|h|cc|cpp|hpp|rb|php|swift|kt)$").unwrap(),
             // Conventional test locations and file names across ecosystems; a
             // naming hint, never a parse of the file.
-            // The last alternative is the JVM and C# habit of `FooTest.java`,
-            // `FooTests.kt` or `TestFoo.scala` beside the code (case matters).
-            test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$|(?-i:(?:^|/)(?:Test[A-Z][^/]*|[^/]+Tests?)\.(?:java|kt|kts|scala|cs)$)").unwrap(),
+            // `test_x.py` is a test; `test_helpers.go` is code (Go tests are
+            // `_test.go`). The last alternative is the JVM and C# habit of
+            // `FooTest.java`, `FooTests.kt` or `TestFoo.scala` beside the
+            // code (case matters).
+            test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*\.(?:py|pyi|rb|php|js|jsx|ts|tsx|mjs|cjs|rs|ex|exs)$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$|(?-i:(?:^|/)(?:Test[A-Z][^/]*|[^/]+Tests?)\.(?:java|kt|kts|scala|cs)$)").unwrap(),
             // Functions, methods, arrow constants (with or without a type
             // annotation) and the type-level declarations of every supported
             // language: `class`, `struct`, `impl Trait for X`, `module`...
@@ -1561,6 +1563,7 @@ mod tests {
         for path in [
             "io/javalin/Javalin.java",
             "io/javalin/Contest.java",
+            "test_helpers.go",
             "io/javalin/testing/Latest.java",
             "src/attest.rs",
         ] {

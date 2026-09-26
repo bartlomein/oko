@@ -1079,7 +1079,7 @@ mod tests {
         assert_eq!(summary.checked, 5);
         let text = render_unused(&summary, "the workspace", "");
         assert!(
-            text.starts_with("Unused definitions in the workspace — 3 of 5 checked have no use in non-test code of the workspace outside their own definition; 1 used only by tests\nprivate (1):\n  gin.go:10\tfunction readNthLine\nexported (other repositories may use them) (2):\n  gin.go:3\tfunction New\n  gin.go:14\tfunction Exported\nused only by tests, private first (1):\n  gin.go:12\tfunction parseIP (1 test uses)\n"),
+            text.starts_with("Unused in production code under the workspace — 4 of 5 checked: 2 private, 2 exported; 1 of them are used by tests only. A row is a deletion candidate with its evidence.\nprivate, no use anywhere (1):\n  gin.go:10\tfunction readNthLine — no reference anywhere in the workspace\nprivate, used by tests only (1):\n  gin.go:12\tfunction parseIP — tests only: gin_test.go:3\nexported, no use in this repository (other repositories may use them) (2):\n  gin.go:3\tfunction New — no reference anywhere in the workspace\n  gin.go:14\tfunction Exported — no reference anywhere in the workspace\n"),
             "{text}"
         );
         // Named checks look at those names only.
@@ -1302,6 +1302,8 @@ pub struct UnusedDefinition {
     pub exported: bool,
     /// Uses in test files only.
     pub tests: usize,
+    /// Up to three of those uses, as evidence: `(path, line)`.
+    pub test_locations: Vec<(String, usize)>,
 }
 
 /// `mode: unused`: the definitions of the searched directory whose name
@@ -1457,6 +1459,7 @@ pub fn unused(
         seen.sort_unstable();
         seen.dedup();
         let (mut code, mut tests) = (0, 0);
+        let mut test_locations = Vec::new();
         for (at, line) in seen {
             // The definition's own lines, including its doc comment, do not count.
             if at == path && (d.start_line..=d.end_line).contains(&line) {
@@ -1464,6 +1467,9 @@ pub fn unused(
             }
             if search::is_test_path(at) {
                 tests += 1;
+                if test_locations.len() < 3 {
+                    test_locations.push((at.to_owned(), line));
+                }
             } else {
                 code += 1;
             }
@@ -1479,6 +1485,7 @@ pub fn unused(
             kind: d.kind,
             exported: d.exported(),
             tests,
+            test_locations,
         };
         if tests > 0 {
             result.tests_only.push(entry);
@@ -1513,59 +1520,82 @@ fn kind_word(kind: DefinitionKind) -> &'static str {
     }
 }
 
-/// The unused answer: private names first, then exported, then names only
-/// tests use; each row `path:line<TAB>kind qualified`.
+/// The unused answer, framed as a deletion candidate list: private names
+/// with no use anywhere, private names only tests use (dead in production,
+/// with the test locations as evidence), then exported names in the same
+/// two groups; each row `path:line<TAB>kind qualified — evidence`.
 pub fn render_unused(summary: &Unused, scope: &str, prefix: &str) -> String {
-    let total = summary.private.len() + summary.exported.len();
+    let (private_tests, exported_tests): (Vec<_>, Vec<_>) =
+        summary.tests_only.iter().partition(|d| !d.exported);
+    let private_total = summary.private.len() + private_tests.len();
+    let exported_total = summary.exported.len() + exported_tests.len();
     let mut out = format!(
-        "Unused definitions in {scope} — {total} of {} checked have no use in non-test code of the workspace outside their own definition",
+        "Unused in production code under {scope} — {} of {} checked: {private_total} private, {exported_total} exported",
+        private_total + exported_total,
         summary.checked
     );
     if !summary.tests_only.is_empty() {
         out.push_str(&format!(
-            "; {} used only by tests",
+            "; {} of them are used by tests only",
             summary.tests_only.len()
         ));
     }
-    out.push('\n');
+    out.push_str(". A row is a deletion candidate with its evidence.\n");
+    let strip = |path: &str| path.strip_prefix(prefix).unwrap_or(path).to_owned();
+    let row = |out: &mut String, entry: &UnusedDefinition| {
+        out.push_str(&format!(
+            "  {}:{}\t{} {}",
+            strip(&entry.path),
+            entry.line,
+            kind_word(entry.kind),
+            entry.qualified
+        ));
+        if entry.tests > 0 {
+            let places: Vec<String> = entry
+                .test_locations
+                .iter()
+                .map(|(path, line)| format!("{}:{line}", strip(path)))
+                .collect();
+            out.push_str(&format!(" — tests only: {}", places.join(", ")));
+            if entry.tests > places.len() {
+                out.push_str(&format!(", +{} more", entry.tests - places.len()));
+            }
+        } else {
+            out.push_str(" — no reference anywhere in the workspace");
+        }
+        out.push('\n');
+    };
     let mut shown = 0;
-    for (label, list) in [
-        ("private", &summary.private),
+    for (label, list, cap) in [
         (
-            "exported (other repositories may use them)",
-            &summary.exported,
+            "private, no use anywhere",
+            summary.private.iter().collect::<Vec<_>>(),
+            UNUSED_SHOWN,
         ),
-        ("used only by tests, private first", &summary.tests_only),
+        ("private, used by tests only", private_tests, UNUSED_SHOWN),
+        (
+            "exported, no use in this repository (other repositories may use them)",
+            summary.exported.iter().collect::<Vec<_>>(),
+            UNUSED_SHOWN,
+        ),
+        (
+            "exported, used by tests only",
+            exported_tests,
+            EXPORTED_TESTS_ONLY_SHOWN,
+        ),
     ] {
         if list.is_empty() {
             continue;
         }
         out.push_str(&format!("{label} ({}):\n", list.len()));
-        let mut exported_tests_only = 0;
-        for entry in list {
-            if entry.tests > 0 && entry.exported {
-                exported_tests_only += 1;
-            }
-            if shown >= UNUSED_SHOWN || exported_tests_only > EXPORTED_TESTS_ONLY_SHOWN {
+        for (index, entry) in list.iter().enumerate() {
+            if shown >= UNUSED_SHOWN || index >= cap {
+                out.push_str(&format!("  … {} more\n", list.len() - index));
                 break;
             }
             shown += 1;
-            out.push_str(&format!(
-                "  {}:{}\t{} {}",
-                entry.path.strip_prefix(prefix).unwrap_or(&entry.path),
-                entry.line,
-                kind_word(entry.kind),
-                entry.qualified
-            ));
-            if entry.tests > 0 {
-                out.push_str(&format!(" ({} test uses)", entry.tests));
-            }
-            out.push('\n');
+            row(&mut out, entry);
         }
-    }
-    let more = (total + summary.tests_only.len()).saturating_sub(shown);
-    if more > 0 {
-        out.push_str(&format!("  … {more} more\n"));
     }
     out.push_str("Checked by name over the indexed code: a method that implements an interface, a name used through reflection, a route or a template, or a public API can look unused. Confirm before deleting.\n");
     out

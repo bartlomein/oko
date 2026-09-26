@@ -2226,7 +2226,7 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
     let response = client.search(json!({"mode":"unused","question":"dead code"}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
     assert!(
-        text.starts_with("Unused definitions in the workspace — "),
+        text.starts_with("Unused in production code under the workspace — "),
         "{text}"
     );
     assert!(text.contains("Confirm before deleting."), "{text}");

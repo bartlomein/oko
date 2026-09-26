@@ -509,22 +509,27 @@ not only an identifier-shaped one.
 
 A question that asks what nothing uses ("dead code in the gin package",
 "unused helpers", "functions that are never called"), or a search with
-`mode: unused`, is answered with a listing: every definition of the searched
-directory whose name appears nowhere in non-test code outside the
-definition itself. Private names come first, then exported ones (other
-repositories may use them), then names only test files use (private ones first, exported ones capped at 12), each row
-`path:line`, kind and qualified name, up to 60 rows. Pass names in `symbols`
-to check only those. The check is by name over the indexed code, so a
-method that implements an interface, a name reached through reflection, a
-route or a template, and public API can look unused; the answer says so.
-A long question that mentions dead code among other things gets the
-listing as a note above the ranked code.
+`mode: unused`, is answered with a deletion-candidate listing: every
+definition of the searched directory whose name appears nowhere in non-test
+code of the workspace outside the definition itself. Private names with no
+use anywhere come first, then private names only tests use (dead in
+production, with up to three test locations as evidence), then exported
+names in the same two groups (other repositories may use them; the
+test-only ones are capped at twelve). Each row is `path:line`, kind,
+qualified name and its evidence. Pass names in `symbols` to check only
+those. The check is by name over the indexed code, so a method that
+implements an interface, a name reached through reflection, a route or a
+template, and public API can look unused; the answer says so. A short
+question gets the listing alone; a longer one that mentions dead code among
+other things gets it as a note above the ranked code.
 
 ```
-Unused definitions in . — 9 of 1,431 checked have no use in non-test code outside their own definition; 3 used only by tests
-private (7):
-  gin.go:112	function readNthLine
-  path.go:140	function bufApp
+Unused in production code under the workspace — 3 of 697 checked: 2 private, 1 exported; 2 of them are used by tests only. A row is a deletion candidate with its evidence.
+private, used by tests only (2):
+  utils.go:23	constant localhostIP — tests only: context_test.go:1169, context_test.go:1171, context_test.go:1175, +5 more
+  utils.go:26	constant localhostIPv6 — tests only: context_test.go:2016
+exported, no use in this repository (other repositories may use them) (1):
+  errors.go:18	constant ErrorTypeRender — no reference anywhere in the workspace
 ```
 
 ## Coverage
