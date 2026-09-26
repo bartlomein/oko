@@ -2212,7 +2212,10 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
     // mode: enumerate lists the files; mode: usages the lines.
     let response = client.search(json!({"symbols":"Upload","mode":"enumerate"}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
-    assert!(text.starts_with("Files using Upload — 5 files, 10 uses; 1 test files (2 uses) hidden\n  app/models/thing0.rb:2\t2\n"), "{text}");
+    assert!(
+        text.starts_with("Files using Upload — 5 files, 10 uses in code; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/models (5 files)\n  app/models/thing0.rb:2\tThing0\tbelongs_to :file, class_name: 'Upload'\n  app/models/thing0.rb:3\tThing0.pick\tdef pick; Upload.find(1); end\n"),
+        "{text}"
+    );
     let response = client.search(json!({"question":"Upload","mode":"usages"}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
     assert!(

@@ -454,11 +454,20 @@ impl OkoServer {
                 else {
                     bail!("mode requires a name the index defines, in symbols or the question.");
                 };
-                let summary = oko::usages::used_by(&pin, corpus);
-                direct = Some(oko::usages::render_enumerate(&summary));
+                let summary = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
+                direct = Some(oko::usages::render_dependents(&summary));
                 floor = Some(found);
                 shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-                (Vec::new(), None, Some(json!({"usedBy": summary})))
+                (
+                    Vec::new(),
+                    None,
+                    Some(json!({"dependents": {
+                        "files": summary.files,
+                        "uses": summary.uses,
+                        "dataFiles": summary.data_files.len(),
+                        "testFiles": summary.test_files,
+                    }})),
+                )
             } else if !symbols.is_empty() && input.mode.is_none() {
                 // Names alone: their definitions, whole, in the order asked.
                 if found.pins.is_empty() {
@@ -502,14 +511,29 @@ impl OkoServer {
                 let listing_only = matches!(input.intent, Intent::Callers)
                     || input.mode == Some(Mode::Usages)
                     || oko::usages::listing_can_stand_alone(question);
-                if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
+                // Few files: every line. Many: one cite-able row per enclosing
+                // definition in every file, so no dependent is dropped.
+                let render = |pin: &oko::floor::Pin| {
                     let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
-                    accompanying = Some(oko::usages::render_usages(&listing));
+                    if listing.omitted_files > 0 {
+                        let all = oko::usages::dependents(pin, snapshot.navigation(), corpus);
+                        (
+                            oko::usages::render_dependents(&all),
+                            json!({"dependents": {"files": all.files, "uses": all.uses}}),
+                        )
+                    } else {
+                        (
+                            oko::usages::render_usages(&listing),
+                            json!({"usages": listing}),
+                        )
+                    }
+                };
+                if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
+                    accompanying = Some(render(pin).0);
                 }
                 if let Some(pin) = target.as_ref().filter(|_| listing_only) {
-                    let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
-                    let text = oko::usages::render_usages(&listing);
-                    let retrieval = Some(json!({"usages": listing}));
+                    let (text, retrieval) = render(pin);
+                    let retrieval = Some(retrieval);
                     direct = Some(text);
                     floor = Some(found);
                     shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
