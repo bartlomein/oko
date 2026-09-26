@@ -534,6 +534,23 @@ impl OkoServer {
                 if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
                     accompanying = Some(render(pin).0);
                 }
+                // An impact question ("what depends on Upload", "references to
+                // Upload") gets the dependents listing beside the ranked code.
+                if accompanying.is_none()
+                    && target.is_none()
+                    && !matches!(input.intent, Intent::Explanation)
+                    && oko::usages::asks_for_dependents(question)
+                    && let Some(pin) =
+                        oko::floor::named_target(question, snapshot.navigation(), corpus)
+                    && oko::usages::used_by(&pin, corpus).files.len()
+                        >= oko::usages::USED_BY_MIN_FILES
+                {
+                    let all = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
+                    accompanying = Some(oko::usages::render_dependents_within(
+                        &all,
+                        BATCH_LISTING_BYTES,
+                    ));
+                }
                 if let Some(pin) = target.as_ref().filter(|_| listing_only) {
                     let (text, retrieval) = render(pin);
                     let retrieval = Some(retrieval);
@@ -873,10 +890,15 @@ impl OkoServer {
         let mut noted: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (index, outcome) in outcomes.into_iter().enumerate() {
             let tag = format!("Q{}", index + 1);
+            let callers = oko::usages::asks_for_callers(&outcome.question);
+            let dependents = oko::usages::asks_for_dependents(&outcome.question);
             if !matches!(intent, RankingIntent::Explanation)
-                && oko::usages::asks_for_callers(&outcome.question)
+                && (callers || dependents)
                 && let Some(target) =
                     oko::floor::named_target(&outcome.question, snapshot.navigation(), corpus)
+                && (callers
+                    || oko::usages::used_by(&target, corpus).files.len()
+                        >= oko::usages::USED_BY_MIN_FILES)
             {
                 let listing = oko::usages::usages(&target, snapshot.navigation(), corpus);
                 let text = if listing.omitted_files > 0 {

@@ -104,6 +104,18 @@ pub fn asks_for_unused(question: &str) -> bool {
         .is_match(question)
 }
 
+/// The question is about what depends on a name: an impact or audit
+/// question, answered by the dependents listing beside the ranked code.
+pub fn asks_for_dependents(question: &str) -> bool {
+    static DEPENDENTS: OnceLock<Regex> = OnceLock::new();
+    DEPENDENTS
+        .get_or_init(|| {
+            Regex::new(r"(?i)\b(?:depends?\s+on|dependents?|dependencies\s+of|consumers?\s+of|affected\s+by|impact\s+of|blast\s+radius|what\s+uses|everything\s+that\s+uses|(?:all|every)\b[^.\n]{0,40}\b(?:that|which)\s+(?:use|uses|reference|references)|references?\s+(?:to|an?|the)\b|referenc(?:e|es|ing)\s+[A-Z]\w+|uses?\s+of)\b")
+                .unwrap()
+        })
+        .is_match(question)
+}
+
 /// The question asks who uses a name rather than what the name does.
 pub fn asks_for_callers(question: &str) -> bool {
     patterns().callers.is_match(question)
@@ -1117,6 +1129,25 @@ mod tests {
         ] {
             let pin = floor::named_target(question, &index, &chunks).expect(question);
             assert_eq!(pin.qualified, "Upload", "{question}");
+        }
+    }
+
+    #[test]
+    fn dependents_questions_are_recognised() {
+        for q in [
+            "what depends on the Upload model",
+            "every dependent of Upload with file:line",
+            "which models have belongs_to :upload or upload_id foreign key references to uploads?",
+            "places that reference Upload via belongs_to",
+            "blast radius of changing Upload",
+        ] {
+            assert!(asks_for_dependents(q), "{q}");
+        }
+        for q in [
+            "how does UploadCreator store a file",
+            "Upload model definition",
+        ] {
+            assert!(!asks_for_dependents(q), "{q}");
         }
     }
 
