@@ -545,6 +545,12 @@ const TEST_FILES_SHOWN: usize = 12;
 /// `mode: enumerate` and long callers lists: `path:line<TAB>Enclosing<TAB>text`
 /// per enclosing definition, grouped by area with counts, code before data.
 pub fn render_dependents(summary: &Dependents) -> String {
+    render_dependents_within(summary, DEPENDENTS_BYTES)
+}
+
+/// The same listing under a smaller budget, for a question that shares its
+/// call with others.
+pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
     let mut out = format!(
         "Files using {} — {} files, {} uses in code",
         summary.qualified, summary.files, summary.uses
@@ -598,14 +604,14 @@ pub fn render_dependents(summary: &Dependents) -> String {
             sections.push((area, files.len(), section));
         }
         let total: usize = sections.iter().map(|(_, _, s)| s.len()).sum();
-        if out.len() + total <= DEPENDENTS_BYTES || (rows_per_file == 1 && !with_text) {
+        if out.len() + total <= budget || (rows_per_file == 1 && !with_text) {
             let mut summarised: Vec<(&str, usize)> = Vec::new();
             let mut kept = total;
             let mut by_size: Vec<usize> = (0..sections.len()).collect();
             by_size.sort_by_key(|i| std::cmp::Reverse(sections[*i].1));
             let mut dropped = vec![false; sections.len()];
             for i in by_size {
-                if out.len() + kept <= DEPENDENTS_BYTES {
+                if out.len() + kept <= budget {
                     break;
                 }
                 kept -= sections[i].2.len();
@@ -1086,6 +1092,32 @@ mod tests {
         let summary = unused(&index, &chunks, &["build".into(), "readNthLine".into()], "");
         assert_eq!(summary.checked, 2);
         assert_eq!(names(&summary.private), ["readNthLine"]);
+    }
+
+    #[test]
+    fn named_target_prefers_the_class_a_rails_word_names() {
+        let (chunks, index) = corpus(&[
+            (
+                "app/models/upload.rb",
+                "class Upload < ActiveRecord::Base\n  def url; end\nend\n",
+            ),
+            (
+                "lib/site_setting_extension.rb",
+                "module SiteSettingExtension\n  def uploads\n    Upload.all\n  end\nend\n",
+            ),
+            (
+                "app/models/post.rb",
+                "class Post < ActiveRecord::Base\n  has_many :uploads\nend\n",
+            ),
+        ]);
+        for question in [
+            "who uses Upload",
+            "which models have belongs_to :upload or upload_id references to uploads?",
+            "callers of uploads",
+        ] {
+            let pin = floor::named_target(question, &index, &chunks).expect(question);
+            assert_eq!(pin.qualified, "Upload", "{question}");
+        }
     }
 
     #[test]

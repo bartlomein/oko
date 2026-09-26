@@ -175,6 +175,20 @@ pub fn underscore(name: &str) -> String {
     out
 }
 
+/// `optimized_image` → `OptimizedImage`, `uploads` → `Uploads`.
+pub fn camelize(word: &str) -> String {
+    word.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// The Ruby tokens that refer to the model `name` (a constant's leaf, such
 /// as `Upload` or `OptimizedImage`) without spelling it: association macros
 /// with the singular and plural names and `class_name:` with the constant.
@@ -268,6 +282,8 @@ mod tests {
         assert_eq!(underscore("S3Store"), "s3_store");
         assert_eq!(underscore("HTMLParser"), "html_parser");
         assert_eq!(underscore("Upload"), "upload");
+        assert_eq!(camelize("optimized_image"), "OptimizedImage");
+        assert_eq!(camelize(&singularize("uploads")), "Upload");
     }
 
     #[test]

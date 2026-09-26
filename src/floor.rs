@@ -632,25 +632,44 @@ pub fn named_target(question: &str, navigation: &NavigationIndex, corpus: &[Chun
         .map(|m| m.as_str())
         .filter(|w| w.len() >= 3 && !CALLERS_WORDS.contains(&w.to_ascii_lowercase().as_str()))
         .collect();
-    for word in words.iter().rev() {
-        let mut candidates = navigation.lookup(word).to_vec();
-        if candidates.is_empty() {
-            continue;
+    // A plain word may name a class through its Rails spelling: "models with
+    // belongs_to :upload" or "who uses uploads" mean `Upload`. Such a class
+    // outranks a method that happens to share the word (`Foo.uploads`).
+    let mut best: Option<((bool, bool, bool, bool, usize), usize, DefinitionRef)> = None;
+    for (position, word) in words.iter().enumerate() {
+        let lowered = word.to_ascii_lowercase();
+        let class_name = crate::rails::camelize(&crate::rails::singularize(&lowered));
+        let mut candidates: Vec<(bool, DefinitionRef)> = navigation
+            .lookup(word)
+            .iter()
+            .map(|r| (false, *r))
+            .collect();
+        if class_name != *word {
+            candidates.extend(navigation.lookup(&class_name).iter().map(|r| (true, *r)));
         }
-        candidates.sort_by_cached_key(|r| {
-            let d = navigation.get(*r);
-            (
-                search::is_test_path(navigation.path(*r)),
+        for (derived, r) in candidates {
+            let d = navigation.get(r);
+            let is_type = matches!(d.kind, DefinitionKind::Class | DefinitionKind::Type);
+            if derived && !is_type {
+                continue;
+            }
+            let key = (
+                search::is_test_path(navigation.path(r)),
+                !(is_type && d.container.is_none()),
                 d.qualified != d.name,
                 !d.exported(),
-                navigation.path(*r).len(),
-            )
-        });
-        if let Some(pin) = pin_for(navigation, corpus, candidates[0]) {
-            return Some(pin);
+                navigation.path(r).len(),
+            );
+            // Later words win ties: "callers of X in Y" names X last.
+            if best
+                .as_ref()
+                .is_none_or(|(k, p, _)| key < *k || (key == *k && position >= *p))
+            {
+                best = Some((key, position, r));
+            }
         }
     }
-    None
+    best.and_then(|(_, _, r)| pin_for(navigation, corpus, r))
 }
 
 /// Words of a callers or tests question that are never the target.

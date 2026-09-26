@@ -90,6 +90,9 @@ enum Mode {
 
 /// Names per call in `symbols`.
 const MAX_SYMBOLS: usize = 12;
+/// A dependents listing inside a several-question answer keeps to this many
+/// bytes so the other questions keep their room.
+const BATCH_LISTING_BYTES: usize = 8_000;
 /// Questions per call in `questions`.
 const MAX_QUESTIONS: usize = 8;
 /// Each question beyond the first earns the response this much more room,
@@ -864,8 +867,44 @@ impl OkoServer {
                 }
             }
         }
+        // A question in the batch that asks who uses a name gets its listing
+        // as a note, and a widely used pinned definition its dependents line,
+        // exactly as a single question would.
+        let mut noted: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (index, outcome) in outcomes.into_iter().enumerate() {
             let tag = format!("Q{}", index + 1);
+            if !matches!(intent, RankingIntent::Explanation)
+                && oko::usages::asks_for_callers(&outcome.question)
+                && let Some(target) =
+                    oko::floor::named_target(&outcome.question, snapshot.navigation(), corpus)
+            {
+                let listing = oko::usages::usages(&target, snapshot.navigation(), corpus);
+                let text = if listing.omitted_files > 0 {
+                    let all = oko::usages::dependents(&target, snapshot.navigation(), corpus);
+                    oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES)
+                } else {
+                    oko::usages::render_usages(&listing)
+                };
+                noted.insert(target.name.clone());
+                many.notes.push(format!("{tag}: {text}"));
+            }
+            // The first question's pin gets its line from the shared path.
+            if index > 0
+                && let Some(pin) = outcome.found.pins.first()
+                && !noted.contains(&pin.name)
+                && matches!(
+                    pin.kind,
+                    oko::navigation::DefinitionKind::Class
+                        | oko::navigation::DefinitionKind::Module
+                        | oko::navigation::DefinitionKind::Type
+                        | oko::navigation::DefinitionKind::Function
+                        | oko::navigation::DefinitionKind::Method
+                )
+                && let Some(line) = oko::usages::render_used_by(&oko::usages::used_by(pin, corpus))
+            {
+                noted.insert(pin.name.clone());
+                many.notes.push(line.trim_end().to_owned());
+            }
             per_question.push(json!({
                 "tag": tag,
                 "question": prefix(&outcome.question, 200),
