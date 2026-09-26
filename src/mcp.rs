@@ -436,6 +436,9 @@ impl OkoServer {
         let mut direct: Option<String> = None;
         // A listing shown beside the ranked code, for mixed questions.
         let mut accompanying: Option<String> = None;
+        // A single question answered beside a many-file listing: the listing
+        // rows carry the methods and lines, so one excerpt is enough.
+        let mut slim_single = false;
         let mut symbols_missing: Vec<String> = Vec::new();
         // Several questions: which question each winning chunk answers, and
         // notes about the ones that found nothing.
@@ -702,7 +705,9 @@ impl OkoServer {
                     }
                 };
                 if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
-                    accompanying = Some(render(pin).0);
+                    let (text, shape) = render(pin);
+                    slim_single = shape.get("dependents").is_some();
+                    accompanying = Some(text);
                 }
                 // An impact question ("what depends on Upload", "references to
                 // Upload") gets the dependents listing beside the ranked code.
@@ -717,6 +722,7 @@ impl OkoServer {
                 {
                     let all = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
                     let text = oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES);
+                    slim_single = true;
                     accompanying = Some(self.once(
                         format!("listing:{}", pin.qualified),
                         text,
@@ -906,10 +912,16 @@ impl OkoServer {
             "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
                 "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
                 "cache":workspace.timings}});
-        let max_results = (oko::context::RESULT_LIMIT
+        let mut max_results = (oko::context::RESULT_LIMIT
             + knob("OKO_BATCH_EXTRA_RESULTS", EXTRA_QUESTION_RESULTS)
                 * questions.len().saturating_sub(1))
         .min(MAX_MULTI_RESULTS);
+        let mut winners = winners;
+        if slim_single && questions.is_empty() {
+            winners.truncate(1);
+            pins.clear();
+            max_results = 1;
+        }
         let mut packet = oko::context::build_packet_for_questions(
             corpus,
             &winners,
@@ -1035,6 +1047,37 @@ impl OkoServer {
             lexical_score: 0.0,
         };
         let outcomes: Vec<Outcome> = outcomes.into_iter().collect::<Result<_>>()?;
+        // A question that asks who uses a name, or what depends on it, is
+        // answered by a listing. Decided first: a question whose listing spans
+        // many files keeps one excerpt and no pinned definition, since the
+        // listing rows already name each method and line.
+        let listings: Vec<Option<(oko::floor::Pin, String, bool, bool)>> = outcomes
+            .iter()
+            .map(|outcome| {
+                let callers = force_listing || oko::usages::asks_for_callers(&outcome.question);
+                let dependents = oko::usages::asks_for_dependents(&outcome.question);
+                if matches!(intent, RankingIntent::Explanation) || !(callers || dependents) {
+                    return None;
+                }
+                let target =
+                    oko::floor::named_target(&outcome.question, snapshot.navigation(), corpus)?;
+                if !callers
+                    && oko::usages::used_by(&target, corpus).files.len()
+                        < oko::usages::USED_BY_MIN_FILES
+                {
+                    return None;
+                }
+                let listing = oko::usages::usages(&target, snapshot.navigation(), corpus);
+                let wide = listing.omitted_files > 0;
+                let text = if wide {
+                    let all = oko::usages::dependents(&target, snapshot.navigation(), corpus);
+                    oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES)
+                } else {
+                    oko::usages::render_usages(&listing)
+                };
+                Some((target, text, wide, callers))
+            })
+            .collect();
         // Round-robin: every question's best result before any question's
         // second, so the excerpt cap never lets the first question crowd out
         // the rest.
@@ -1042,21 +1085,28 @@ impl OkoServer {
         let mut tagged_pins: Vec<Vec<(search::Chunk, String)>> = Vec::new();
         for (index, outcome) in outcomes.iter().enumerate() {
             let tag = format!("Q{}", index + 1);
+            let slim = listings[index]
+                .as_ref()
+                .is_some_and(|(_, _, wide, _)| *wide);
+            many.slimmed += usize::from(slim);
             tagged_winners.push(
                 outcome
                     .results
                     .iter()
+                    .take(if slim { 1 } else { usize::MAX })
                     .map(|r| (chunk_of(r), r.score, tag.clone()))
                     .collect(),
             );
-            tagged_pins.push(
+            tagged_pins.push(if slim {
+                Vec::new()
+            } else {
                 outcome
                     .found
                     .pins
                     .iter()
                     .map(|pin| (pin.chunk.clone(), tag.clone()))
-                    .collect(),
-            );
+                    .collect()
+            });
         }
         for round in 0..tagged_winners.iter().map(Vec::len).max().unwrap_or(0) {
             for list in &tagged_winners {
@@ -1078,25 +1128,9 @@ impl OkoServer {
         // as a note, and a widely used pinned definition its dependents line,
         // exactly as a single question would.
         let mut noted: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for (index, outcome) in outcomes.into_iter().enumerate() {
+        for ((index, outcome), listing) in outcomes.into_iter().enumerate().zip(listings) {
             let tag = format!("Q{}", index + 1);
-            let callers = force_listing || oko::usages::asks_for_callers(&outcome.question);
-            let dependents = oko::usages::asks_for_dependents(&outcome.question);
-            if !matches!(intent, RankingIntent::Explanation)
-                && (callers || dependents)
-                && let Some(target) =
-                    oko::floor::named_target(&outcome.question, snapshot.navigation(), corpus)
-                && (callers
-                    || oko::usages::used_by(&target, corpus).files.len()
-                        >= oko::usages::USED_BY_MIN_FILES)
-            {
-                let listing = oko::usages::usages(&target, snapshot.navigation(), corpus);
-                let text = if listing.omitted_files > 0 {
-                    let all = oko::usages::dependents(&target, snapshot.navigation(), corpus);
-                    oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES)
-                } else {
-                    oko::usages::render_usages(&listing)
-                };
+            if let Some((target, text, _, callers)) = listing {
                 noted.insert(target.name.clone());
                 let files = text.lines().filter(|l| l.starts_with("  ")).count();
                 let key = format!("listing:{}", target.qualified);
@@ -1164,6 +1198,7 @@ impl OkoServer {
             "questions": per_question,
             "jevCalls": many.jev_calls,
             "candidates": many.candidates,
+            "slimmedForListing": many.slimmed,
         });
         Ok(many)
     }
@@ -1189,6 +1224,8 @@ struct Many {
     candidates: Vec<super::CandidateScore>,
     jev_calls: Vec<oko::ranking::JevCallStats>,
     lexical_fallback: Option<&'static str>,
+    /// Questions answered by a many-file listing, shown with one excerpt.
+    slimmed: usize,
     retrieval: Value,
 }
 

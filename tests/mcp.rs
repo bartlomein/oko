@@ -2417,3 +2417,37 @@ fn a_repeated_long_excerpt_becomes_a_citable_stub_unless_asked_for_by_name() {
     let again = again["result"]["content"][0]["text"].as_str().unwrap();
     assert!(again.contains("inventory_batch(19)"), "{again}");
 }
+
+#[test]
+fn a_question_answered_by_a_wide_listing_brings_one_excerpt_at_most() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("app/models")).unwrap();
+    fs::write(
+        root.path().join("app/models/upload.rb"),
+        "class Upload < ActiveRecord::Base\n  def url\n    1\n  end\nend\n",
+    )
+    .unwrap();
+    for i in 0..15 {
+        fs::write(
+            root.path().join(format!("app/models/user{i}.rb")),
+            format!("class User{i}\n  def avatar_upload\n    Upload.find({i})\n  end\nend\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        root.path().join("app/models/cooking.rb"),
+        "class Cooking\n  def cook_post_markdown(raw)\n    raw.strip\n  end\nend\n",
+    )
+    .unwrap();
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let response =
+        client.search(json!({"questions":["how is post markdown cooked", "who uses Upload"]}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(text.contains("Q2: Files using Upload — 15 files"), "{text}");
+    let q2_excerpts = text.matches(", Q2)\n").count() + text.matches("+Q2)\n").count();
+    assert!(q2_excerpts <= 1, "{q2_excerpts}: {text}");
+    assert!(text.contains("app/models/cooking.rb:2-4 (complete definition, Q1)"), "{text}");
+    assert_eq!(response["metrics"]["retrieval"]["slimmedForListing"], 1);
+}
