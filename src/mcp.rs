@@ -333,6 +333,27 @@ impl OkoServer {
         Ok(directory)
     }
 
+    /// Whether the coverage line should be shown: the session's first, a
+    /// changed index, one naming a skipped file, or after the memory window.
+    fn coverage_is_new(&self, line: &str) -> bool {
+        if line.contains(" · skipped:") {
+            return true;
+        }
+        let stable = line
+            .replace(", watched", "")
+            .replace(", rescanned", "")
+            .replace(", built now", "");
+        let Ok(mut memory) = self.memory.lock() else {
+            return true;
+        };
+        memory.expire();
+        if memory.recent(memory.listings.get(&format!("coverage:{stable}"))) {
+            return false;
+        }
+        memory.remember(format!("coverage:{stable}"));
+        true
+    }
+
     /// An automatic listing or line, once per recent stretch of the session;
     /// always in full while another search runs at the same time.
     fn once(&self, key: String, text: String, stub: String) -> String {
@@ -834,8 +855,15 @@ impl OkoServer {
         }
         // What the agent cannot infer from its own request and the excerpts.
         // First, what was searched: how much of the repository the index holds.
-        let mut notes = coverage_line(&snapshot, &workspace.timings, question);
-        notes.push('\n');
+        // Shown on a session's first answer, and again only when it changed or
+        // names a skipped file the question mentions: the same line on every
+        // answer is bytes the agent already has.
+        let coverage = coverage_line(&snapshot, &workspace.timings, question);
+        let mut notes = if self.coverage_is_new(&coverage) {
+            coverage + "\n"
+        } else {
+            String::new()
+        };
         if let Ok(scope) = directory.strip_prefix(&self.root)
             && !scope.as_os_str().is_empty()
         {
@@ -854,9 +882,13 @@ impl OkoServer {
                 "The relevance ranker did not respond, so these are keyword matches in keyword order; treat them as leads and verify them.\n",
             );
         }
+        // A batch collects each question's floor notes; one copy of each.
+        let mut shown_notes = std::collections::HashSet::new();
         for note in floor.iter().flat_map(|found| found.notes.iter()) {
-            notes.push_str(note);
-            notes.push('\n');
+            if shown_notes.insert(note.as_str()) {
+                notes.push_str(note);
+                notes.push('\n');
+            }
         }
         // "Tests for X": paired by file name and by mention, before the ranked code.
         if oko::ranking::asks_for_tests(question)

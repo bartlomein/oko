@@ -1001,9 +1001,14 @@ fn relevance_response(request: &Value, score: impl Fn(&Value) -> f64) -> Value {
 }
 
 /// The answer after its coverage line (`Index: N of M files, ...`).
+/// The answer without its coverage line, which only a session's first
+/// answer (or a changed index) carries.
 fn body(text: &str) -> &str {
-    assert!(text.starts_with("Index: "), "{text}");
-    let rest = text.split_once('\n').map_or("", |(_, rest)| rest);
+    let rest = if text.starts_with("Index: ") {
+        text.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        text
+    };
     // A blank line separates the notes from the excerpts.
     rest.strip_prefix('\n').unwrap_or(rest)
 }
@@ -2406,6 +2411,9 @@ fn a_repeated_long_excerpt_becomes_a_citable_stub_unless_asked_for_by_name() {
         "{second}"
     );
     assert!(!second.contains("inventory_batch(19)"), "{second}");
+    // The coverage line leads the session's first answer only.
+    assert!(first.starts_with("Index: "), "{first}");
+    assert!(!second.starts_with("Index: "), "{second}");
     // Asked for by name, it is always whole.
     let named = client.search(json!({"symbols":"reconcile_inventory_records"}));
     let named = named["result"]["content"][0]["text"].as_str().unwrap();
@@ -2448,6 +2456,9 @@ fn a_question_answered_by_a_wide_listing_brings_one_excerpt_at_most() {
     assert!(text.contains("Q2: Files using Upload — 15 files"), "{text}");
     let q2_excerpts = text.matches(", Q2)\n").count() + text.matches("+Q2)\n").count();
     assert!(q2_excerpts <= 1, "{q2_excerpts}: {text}");
-    assert!(text.contains("app/models/cooking.rb:2-4 (complete definition, Q1)"), "{text}");
+    assert!(
+        text.contains("app/models/cooking.rb:2-4 (complete definition, Q1)"),
+        "{text}"
+    );
     assert_eq!(response["metrics"]["retrieval"]["slimmedForListing"], 1);
 }

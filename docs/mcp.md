@@ -547,7 +547,9 @@ exported, no use in this repository (other repositories may use them) (1):
 
 ## Coverage
 
-The first line of every answer says what was searched:
+The first line of a session's first answer says what was searched. Later
+answers repeat it only when the index changed, when it names a skipped file
+the question mentions, or after ten answers or ten idle minutes:
 
 ```
 Index: 25,873 of 26,687 files (814 skipped: 17 over size, 797 unreadable), 20,250 parsed for symbols (js, tsx, ts, jsx), watched
