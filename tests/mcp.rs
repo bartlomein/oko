@@ -2202,11 +2202,11 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
     let response = client.search(json!({"question":"Upload model class definition"}));
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains("`Upload` is used by 5 files (10 uses): app/models/thing0.rb (2), "),
+        text.contains("`Upload` is used by 5 files (10 uses): app/models/thing0.rb:2 (2), "),
         "{text}"
     );
     assert!(
-        text.contains("; 1 test files. Ask \"who uses Upload\" for every line.\n"),
+        text.contains("; 1 test files. Ask \"who uses Upload\" for every file with path:line and the enclosing definition.\n"),
         "{text}"
     );
     // mode: enumerate lists the files; mode: usages the lines.

@@ -447,7 +447,7 @@ answer carries one line summarising the dependents, most uses first, so
 "what depends on X" needs no second call:
 
 ```
-`Upload` is used by 129 files (368 uses): lib/tasks/uploads.rake (33), lib/file_store/to_s3_migration.rb (16), …, +121 more; 87 test files. Ask "who uses Upload" for every line.
+`Upload` is used by 116 files (301 uses): lib/file_store/to_s3_migration.rb:23 (16), lib/file_store/s3_store.rb:28 (11), …, +106 more; 86 test files. Ask "who uses Upload" for every file with path:line and the enclosing definition.
 ```
 
 ## Callers and tests

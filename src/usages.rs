@@ -696,7 +696,7 @@ pub struct UsedBy {
 
 /// A summary is offered on its own only when this many files use the name.
 pub const USED_BY_MIN_FILES: usize = 4;
-const USED_BY_SHOWN: usize = 8;
+const USED_BY_SHOWN: usize = 10;
 const ENUMERATE_FILES: usize = 40;
 
 pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
@@ -706,7 +706,8 @@ pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
         qualified: pin.qualified.clone(),
         ..UsedBy::default()
     };
-    for (path, lines) in &lines_by_path(corpus, name) {
+    let (files, associations) = lines_for(pin, corpus);
+    for (path, lines) in &files {
         // Dependents are other code files: not the definition's own file, not
         // documentation.
         if *path == pin.path || is_docs_path(path) {
@@ -715,7 +716,9 @@ pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
         let mut count = 0;
         let mut first = 0;
         for (number, text) in lines {
-            if patterns().comment.is_match(text) || !contains_word(text, name) {
+            if patterns().comment.is_match(text)
+                || refers(path, text, name, associations.as_ref()).is_none()
+            {
                 continue;
             }
             count += 1;
@@ -746,11 +749,12 @@ pub fn render_used_by(summary: &UsedBy) -> Option<String> {
     if summary.files.len() < USED_BY_MIN_FILES {
         return None;
     }
+    // `path:line (uses)`: the first use is a location an agent can cite.
     let shown: Vec<String> = summary
         .files
         .iter()
         .take(USED_BY_SHOWN)
-        .map(|(path, count, _)| format!("{path} ({count})"))
+        .map(|(path, count, first)| format!("{path}:{first} ({count})"))
         .collect();
     let more = summary.files.len().saturating_sub(USED_BY_SHOWN);
     let mut line = format!(
@@ -768,7 +772,7 @@ pub fn render_used_by(summary: &UsedBy) -> Option<String> {
     }
     line.push_str(". Ask \"who uses ");
     line.push_str(&summary.name);
-    line.push_str("\" for every line.\n");
+    line.push_str("\" for every file with path:line and the enclosing definition.\n");
     Some(line)
 }
 
@@ -1241,11 +1245,11 @@ mod tests {
         );
         let line = render_used_by(&summary).unwrap();
         assert!(
-            line.starts_with("`Upload` is used by 5 files (10 uses): app/models/user0.rb (2), "),
+            line.starts_with("`Upload` is used by 5 files (10 uses): app/models/user0.rb:2 (2), "),
             "{line}"
         );
         assert!(
-            line.contains("; 1 test files. Ask \"who uses Upload\" for every line."),
+            line.contains("; 1 test files. Ask \"who uses Upload\" for every file with path:line and the enclosing definition."),
             "{line}"
         );
         let listing = render_enumerate(&summary);
