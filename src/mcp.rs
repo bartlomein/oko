@@ -727,23 +727,32 @@ impl OkoServer {
                 };
                 if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
                     let (text, shape) = render(pin);
-                    slim_single = shape.get("dependents").is_some();
+                    slim_single = shape.get("dependents").is_some()
+                        && !oko::usages::names_more_than(question, &pin.name);
                     accompanying = Some(text);
                 }
                 // An impact question ("what depends on Upload", "references to
                 // Upload") gets the dependents listing beside the ranked code.
-                if accompanying.is_none()
+                // Or a central class named the Rails way ("use uploads").
+                let impact_target = if accompanying.is_none()
                     && target.is_none()
                     && !matches!(input.intent, Intent::Explanation)
-                    && oko::usages::asks_for_dependents(question)
-                    && let Some(pin) =
+                {
+                    if oko::usages::asks_for_dependents(question) {
                         oko::floor::named_target(question, snapshot.navigation(), corpus)
+                    } else {
+                        oko::usages::central_class_used(question, snapshot.navigation(), corpus)
+                    }
+                } else {
+                    None
+                };
+                if let Some(pin) = impact_target
                     && oko::usages::used_by(&pin, corpus).files.len()
                         >= oko::usages::USED_BY_MIN_FILES
                 {
                     let all = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
                     let text = oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES);
-                    slim_single = true;
+                    slim_single = !oko::usages::names_more_than(question, &pin.name);
                     accompanying = Some(self.once(
                         format!("listing:{}", pin.qualified),
                         text,
@@ -1088,11 +1097,28 @@ impl OkoServer {
             .map(|outcome| {
                 let callers = force_listing || oko::usages::asks_for_callers(&outcome.question);
                 let dependents = oko::usages::asks_for_dependents(&outcome.question);
-                if matches!(intent, RankingIntent::Explanation) || !(callers || dependents) {
+                if matches!(intent, RankingIntent::Explanation) {
                     return None;
                 }
-                let target =
-                    oko::floor::named_target(&outcome.question, snapshot.navigation(), corpus)?;
+                // "Jobs that use uploads": the class, named the Rails way.
+                let central = (!callers && !dependents)
+                    .then(|| {
+                        oko::usages::central_class_used(
+                            &outcome.question,
+                            snapshot.navigation(),
+                            corpus,
+                        )
+                    })
+                    .flatten();
+                if !(callers || dependents || central.is_some()) {
+                    return None;
+                }
+                let target = match central {
+                    Some(pin) => pin,
+                    None => {
+                        oko::floor::named_target(&outcome.question, snapshot.navigation(), corpus)?
+                    }
+                };
                 if !callers
                     && oko::usages::used_by(&target, corpus).files.len()
                         < oko::usages::USED_BY_MIN_FILES
@@ -1117,7 +1143,9 @@ impl OkoServer {
         let mut tagged_pins: Vec<Vec<(search::Chunk, String)>> = Vec::new();
         for (index, outcome) in outcomes.iter().enumerate() {
             let tag = format!("Q{}", index + 1);
-            let slim = listings[index]
+            let slim = !listings[index].as_ref().is_some_and(|(pin, _, _, _)| {
+                oko::usages::names_more_than(&outcome.question, &pin.name)
+            }) && listings[index]
                 .as_ref()
                 .is_some_and(|(_, _, wide, _)| *wide);
             many.slimmed += usize::from(slim);

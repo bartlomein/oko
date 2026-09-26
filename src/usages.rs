@@ -116,6 +116,56 @@ pub fn asks_for_dependents(question: &str) -> bool {
         .is_match(question)
 }
 
+/// A central class the question refers to the Rails way, in lowercase:
+/// "jobs that use uploads", "how does backup reference uploads", "draft
+/// upload references" mean `Upload`. Only a top-level class that at least
+/// `CENTRAL_FILES` files use counts, so ordinary words ("use the config")
+/// never match.
+pub fn central_class_used(
+    question: &str,
+    navigation: &NavigationIndex,
+    corpus: &[Chunk],
+) -> Option<Pin> {
+    static AFTER: OnceLock<Regex> = OnceLock::new();
+    static BEFORE: OnceLock<Regex> = OnceLock::new();
+    let after = AFTER.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:use|uses|using|reference|references|referencing)\s+(?:(?:the|all|every|any|its|their)\s+)?([a-z][a-z_]{2,})\b").unwrap()
+    });
+    let before = BEFORE.get_or_init(|| Regex::new(r"\b([a-z][a-z_]{2,})\s+references?\b").unwrap());
+    let words = after
+        .captures_iter(question)
+        .chain(before.captures_iter(question))
+        .map(|c| c[1].to_owned());
+    for word in words {
+        let name = rails::camelize(&rails::singularize(&word));
+        let found = crate::floor::pins_for_names(std::slice::from_ref(&name), navigation, corpus);
+        let Some(pin) = found
+            .pins
+            .into_iter()
+            .find(|pin| pin.name == name && matches!(pin.kind, DefinitionKind::Class))
+        else {
+            continue;
+        };
+        if used_by(&pin, corpus).files.len() >= CENTRAL_FILES {
+            return Some(pin);
+        }
+    }
+    None
+}
+
+/// The question names something of its own besides `target`: then its ranked
+/// code stays even beside a many-file listing ("badge image_upload_id upload
+/// reference" asks about the column, and the Upload listing is an extra).
+pub fn names_more_than(question: &str, target: &str) -> bool {
+    crate::floor::identifiers(question).iter().any(|name| {
+        let leaf = name.rsplit(['.', ':', '#']).next().unwrap_or(name);
+        leaf != target
+    })
+}
+
+/// Files that must use a class before a lowercase mention of it counts.
+const CENTRAL_FILES: usize = 20;
+
 /// The question asks who uses a name rather than what the name does.
 pub fn asks_for_callers(question: &str) -> bool {
     patterns().callers.is_match(question)
@@ -1237,6 +1287,37 @@ mod tests {
             "how to use the API",
         ] {
             assert!(!asks_for_dependents(q), "{q}");
+        }
+    }
+
+    #[test]
+    fn a_lowercase_plural_names_a_central_class() {
+        let mut files: Vec<(String, String)> = vec![(
+            "app/models/upload.rb".into(),
+            "class Upload < ActiveRecord::Base\nend\n".into(),
+        )];
+        for i in 0..25 {
+            files.push((
+                format!("app/jobs/job{i}.rb"),
+                format!("class Job{i}\n  def run\n    Upload.find({i})\n  end\nend\n"),
+            ));
+        }
+        files.push(("lib/config.rb".into(), "class Config\nend\n".into()));
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let (chunks, index) = corpus(&refs);
+        for q in [
+            "Jobs that use uploads: video conversion, clean_up_uploads",
+            "How does backup and restore reference the uploads?",
+            "CustomEmoji model and Draft model upload references",
+        ] {
+            let pin = central_class_used(q, &index, &chunks).expect(q);
+            assert_eq!(pin.name, "Upload", "{q}");
+        }
+        for q in ["how to use the config", "jobs that use workers"] {
+            assert!(central_class_used(q, &index, &chunks).is_none(), "{q}");
         }
     }
 
