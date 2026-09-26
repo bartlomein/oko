@@ -210,6 +210,19 @@ fn refers(
     associations.and_then(|a| a.matches(text)).map(Some)
 }
 
+/// A test file's declaration of what it tests: `RSpec.describe Upload`,
+/// `describe("Upload"`, `class UploadTest`, `func TestUpload`, `def test_upload`.
+/// The natural line to cite for a spec file as a whole.
+fn is_test_anchor(line: &str) -> bool {
+    static ANCHOR: OnceLock<Regex> = OnceLock::new();
+    ANCHOR
+        .get_or_init(|| {
+            Regex::new(r#"^\s*(?:(?:RSpec\.)?(?:describe|context)\b|describe\s*\(|class\s+\w|func\s+Test|def\s+test|test\s*\(|it\s*\()"#)
+                .unwrap()
+        })
+        .is_match(line)
+}
+
 /// Prose files: a name there is documentation, not a use.
 fn is_docs_path(path: &str) -> bool {
     matches!(
@@ -399,9 +412,10 @@ pub struct Dependents {
     pub own_file_uses: usize,
     pub test_files: usize,
     pub tests: usize,
-    /// Test files: `(path, uses, first line)`, files named after the
-    /// definition first, then most uses.
-    pub test_rows: Vec<(String, usize, usize)>,
+    /// Test files: `(path, uses, line, text)`, the line being the file's
+    /// `describe` of the name when it has one, else its first use; files
+    /// named after the definition first, then most uses.
+    pub test_rows: Vec<(String, usize, usize, String)>,
     pub in_comments: usize,
 }
 
@@ -450,6 +464,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
         let data = !test && is_data_path(path);
         let mut count = 0;
         let mut first = 0;
+        let mut anchor: Option<(usize, &str)> = None;
         // Rows keyed by the enclosing definition's start line, so one method
         // is one row however many times it names the symbol.
         let mut rows: BTreeMap<usize, DependentRow> = BTreeMap::new();
@@ -467,6 +482,9 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
             count += 1;
             if first == 0 {
                 first = *number;
+            }
+            if test && anchor.is_none() && is_test_anchor(text) {
+                anchor = Some((*number, text));
             }
             if test || own || data {
                 continue;
@@ -511,7 +529,10 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
         if test {
             result.test_files += 1;
             result.tests += count;
-            result.test_rows.push(((*path).to_owned(), count, first));
+            let (line, text) = anchor.unwrap_or((first, lines.get(&first).copied().unwrap_or("")));
+            result
+                .test_rows
+                .push(((*path).to_owned(), count, line, trim_row(text)));
         } else if own {
             result.own_file_uses = count;
         } else if data {
@@ -579,12 +600,14 @@ pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
     out.push_str(". One row per enclosing definition: path:line, definition, line.\n");
     let mut rows_per_file = usize::MAX;
     let mut with_text = true;
+    let mut with_definition = true;
     let mut body = String::new();
     // Shrink until the body fits: all rows, then three per file, then one,
     // then one without the line text (path:line and the definition are what
-    // a citation needs); still over, the areas with the most files are
-    // summarised first, since those are worth a `directory` search of their
-    // own.
+    // a citation needs), then bare `path:line` (about 45 bytes a file, so a
+    // few hundred files fit any budget); only past that are the areas with
+    // the most files summarised, since those are worth a `directory` search
+    // of their own. A dependents list must not drop a file it could show.
     loop {
         let mut sections: Vec<(&str, usize, String)> = Vec::new();
         for (area, files) in &summary.areas {
@@ -592,6 +615,10 @@ pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
             for file in files {
                 let shown_rows = rows_per_file.min(file.rows.len());
                 for (index, row) in file.rows.iter().take(shown_rows).enumerate() {
+                    if !with_definition {
+                        section.push_str(&format!("  {}:{}\n", file.path, row.line));
+                        continue;
+                    }
                     section.push_str(&format!("  {}:{}\t", file.path, row.line));
                     match &row.enclosing {
                         Some(name) => section.push_str(name),
@@ -616,7 +643,7 @@ pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
             sections.push((area, files.len(), section));
         }
         let total: usize = sections.iter().map(|(_, _, s)| s.len()).sum();
-        if out.len() + total <= budget || (rows_per_file == 1 && !with_text) {
+        if out.len() + total <= budget || !with_definition {
             let mut summarised: Vec<(&str, usize)> = Vec::new();
             let mut kept = total;
             let mut by_size: Vec<usize> = (0..sections.len()).collect();
@@ -650,10 +677,11 @@ pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
             }
             break;
         }
-        match rows_per_file {
-            usize::MAX => rows_per_file = 3,
-            3 => rows_per_file = 1,
-            _ => with_text = false,
+        match (rows_per_file, with_text) {
+            (usize::MAX, _) => rows_per_file = 3,
+            (3, _) => rows_per_file = 1,
+            (_, true) => with_text = false,
+            _ => with_definition = false,
         }
     }
     out.push_str(&body);
@@ -684,8 +712,8 @@ pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
             "Specs and tests using {} ({} files, {} uses), named after it first:\n",
             summary.name, summary.test_files, summary.tests
         ));
-        for (path, uses, first) in summary.test_rows.iter().take(TEST_FILES_SHOWN) {
-            out.push_str(&format!("  {path}:{first}\t{uses}\n"));
+        for (path, uses, line, text) in summary.test_rows.iter().take(TEST_FILES_SHOWN) {
+            out.push_str(&format!("  {path}:{line}\t{text}  ({uses} uses)\n"));
         }
         if summary.test_rows.len() > TEST_FILES_SHOWN {
             out.push_str(&format!(
@@ -929,7 +957,7 @@ pub fn tests_for(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> V
             continue;
         }
         let named = named_after(path, file_stem, &pin.name);
-        let mentions: Vec<(usize, Option<String>)> = lines
+        let mut mentions: Vec<(usize, Option<String>)> = lines
             .iter()
             .filter(|(_, text)| contains_word(text, &pin.name))
             .map(|(number, _)| {
@@ -943,6 +971,15 @@ pub fn tests_for(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> V
             .collect();
         if !named && mentions.is_empty() {
             continue;
+        }
+        // The file's `describe X` line leads, so the row's location is the
+        // block that tests the definition, not an incidental first mention.
+        if let Some(index) = mentions
+            .iter()
+            .position(|(number, _)| lines.get(number).is_some_and(|t| is_test_anchor(t)))
+        {
+            let anchor = mentions.remove(index);
+            mentions.insert(0, anchor);
         }
         matches.push(TestMatch {
             path: (*path).to_owned(),
@@ -1071,7 +1108,46 @@ mod tests {
         );
         let text = render_dependents(&summary);
         assert!(
-            text.starts_with("Files using Upload — 3 files, 6 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last  (+1 more in this file)\napp/models (1 files)\n  app/models/user_profile.rb:2\tUserProfile\tbelongs_to :card_background_upload, class_name: \"Upload\"  (+1 more in this file)\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\t2\n"),
+            text.starts_with("Files using Upload — 3 files, 6 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last  (+1 more in this file)\napp/models (1 files)\n  app/models/user_profile.rb:2\tUserProfile\tbelongs_to :card_background_upload, class_name: \"Upload\"  (+1 more in this file)\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\tdescribe Upload do  (2 uses)\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn dependents_fall_back_to_bare_locations_before_dropping_files() {
+        let mut files: Vec<(String, String)> = vec![(
+            "app/models/upload.rb".into(),
+            "class Upload < ActiveRecord::Base\nend\n".into(),
+        )];
+        for i in 0..60 {
+            files.push((
+                format!("lib/area{}/dependent_number_{i}.rb", i % 3),
+                format!("class Dependent{i}\n  def use_the_upload_model_in_a_long_method_name\n    Upload.find_by(id: {i}).and_then_something_long_enough\n  end\nend\n"),
+            ));
+        }
+        files.push((
+            "spec/models/upload_spec.rb".into(),
+            "require 'rails_helper'\n\nRSpec.describe Upload do\n  it { Upload.new }\nend\n".into(),
+        ));
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let (chunks, index) = corpus(&refs);
+        let pin = floor::pins_for_names(&["Upload".into()], &index, &chunks)
+            .pins
+            .remove(0);
+        let summary = dependents(&pin, &index, &chunks);
+        let text = render_dependents_within(&summary, 4_000);
+        for i in 0..60 {
+            assert!(
+                text.contains(&format!("dependent_number_{i}.rb:3\n")),
+                "{i}: {text}"
+            );
+        }
+        assert!(!text.contains("more files under"), "{text}");
+        assert!(
+            text.contains("  spec/models/upload_spec.rb:3\tRSpec.describe Upload do  (2 uses)\n"),
             "{text}"
         );
     }

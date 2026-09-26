@@ -475,12 +475,15 @@ A callers listing of more than twelve files, and `mode: enumerate`, switch
 to the dependents shape: every production file that uses the name, one row
 per enclosing definition as `path:line`, the definition's qualified name and
 the line, grouped by area (`app/controllers (5 files)`) with counts. Nothing
-is dropped for having few uses: over a 12 KB budget, extra rows within a
-file go first, then whole areas are summarised by name with a hint to pass
-`directory`. Task, data, locale and script files are counted after the
+is dropped for having few uses: over the budget (14 KB, or 8 KB inside a
+several-question answer), extra rows within a file go first, then the line
+text, then the definition name, leaving a bare `path:line` per file (a few
+hundred files fit); only past that are whole areas summarised by name with a
+hint to pass `directory`. Task, data, locale and script files are counted after the
 code, the definition's own file is counted, and a closing section lists the
 specs and tests that use the name as `path:line`, files named after the
-definition first. For a Ruby class, lines that refer to it the Rails way
+definition first, each pointing at the file's `describe` (or test class,
+`func Test…`, `def test_…`) of the name when it has one. For a Ruby class, lines that refer to it the Rails way
 without spelling its constant count as uses and carry the rule that matched:
 `belongs_to :upload`, `has_one :upload`, `has_many :uploads`,
 `has_and_belongs_to_many :uploads` and `class_name: "Upload"`, derived with
