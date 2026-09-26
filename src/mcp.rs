@@ -950,9 +950,9 @@ impl OkoServer {
         .min(MAX_MULTI_RESULTS);
         let mut winners = winners;
         if slim_single && questions.is_empty() {
+            // The definition the question names stays; ranked extras go.
             winners.truncate(1);
-            pins.clear();
-            max_results = 1;
+            max_results = 1 + pins.len();
         }
         let mut packet = oko::context::build_packet_for_questions(
             corpus,

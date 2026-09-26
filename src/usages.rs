@@ -110,7 +110,7 @@ pub fn asks_for_dependents(question: &str) -> bool {
     static DEPENDENTS: OnceLock<Regex> = OnceLock::new();
     DEPENDENTS
         .get_or_init(|| {
-            Regex::new(r"(?i)\b(?:depends?\s+on|dependents?|dependencies\s+of|consumers?\s+of|affected\s+by|impact\s+of|blast\s+radius|what\s+uses|everything\s+that\s+uses|(?:all|every)\b[^.\n]{0,40}\b(?:that|which)\s+(?:use|uses|reference|references)|references?\s+(?:to|an?|the)\b|referenc(?:e|es|ing)\s+[A-Z]\w+|uses?\s+of)\b")
+            Regex::new(r"(?i)\b(?:depends?\s+on|dependents?|dependencies\s+of|consumers?\s+of|affected\s+by|impact\s+of|blast\s+radius|what\s+uses|everything\s+that\s+uses|(?:all|every)\b[^.\n]{0,40}\b(?:that|which)\s+(?:use|uses|reference|references)|references?\s+(?:to|an?|the)\b|(?-i:[Rr]eferenc(?:e|es|ing)\s+[A-Z]\w+)|uses?\s+of)\b")
                 .unwrap()
         })
         .is_match(question)
@@ -1230,6 +1230,7 @@ mod tests {
         for q in [
             "how does UploadCreator store a file",
             "Upload model definition",
+            "Captures trait replacement expansion, named capture reference resolution",
         ] {
             assert!(!asks_for_dependents(q), "{q}");
         }
