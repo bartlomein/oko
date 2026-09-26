@@ -110,7 +110,7 @@ pub fn asks_for_dependents(question: &str) -> bool {
     static DEPENDENTS: OnceLock<Regex> = OnceLock::new();
     DEPENDENTS
         .get_or_init(|| {
-            Regex::new(r"(?i)\b(?:depends?\s+on|dependents?|dependencies\s+of|consumers?\s+of|affected\s+by|impact\s+of|blast\s+radius|what\s+uses|everything\s+that\s+uses|(?:all|every)\b[^.\n]{0,40}\b(?:that|which)\s+(?:use|uses|reference|references)|references?\s+(?:to|an?|the)\b|(?-i:[Rr]eferenc(?:e|es|ing)\s+[A-Z]\w+)|uses?\s+of)\b")
+            Regex::new(r"(?i)\b(?:depends?\s+on|dependents?|dependencies\s+of|consumers?\s+of|affected\s+by|impact\s+of|blast\s+radius|what\s+uses|everything\s+that\s+uses|(?:all|every)\b[^.\n]{0,40}\b(?:that|which)\s+(?:use|uses|reference|references)|references?\s+(?:to|an?|the)\b|(?-i:\b(?:[Rr]eferenc(?:e|es|ing)|[Uu]s(?:e|es|ing)|[Dd]epend(?:s|ing)?\s+on)\s+(?:[a-z_]+\s+){0,3}[A-Z][a-z]\w*)|uses?\s+of)\b")
                 .unwrap()
         })
         .is_match(question)
@@ -1224,6 +1224,8 @@ mod tests {
             "which models have belongs_to :upload or upload_id foreign key references to uploads?",
             "places that reference Upload via belongs_to",
             "blast radius of changing Upload",
+            "How do backups reference and use Upload records?",
+            "which jobs use the Upload model",
         ] {
             assert!(asks_for_dependents(q), "{q}");
         }
@@ -1231,6 +1233,8 @@ mod tests {
             "how does UploadCreator store a file",
             "Upload model definition",
             "Captures trait replacement expansion, named capture reference resolution",
+            "Where is HasPostUploadReferences concern and how does it link uploads to posts?",
+            "how to use the API",
         ] {
             assert!(!asks_for_dependents(q), "{q}");
         }
