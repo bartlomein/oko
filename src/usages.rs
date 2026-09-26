@@ -8,6 +8,7 @@
 //! paired by naming convention and by mention.
 use crate::floor::{Pin, contains_word};
 use crate::navigation::{DefinitionKind, NavigationIndex};
+use crate::rails;
 use crate::search::{self, Chunk};
 use regex::Regex;
 use serde::Serialize;
@@ -156,6 +157,47 @@ fn lines_by_path<'a>(
     files
 }
 
+/// The lines to scan for a pin: every line naming it, plus, for a Ruby
+/// class, the association lines that refer to it without its constant.
+fn lines_for<'a>(
+    pin: &Pin,
+    corpus: &'a [Chunk],
+) -> (
+    BTreeMap<&'a str, BTreeMap<usize, &'a str>>,
+    Option<rails::Associations>,
+) {
+    let mut files = lines_by_path(corpus, &pin.name);
+    let associations = (pin.path.ends_with(".rb") && pin.kind == DefinitionKind::Class)
+        .then(|| rails::associations(&pin.name))
+        .flatten();
+    if let Some(associations) = &associations {
+        for (path, lines) in lines_by_path(corpus, &associations.needle) {
+            if !path.ends_with(".rb") {
+                continue;
+            }
+            files.entry(path).or_default().extend(lines);
+        }
+    }
+    (files, associations)
+}
+
+/// A line names the pin, directly or, in a Ruby file, through a Rails
+/// association rule.
+fn refers(
+    path: &str,
+    text: &str,
+    name: &str,
+    associations: Option<&rails::Associations>,
+) -> Option<Option<rails::AssociationRule>> {
+    if contains_word(text, name) {
+        return Some(None);
+    }
+    if !path.ends_with(".rb") {
+        return None;
+    }
+    associations.and_then(|a| a.matches(text)).map(Some)
+}
+
 /// Prose files: a name there is documentation, not a use.
 fn is_docs_path(path: &str) -> bool {
     matches!(
@@ -218,12 +260,9 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
         definition: Some((pin.path.clone(), pin.start_line)),
         ..Usages::default()
     };
-    let files = lines_by_path(corpus, name);
+    let (files, associations) = lines_for(pin, corpus);
     let mut per_file: Vec<(&str, Vec<Use>)> = Vec::new();
     for (path, lines) in &files {
-        if !lines.values().any(|line| line.contains(name)) {
-            continue;
-        }
         let test = search::is_test_path(path);
         let docs = !test && is_docs_path(path);
         let mut uses = Vec::new();
@@ -233,9 +272,9 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
             {
                 continue;
             }
-            if !contains_word(text, name) {
+            let Some(rule) = refers(path, text, name, associations.as_ref()) else {
                 continue;
-            }
+            };
             if test {
                 result.in_tests += 1;
                 continue;
@@ -244,7 +283,11 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
                 result.in_docs += 1;
                 continue;
             }
-            let kind = classify(text, name);
+            let kind = if rule.is_some() {
+                UseKind::Reference
+            } else {
+                classify(text, name)
+            };
             match kind {
                 UseKind::Call => result.calls += 1,
                 UseKind::Import => result.imports += 1,
@@ -261,7 +304,10 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
                 enclosing: navigation
                     .definition(path, *number)
                     .map(|d| d.qualified.clone()),
-                text: trim_row(text),
+                text: match rule {
+                    Some(rule) => format!("{}  [{}]", trim_row(text), rule.label),
+                    None => trim_row(text),
+                },
                 test,
             });
         }
@@ -309,6 +355,9 @@ pub struct DependentRow {
     pub text: String,
     /// Uses inside this enclosing definition beyond the row shown.
     pub more: usize,
+    /// The Rails association rule that matched, when the line does not
+    /// spell the constant: `belongs_to / has_one`.
+    pub rule: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -379,7 +428,8 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
         ..Dependents::default()
     };
     let mut by_area: BTreeMap<String, Vec<DependentFile>> = BTreeMap::new();
-    for (path, lines) in &lines_by_path(corpus, name) {
+    let (files, associations) = lines_for(pin, corpus);
+    for (path, lines) in &files {
         if is_docs_path(path) {
             continue;
         }
@@ -395,9 +445,9 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
             if own && *number == pin.start_line {
                 continue;
             }
-            if !contains_word(text, name) {
+            let Some(rule) = refers(path, text, name, associations.as_ref()) else {
                 continue;
-            }
+            };
             if patterns().comment.is_match(text) {
                 result.in_comments += 1;
                 continue;
@@ -419,9 +469,25 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
                         DependentRow {
                             line: *number,
                             enclosing: enclosing.map(|d| d.qualified.clone()),
-                            kind: classify(text, name),
-                            text: trim_row(text),
+                            kind: if rule.is_some() {
+                                UseKind::Reference
+                            } else {
+                                classify(text, name)
+                            },
+                            text: {
+                                let mut row = trim_row(text);
+                                if row.len() > DEPENDENT_TEXT_BYTES {
+                                    let mut end = DEPENDENT_TEXT_BYTES;
+                                    while !row.is_char_boundary(end) {
+                                        end -= 1;
+                                    }
+                                    row.truncate(end);
+                                    row.push('…');
+                                }
+                                row
+                            },
                             more: 0,
+                            rule: rule.map(|r| r.label),
                         },
                     );
                 }
@@ -469,7 +535,10 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
 
 /// The listing stays under this many bytes: every file keeps at least its
 /// first row; extra rows go first, then whole areas are summarised.
-const DEPENDENTS_BYTES: usize = 12_000;
+const DEPENDENTS_BYTES: usize = 14_000;
+/// Dependents rows show less of the line than a callers row: the path and
+/// the enclosing definition are the point.
+const DEPENDENT_TEXT_BYTES: usize = 90;
 const DATA_FILES_SHOWN: usize = 6;
 const TEST_FILES_SHOWN: usize = 12;
 
@@ -491,58 +560,83 @@ pub fn render_dependents(summary: &Dependents) -> String {
     }
     out.push_str(". One row per enclosing definition: path:line, definition, line.\n");
     let mut rows_per_file = usize::MAX;
+    let mut with_text = true;
     let mut body = String::new();
-    // Shrink until the body fits: all rows, then one row per file, then areas
-    // beyond the budget summarised.
+    // Shrink until the body fits: all rows, then three per file, then one,
+    // then one without the line text (path:line and the definition are what
+    // a citation needs); still over, the areas with the most files are
+    // summarised first, since those are worth a `directory` search of their
+    // own.
     loop {
-        body.clear();
-        let mut summarised: Vec<(&str, usize)> = Vec::new();
+        let mut sections: Vec<(&str, usize, String)> = Vec::new();
         for (area, files) in &summary.areas {
             let mut section = format!("{area} ({} files)\n", files.len());
             for file in files {
-                for (index, row) in file.rows.iter().enumerate() {
-                    if index >= rows_per_file {
-                        break;
-                    }
+                let shown_rows = rows_per_file.min(file.rows.len());
+                for (index, row) in file.rows.iter().take(shown_rows).enumerate() {
                     section.push_str(&format!("  {}:{}\t", file.path, row.line));
                     match &row.enclosing {
                         Some(name) => section.push_str(name),
                         None => section.push_str("(top level)"),
                     }
-                    section.push('\t');
-                    section.push_str(&row.text);
-                    let hidden = row.more
-                        + file
-                            .rows
-                            .len()
-                            .saturating_sub(rows_per_file.min(file.rows.len()));
-                    if index + 1 == rows_per_file.min(file.rows.len()) && hidden > 0 {
+                    if with_text {
+                        section.push('\t');
+                        section.push_str(&row.text);
+                    }
+                    if let Some(rule) = row.rule {
+                        section.push_str(&format!("  [{rule}]"));
+                    }
+                    // Every use beyond the rows shown, in one count on the
+                    // file's last row.
+                    let hidden = file.uses.saturating_sub(shown_rows);
+                    if index + 1 == shown_rows && hidden > 0 {
                         section.push_str(&format!("  (+{hidden} more in this file)"));
                     }
                     section.push('\n');
                 }
             }
-            if out.len() + body.len() + section.len() > DEPENDENTS_BYTES && rows_per_file == 1 {
-                summarised.push((area, files.len()));
-            } else {
-                body.push_str(&section);
+            sections.push((area, files.len(), section));
+        }
+        let total: usize = sections.iter().map(|(_, _, s)| s.len()).sum();
+        if out.len() + total <= DEPENDENTS_BYTES || (rows_per_file == 1 && !with_text) {
+            let mut summarised: Vec<(&str, usize)> = Vec::new();
+            let mut kept = total;
+            let mut by_size: Vec<usize> = (0..sections.len()).collect();
+            by_size.sort_by_key(|i| std::cmp::Reverse(sections[*i].1));
+            let mut dropped = vec![false; sections.len()];
+            for i in by_size {
+                if out.len() + kept <= DEPENDENTS_BYTES {
+                    break;
+                }
+                kept -= sections[i].2.len();
+                dropped[i] = true;
+                summarised.push((sections[i].0, sections[i].1));
             }
-        }
-        if !summarised.is_empty() {
-            let list: Vec<String> = summarised
-                .iter()
-                .map(|(area, n)| format!("{area} ({n})"))
-                .collect();
-            body.push_str(&format!(
-                "… {} more files under {}; pass `directory` for one of them.\n",
-                summarised.iter().map(|(_, n)| n).sum::<usize>(),
-                list.join(", ")
-            ));
-        }
-        if out.len() + body.len() <= DEPENDENTS_BYTES || rows_per_file == 1 {
+            body.clear();
+            for (i, (_, _, section)) in sections.iter().enumerate() {
+                if !dropped[i] {
+                    body.push_str(section);
+                }
+            }
+            if !summarised.is_empty() {
+                summarised.sort();
+                let list: Vec<String> = summarised
+                    .iter()
+                    .map(|(area, n)| format!("{area} ({n})"))
+                    .collect();
+                body.push_str(&format!(
+                    "… {} more files under {}; pass `directory` for one of them.\n",
+                    summarised.iter().map(|(_, n)| n).sum::<usize>(),
+                    list.join(", ")
+                ));
+            }
             break;
         }
-        rows_per_file = if rows_per_file == usize::MAX { 3 } else { 1 };
+        match rows_per_file {
+            usize::MAX => rows_per_file = 3,
+            3 => rows_per_file = 1,
+            _ => with_text = false,
+        }
     }
     out.push_str(&body);
     if !summary.data_files.is_empty() {
@@ -925,6 +1019,10 @@ mod tests {
                 "module Email\n  class Styles\n    def stripped_secure_image_uploads\n      # Upload is mentioned here\n      Upload.secure\n    end\n  end\nend\n",
             ),
             (
+                "app/models/user_profile.rb",
+                "class UserProfile < ActiveRecord::Base\n  belongs_to :card_background_upload, class_name: \"Upload\"\n  has_many :uploads\n  def bg\n    upload_id\n  end\nend\n",
+            ),
+            (
                 "lib/tasks/uploads.rake",
                 "task :x do\n  Upload.find_each { }\n  Upload.count\nend\n",
             ),
@@ -938,7 +1036,7 @@ mod tests {
             .pins
             .remove(0);
         let summary = dependents(&pin, &index, &chunks);
-        assert_eq!((summary.files, summary.uses), (2, 4));
+        assert_eq!((summary.files, summary.uses), (3, 6));
         assert_eq!(summary.own_file_uses, 1);
         assert_eq!((summary.test_files, summary.tests), (1, 2));
         assert_eq!(summary.in_comments, 1);
@@ -951,7 +1049,7 @@ mod tests {
         );
         let text = render_dependents(&summary);
         assert!(
-            text.starts_with("Files using Upload — 2 files, 4 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\t2\n"),
+            text.starts_with("Files using Upload — 3 files, 6 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line.\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last  (+1 more in this file)\napp/models (1 files)\n  app/models/user_profile.rb:2\tUserProfile\tbelongs_to :card_background_upload, class_name: \"Upload\"  (+1 more in this file)\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\t2\n"),
             "{text}"
         );
     }

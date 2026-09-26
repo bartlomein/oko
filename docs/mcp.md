@@ -480,7 +480,13 @@ file go first, then whole areas are summarised by name with a hint to pass
 `directory`. Task, data, locale and script files are counted after the
 code, the definition's own file is counted, and a closing section lists the
 specs and tests that use the name as `path:line`, files named after the
-definition first.
+definition first. For a Ruby class, lines that refer to it the Rails way
+without spelling its constant count as uses and carry the rule that matched:
+`belongs_to :upload`, `has_one :upload`, `has_many :uploads`,
+`has_and_belongs_to_many :uploads` and `class_name: "Upload"`, derived with
+ActiveRecord's own inflection rules (`OptimizedImage` → `optimized_image`,
+`optimized_images`). The foreign key (`upload_id`) is not a use: it names a
+column in serializers and params far more often than a dependency.
 
 ```
 Files using Upload — 106 files, 285 uses in code; 16 in its own file; 86 test files (415 uses). One row per enclosing definition: path:line, definition, line.

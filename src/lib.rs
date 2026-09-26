@@ -4,6 +4,7 @@ pub mod floor;
 pub mod investigate;
 pub mod navigation;
 pub mod preview;
+pub mod rails;
 pub mod ranking;
 pub mod search;
 pub mod search_cache;
