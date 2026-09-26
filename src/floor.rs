@@ -635,7 +635,8 @@ pub fn named_target(question: &str, navigation: &NavigationIndex, corpus: &[Chun
     // A plain word may name a class through its Rails spelling: "models with
     // belongs_to :upload" or "who uses uploads" mean `Upload`. Such a class
     // outranks a method that happens to share the word (`Foo.uploads`).
-    let mut best: Option<((bool, bool, bool, bool, usize), usize, DefinitionRef)> = None;
+    type Rank = (bool, bool, bool, bool, usize);
+    let mut best: Option<(Rank, usize, DefinitionRef)> = None;
     for (position, word) in words.iter().enumerate() {
         let lowered = word.to_ascii_lowercase();
         let class_name = crate::rails::camelize(&crate::rails::singularize(&lowered));
