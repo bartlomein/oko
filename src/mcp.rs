@@ -114,8 +114,9 @@ fn knob(name: &str, default: usize) -> usize {
 const EXTRA_QUESTION_RESULTS: usize = 2;
 const MAX_MULTI_RESULTS: usize = 12;
 
+/// Unknown fields are ignored: an agent that adds `max_results` or `limit`
+/// still gets its answer instead of an error and a wasted turn.
 #[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 struct SearchInput {
     /// Behavior or code to locate, in the user's terms.
     /// For edits, describe the existing code; keep stated exclusions.
@@ -219,6 +220,38 @@ impl Memory {
     }
 }
 
+/// Shapes agents send that used to be errors, made into the call they meant:
+/// `question` beside `questions` joins them; one question in `questions` is
+/// a `question`; more than eight keep the first eight and say so. Returns the
+/// notes to show.
+fn normalize(mut input: SearchInput) -> (SearchInput, Vec<String>) {
+    let mut notes = Vec::new();
+    let Some(list) = input.questions.take() else {
+        return (input, notes);
+    };
+    let mut questions: Vec<String> = list
+        .into_iter()
+        .map(|q| q.trim().to_owned())
+        .filter(|q| !q.is_empty())
+        .collect();
+    if let Some(question) = input.question.take().filter(|q| !q.trim().is_empty()) {
+        questions.insert(0, question.trim().to_owned());
+    }
+    if questions.len() > MAX_QUESTIONS {
+        notes.push(format!(
+            "Answered the first {MAX_QUESTIONS} of {} questions; send the rest in another call.",
+            questions.len()
+        ));
+        questions.truncate(MAX_QUESTIONS);
+    }
+    match questions.len() {
+        0 => {}
+        1 => input.question = questions.pop(),
+        _ => input.questions = Some(questions),
+    }
+    (input, notes)
+}
+
 /// Searches that run at once. The snapshot is shared and its refresh is locked,
 /// so parallel searches repeat no scan; each still sends up to three Jev
 /// requests and ranks on the CPU, so the rest wait for a slot.
@@ -276,8 +309,8 @@ impl OkoServer {
             if questions.iter().any(|q| q.len() > 4096) {
                 bail!("Each question must contain at most 4096 bytes.");
             }
-            if input.deep || input.mode.is_some() || !symbols.is_empty() {
-                bail!("questions cannot be combined with deep, symbols or mode.");
+            if input.deep {
+                bail!("questions cannot be combined with deep.");
             }
         }
         if input.max_steps.is_some() && !input.deep {
@@ -325,6 +358,7 @@ impl OkoServer {
         let parallel = self.in_flight.fetch_add(1, Ordering::SeqCst) > 0;
         let _flight = Flight(Arc::clone(&self.in_flight));
         let started = Instant::now();
+        let (input, mut early_notes) = normalize(input);
         let directory = self.directory(&input)?;
         let scope = input
             .directory
@@ -406,7 +440,7 @@ impl OkoServer {
         // Several questions: which question each winning chunk answers, and
         // notes about the ones that found nothing.
         let mut tagged: Vec<(search::Chunk, String)> = Vec::new();
-        let mut extra_notes: Vec<String> = Vec::new();
+        let mut extra_notes: Vec<String> = std::mem::take(&mut early_notes);
         // The focused query fused into a long prompt's shortlist, for the metrics.
         let mut focused_terms: Option<Value> = None;
         let winners = if input.deep {
@@ -448,12 +482,16 @@ impl OkoServer {
             if cancelled() {
                 bail!("Search cancelled.");
             }
+            // `mode: usages|enumerate` beside several questions: every question
+            // that names a definition gets its listing.
+            let force_listing = matches!(input.mode, Some(Mode::Usages | Mode::Enumerate));
             let many = self.ask_many(
                 &questions,
                 &snapshot,
                 corpus,
                 key.clone(),
                 input.intent.into(),
+                force_listing,
             )?;
             shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
             lexical_fallback = many.lexical_fallback;
@@ -463,6 +501,26 @@ impl OkoServer {
             floor = Some(many.floor);
             tagged = many.tagged;
             extra_notes.extend(many.notes);
+            // `symbols` beside several questions: those definitions too, whole.
+            if !symbols.is_empty() {
+                let named = oko::floor::pins_for_names(&symbols, snapshot.navigation(), corpus);
+                for pin in &named.pins {
+                    pins.push((pin.chunk.clone(), 1.0));
+                    tagged.push((pin.chunk.clone(), "symbols".to_owned()));
+                }
+                symbols_missing = symbols
+                    .iter()
+                    .filter(|name| {
+                        let leaf = name.rsplit(['.', ':', '#']).next().unwrap_or(name);
+                        !named.pins.iter().any(|pin| pin.name == leaf)
+                    })
+                    .cloned()
+                    .collect();
+            }
+            if input.mode == Some(Mode::Unused) {
+                let summary = oko::usages::unused(snapshot.navigation(), corpus, &symbols, "");
+                extra_notes.push(oko::usages::render_unused(&summary, &scope, ""));
+            }
             (many.winners, None, Some(many.retrieval))
         } else {
             let shortlist_started = Instant::now();
@@ -904,6 +962,7 @@ impl OkoServer {
         corpus: &[search::Chunk],
         key: Option<String>,
         intent: RankingIntent,
+        force_listing: bool,
     ) -> Result<Many> {
         let no_jev = self.no_jev;
         let outcomes: Vec<Result<Outcome>> = std::thread::scope(|scope| {
@@ -1021,7 +1080,7 @@ impl OkoServer {
         let mut noted: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (index, outcome) in outcomes.into_iter().enumerate() {
             let tag = format!("Q{}", index + 1);
-            let callers = oko::usages::asks_for_callers(&outcome.question);
+            let callers = force_listing || oko::usages::asks_for_callers(&outcome.question);
             let dependents = oko::usages::asks_for_dependents(&outcome.question);
             if !matches!(intent, RankingIntent::Explanation)
                 && (callers || dependents)

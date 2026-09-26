@@ -249,7 +249,9 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["name"], "search");
     assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
-    assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+    // Unknown fields are ignored rather than refused (an agent sending
+    // `max_results` should still get an answer).
+    assert_ne!(tools[0]["inputSchema"]["additionalProperties"], false);
     // Every agent turn pays for the tool definition, whether or not it searches.
     assert!(tools[0].get("outputSchema").is_none());
     // Raised from 1,950 for `symbols`, `mode` and `questions` (2026-09-24/25):
@@ -316,11 +318,7 @@ fn invalid_arguments_boundaries_and_missing_key_are_recoverable() {
         let result = client.search(args);
         assert_eq!(result["result"]["isError"], true, "{result}");
     }
-    for args in [
-        json!({}),
-        json!({"question":"auth","intent":"bad"}),
-        json!({"question":"auth","surprise":true}),
-    ] {
+    for args in [json!({}), json!({"question":"auth","intent":"bad"})] {
         let result = client.search(args);
         assert!(
             result.get("error").is_some() || result["result"]["isError"] == true,
@@ -329,6 +327,11 @@ fn invalid_arguments_boundaries_and_missing_key_are_recoverable() {
     }
     assert_eq!(
         client.search(json!({"question":"auth"}))["result"]["isError"],
+        false
+    );
+    // An unknown field is ignored.
+    assert_eq!(
+        client.search(json!({"question":"auth","max_results":5}))["result"]["isError"],
         false
     );
     let mut paid = Client::start(root.path(), false, None);
@@ -2330,13 +2333,35 @@ fn several_questions_share_one_call_with_labelled_excerpts_and_one_set_of_side_r
     );
     assert_eq!(packet["retrieval"]["questions"][1]["tag"], "Q2");
     assert_eq!(packet["responseLimitBytes"], 26_000);
-    // Validation: one question, or questions with deep, is an error.
+    // One question in `questions` is a plain question; questions with deep
+    // is still an error.
     let mut client = Client::start(root.path(), true, None);
     client.initialize();
-    let response = client.search(json!({"questions":["only one"]}));
-    assert_eq!(response["result"]["isError"], true, "{response}");
+    let response = client.search(json!({"questions":["authenticate token"]}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(text.contains("auth.rs:1-3 (whole file)\n"), "{text}");
     let response = client.search(json!({"questions":["a b", "c d"],"deep":true}));
     assert_eq!(response["result"]["isError"], true, "{response}");
+    // More than eight: the first eight are answered, and the answer says so.
+    let ten: Vec<String> = (0..10).map(|i| format!("authenticate token {i}")).collect();
+    let response = client.search(json!({"questions": ten}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Answered the first 8 of 10 questions; send the rest in another call."),
+        "{text}"
+    );
+    // `symbols` beside several questions: the named definition comes too.
+    let response = client.search(
+        json!({"questions":["authenticate token", "dispatch route"],"symbols":"evict_cache_entry"}),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(
+        text.contains("cache.rs:1-3 (whole file, exact name match, symbols)\n"),
+        "{text}"
+    );
     // Lexical mode answers several questions too, with labels.
     let response = client.search(json!({"questions":["authenticate token", "dispatch route"]}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());

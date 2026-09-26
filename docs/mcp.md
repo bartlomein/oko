@@ -426,6 +426,14 @@ twelve) and the response cap by 5,000 bytes (up to 36,000). The first
 question leads the notes, the floor and the metrics; `retrieval.questions`
 records each question's results, pins, Jev calls and timing.
 
+Shapes that used to be refused are answered as meant: a `question` beside
+`questions` joins them, one entry in `questions` is a plain question, more
+than eight keep the first eight with a note, `symbols` beside `questions`
+adds those definitions (labelled `symbols`), `mode: usages` or `enumerate`
+beside `questions` gives every question that names a definition its
+listing, and unknown fields (`max_results`, `limit`) are ignored. Only `deep`
+with `questions` is still an error.
+
 ## Names as a parameter
 
 `symbols` takes exact names, comma-separated, up to twelve ("wsgi_app,
