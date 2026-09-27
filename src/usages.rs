@@ -338,11 +338,17 @@ fn classify(path: &str, line: &str, name: &str) -> UseKind {
 }
 
 fn trim_row(text: &str) -> String {
+    trim_row_to(text, ROW_TEXT_BYTES)
+}
+
+/// The line trimmed to at most `max` bytes, cut at a character boundary and
+/// marked with `…`.
+fn trim_row_to(text: &str, max: usize) -> String {
     let text = text.trim();
-    if text.len() <= ROW_TEXT_BYTES {
+    if text.len() <= max {
         return text.to_owned();
     }
-    let mut end = ROW_TEXT_BYTES;
+    let mut end = max;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -571,18 +577,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
                         DependentRow {
                             line: *number,
                             enclosing: enclosing.map(|d| d.qualified.clone()),
-                            text: {
-                                let mut row = trim_row(text);
-                                if row.len() > DEPENDENT_TEXT_BYTES {
-                                    let mut end = DEPENDENT_TEXT_BYTES;
-                                    while !row.is_char_boundary(end) {
-                                        end -= 1;
-                                    }
-                                    row.truncate(end);
-                                    row.push('…');
-                                }
-                                row
-                            },
+                            text: trim_row_to(text, DEPENDENT_TEXT_BYTES),
                             more: 0,
                             rule: rule.map(|r| r.label),
                         },
@@ -1205,6 +1200,18 @@ mod tests {
         );
         assert!(
             render_tests(&pin, &tests).contains("  src/probe.test.ts — named after it, high\n")
+        );
+    }
+
+    #[test]
+    fn rows_are_trimmed_at_a_character_boundary() {
+        assert_eq!(trim_row_to("  short  ", 10), "short");
+        assert_eq!(trim_row_to("abcdefghij_k", 10), "abcdefghij…");
+        // A multi-byte character straddling the limit is not split.
+        assert_eq!(trim_row_to("abcdefghé", 9), "abcdefgh…");
+        assert_eq!(
+            trim_row(&"x".repeat(200)).chars().count(),
+            ROW_TEXT_BYTES + 1
         );
     }
 
