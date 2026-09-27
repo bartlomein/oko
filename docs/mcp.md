@@ -97,9 +97,14 @@ GUI clients; their working directory may not be your project.
 
 The server exposes `search` with these inputs:
 
-- `question`: required, nonblank, at most 4096 bytes.
+- `question`: nonblank, at most 4096 bytes; needed unless `symbols`,
+  `questions` or `mode: unused` says what to find.
+- `questions`: up to eight independent questions answered in one call (below).
+- `symbols`: exact names, comma-separated, up to twelve (below).
+- `mode`: `usages`, `enumerate` or `unused` (below).
 - `directory`: optional subdirectory inside the configured root.
-- `intent`: `implementation` (default), `explanation`, or `general`.
+- `intent`: `implementation` (default), `explanation`, `general`, or `callers`
+  (every use of the named definition, as a listing).
 - `deep`: optional, defaults to `false`.
 - `max_steps`: deep mode only, 1–5, defaults to 5.
 
@@ -424,7 +429,7 @@ terms and how many candidates they added under `focused`.
 
 ## Several questions in one call
 
-`questions` takes two to eight independent questions. Each gets its own
+`questions` takes up to eight independent questions. Each gets its own
 shortlist, floor and ranking at the same time, on its own thread; only the
 first question sends the requests judged beside its shortlist and the
 recovery call, so a four-question call costs about six Jev requests where
@@ -458,8 +463,9 @@ parameter is a string rather than an array because an array costs an
 
 `mode` turns the answer into a listing for the named definition (from
 `symbols` or the question): `usages` is every use by line, as for a callers
-question; `enumerate` is every file that uses it, one row per file with the
-count and first line, up to 40 files, test files counted separately.
+question; `enumerate` is every file that uses it, in the dependents shape
+described under [Callers and tests](#callers-and-tests). `unused` lists the
+definitions nothing uses ([Unused definitions](#unused-definitions)).
 
 When a question names a definition that four or more code files use, the
 answer carries one line summarising the dependents, most uses first, so
@@ -498,17 +504,18 @@ is dropped for having few uses: over the budget (14 KB, or 8 KB inside a
 several-question answer), extra rows within a file go first, then the line
 text, then the definition name, leaving a bare `path:line` per file (a few
 hundred files fit); only past that are whole areas summarised by name with a
-hint to pass `directory`. Task, data, locale and script files are counted after the
-code, the definition's own file is counted, the header says the listing is
+hint to pass `directory`. Task, data, locale and translation (`.po`) and
+script files are counted after the code, the definition's own file is counted, the header says the listing is
 complete for the indexed code and names what it cannot see (references built
 at runtime: reflection, `send`, names in strings), and a closing section lists the
 specs and tests that use the name as `path:line`, files named after the
 definition first, each pointing at the file's `describe` (or test class,
 `func Test…`, `def test_…`) of the name when it has one. For a Ruby class, lines that refer to it the Rails way
 without spelling its constant count as uses and carry the rule that matched:
-`belongs_to :upload`, `has_one :upload`, `has_many :uploads`,
-`has_and_belongs_to_many :uploads` and `class_name: "Upload"`, derived with
-ActiveRecord's own inflection rules (`OptimizedImage` → `optimized_image`,
+`belongs_to :upload`, `has_one :upload`, `has_many :uploads` and
+`has_and_belongs_to_many :uploads` (a `class_name: "Upload"` spells the
+constant, so it counts already), derived with ActiveRecord's own inflection
+rules (`OptimizedImage` → `optimized_image`,
 `optimized_images`). The foreign key (`upload_id`) is not a use: it names a
 column in serializers and params far more often than a dependency.
 
@@ -521,6 +528,11 @@ app/controllers (5 files)
 Specs and tests using Upload (86 files, 415 uses), named after it first:
   spec/models/upload_spec.rb:12	61
 ```
+
+An answer never exceeds the response cap: when a listing and the notes above
+it cannot fit beside even one excerpt, whole lines are cut from the end of the
+listing and a last line says how many, and to narrow the question or pass
+`directory` to see them.
 
 A question that asks for tests ("tests for `MultiDecoder`", "which specs
 cover Upload") first lists the test files named after the definition's file

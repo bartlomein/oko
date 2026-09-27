@@ -19,7 +19,7 @@ less install-oko.sh
 sh install-oko.sh
 ```
 
-The installer defaults to `v0.5.1`, including when that version is published as a
+The installer defaults to `v0.6.0`, including when that version is published as a
 prerelease. It does not rely on GitHub’s latest stable release endpoint. A draft
 or private release is not anonymously downloadable.
 
@@ -28,12 +28,12 @@ on the `sh` process (not on `curl`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh |
-  OKO_VERSION=v0.5.1 sh
+  OKO_VERSION=v0.6.0 sh
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKO_VERSION` | `v0.5.1` | Published release to download; the `v` prefix is optional. |
+| `OKO_VERSION` | `v0.6.0` | Published release to download; the `v` prefix is optional. |
 | `OKO_INSTALL_DIR` | `~/.local/share/oko` | Version directories containing binaries and license notices. |
 | `OKO_BIN_DIR` | `~/.local/bin` | Directory containing the `oko` symlink. |
 
@@ -64,7 +64,7 @@ Download the matching archive and `SHA256SUMS` from
 In the download directory, substitute your chosen filename:
 
 ```sh
-archive=oko-v0.5.1-aarch64-apple-darwin.tar.gz
+archive=oko-v0.6.0-aarch64-apple-darwin.tar.gz
 grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
 tar -xzf "$archive" &&
 "./${archive%.tar.gz}/oko" --version
@@ -106,6 +106,17 @@ Setup keeps its own stable copy: run the newly installed `oko setup` (with the s
 `--client`) in each configured project to update it. Start a new agent session so it launches the
 updated server. If your client keeps an old server running, reconnect its MCP
 connection or restart the client. Saved credentials are separate from the binary.
+
+### Upgrading to 0.6.0
+
+Reinstall, then rerun `oko setup` in each project. For Claude Code, setup now
+also writes `.claude/settings.local.json` (machine-local, gitignored): an allow
+rule for Oko's search and hooks that tell the agent and its subagents that Oko
+is loaded and remind a grep for code; `--no-hooks` skips them, and your own
+settings in that file are kept. The search tool gains `symbols` (named
+definitions, whole), `questions` (several at once) and `mode` (`usages`,
+`enumerate`, `unused`); agents discover them from the tool description, and
+nothing needs configuring.
 
 ### Upgrading to 0.5.1
 

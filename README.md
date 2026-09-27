@@ -12,7 +12,10 @@ MCP so your agent can get to the task sooner. Gains vary by task and coding tool
 
 On [Agent Retrieval Bench](#retrieval-quality), a public benchmark of 345
 code-retrieval tasks in six languages, Oko puts a right file first more often
-than any published method (MRR 0.39 against 0.24), with no GPU and no index.
+than any published method (MRR 0.37 against 0.24) and finds as many of the
+needed files in its top 20 as the best embedding model, with no GPU and no
+index. On [Sense's own agent benchmark](#against-sense), run against Sense on
+the same day, Oko scored slightly higher at about 40% lower cost.
 In [our own agent benchmark](#benchmarks), Codex, OpenCode, and Claude Code use
 13–44% fewer tokens and 33–61% fewer tool calls with it; OpenCode and Claude
 Code also finish tasks 21–23% faster.
@@ -178,18 +181,45 @@ locally on the same tasks and reproduce the published figures.
 
 | Method | Right file in top 20 | First right file ranks high (MRR) | Needed code within 8k tokens |
 | --- | --- | --- | --- |
-| **Oko 0.5.0** | 0.64 | **0.39** | **0.48** |
+| **Oko 0.6.0** | **0.70** | **0.37** | **0.50** |
+| Oko 0.5.0 | 0.64 | 0.39 | 0.48 |
 | Qwen3-Embedding-8B (GPU, index) | **0.70** | 0.23 | 0.37 |
 | RepoMap | 0.64 | 0.22 | 0.38 |
 | Qwen3-Embedding-4B (GPU, index) | 0.63 | 0.24 | 0.34 |
 | Lexical | 0.49 | 0.16 | 0.27 |
 | BM25 | 0.45 | 0.15 | 0.21 |
 
+0.6.0 ranks a longer shortlist, so more needed files reach the top 20; its MRR
+is a little lower than 0.5.0's, all of it on review-comment tasks, where the
+right file is still near the top but less often first.
+
 On [SWE-Explore](https://arxiv.org/abs/2606.07297), 848 real issues in ten
 languages, a single Oko call ranks the right code about as well as agents that
-explore for many turns, and three times better than BM25 or TF-IDF. Per-task
-tables, the held-out split, what was tuned on what, and the limits are in
+explore for many turns (nDCG 0.81; line precision 0.56, between the published
+agents' 0.53 and 0.68), and finds a right file three to six times as often as
+the benchmark's TF-IDF and BM25. Per-task tables, the held-out split, what was
+tuned on what, and the limits are in
 [the details](docs/benchmark-results.md#agent-retrieval-bench).
+
+### Against Sense
+
+[Sense](https://github.com/luuuc/sense) publishes an agent benchmark: six
+multi-step tasks on real repositories answered by Claude Opus 4.7, scored and
+judged by its own harness. We ran it with Oko and with Sense on the same day,
+five runs per task each.
+
+| | Oko 0.6.0 | Sense |
+| --- | --- | --- |
+| Cited recall (the harness's headline) | **0.908** | 0.875 |
+| Blended score | **0.933** | 0.931 |
+| Relations stated correctly | 0.933 | **1.000** |
+| Cost, 30 sessions | **$31** | $50 |
+| Mean time per session | **210 s** | 242 s |
+
+The lead is small, and cited recall comes from one task (Discourse, 24
+locations) run five times; Sense states the relations between locations more
+exactly. Oko's lead holds however the failed sessions are counted, and Oko was
+faster on all six tasks. [Details](docs/benchmark-results.md#senses-agent-benchmark-against-sense).
 
 ### Agent sessions
 
