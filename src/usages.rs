@@ -79,7 +79,6 @@ pub struct TestMatch {
 struct Patterns {
     callers: Regex,
     import: Regex,
-    comment: Regex,
 }
 fn patterns() -> &'static Patterns {
     static P: OnceLock<Patterns> = OnceLock::new();
@@ -89,7 +88,6 @@ fn patterns() -> &'static Patterns {
         )
         .unwrap(),
         import: Regex::new(r"^\s*(?:import\b|from\s+\S+\s+import\b|use\s+[A-Za-z_:]|require\s*\(|require\s+'|include\s+[A-Z]|extend\s+[A-Z]|using\s+|#include\b|export\s+\{|export\s+\*)").unwrap(),
-        comment: Regex::new(r"^\s*(?://|#|/\*|\*|--|<!--|///|//!)").unwrap(),
     })
 }
 
@@ -284,9 +282,36 @@ fn is_docs_path(path: &str) -> bool {
     )
 }
 
-fn classify(line: &str, name: &str) -> UseKind {
+/// A whole-line comment in the file's own language. `#` starts a comment
+/// only where it is the comment character (Python, Ruby, shell, YAML…), so
+/// Rust `#[attr]` and C `#include` are code; a leading `*` is a comment only
+/// as a block-comment continuation (`* text`, `*/`), never a dereference.
+fn is_comment(path: &str, line: &str) -> bool {
+    let line = line.trim_start();
+    let extension = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match extension.as_str() {
+        "py" | "pyi" | "rb" | "rake" | "gemspec" | "sh" | "bash" | "zsh" | "yml" | "yaml"
+        | "toml" | "pl" | "r" | "ex" | "exs" | "cr" | "nim" | "tf" => line.starts_with('#'),
+        "sql" | "lua" | "hs" | "elm" => line.starts_with("--"),
+        "html" | "htm" | "xml" | "vue" | "svelte" | "md" | "erb" => line.starts_with("<!--"),
+        "php" => (line.starts_with('#') && !line.starts_with("#[")) || c_style_comment(line),
+        _ => c_style_comment(line),
+    }
+}
+
+/// `//`, `/*`, and a block comment's continuation lines: `*` then a space,
+/// `*/`, or a bare `*`.
+fn c_style_comment(line: &str) -> bool {
+    line.starts_with("//")
+        || line.starts_with("/*")
+        || line == "*"
+        || line.starts_with("* ")
+        || line.starts_with("*/")
+}
+
+fn classify(path: &str, line: &str, name: &str) -> UseKind {
     let p = patterns();
-    if p.comment.is_match(line) {
+    if is_comment(path, line) {
         return UseKind::Mention;
     }
     if p.import.is_match(line) {
@@ -361,7 +386,7 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
             let kind = if rule.is_some() {
                 UseKind::Reference
             } else {
-                classify(text, name)
+                classify(path, text, name)
             };
             match kind {
                 UseKind::Call => result.calls += 1,
@@ -528,7 +553,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
             let Some(rule) = refers(path, text, name, associations.as_ref()) else {
                 continue;
             };
-            if patterns().comment.is_match(text) {
+            if is_comment(path, text) {
                 result.in_comments += 1;
                 continue;
             }
@@ -555,7 +580,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
                             kind: if rule.is_some() {
                                 UseKind::Reference
                             } else {
-                                classify(text, name)
+                                classify(path, text, name)
                             },
                             text: {
                                 let mut row = trim_row(text);
@@ -820,9 +845,7 @@ pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
         let mut count = 0;
         let mut first = 0;
         for (number, text) in lines {
-            if patterns().comment.is_match(text)
-                || refers(path, text, name, associations.as_ref()).is_none()
-            {
+            if is_comment(path, text) || refers(path, text, name, associations.as_ref()).is_none() {
                 continue;
             }
             count += 1;
@@ -1118,6 +1141,61 @@ mod tests {
             facts.push((*path, Arc::new(preparer.prepare(path, text))));
         }
         (chunks, NavigationIndex::new_shared(facts))
+    }
+
+    #[test]
+    fn comments_follow_the_file_language() {
+        for (path, line) in [
+            ("a.rs", "  // note"),
+            ("a.rs", "/// doc"),
+            ("a.c", "/* block"),
+            ("a.c", " * continued"),
+            ("a.c", " */"),
+            ("a.py", "# note"),
+            ("a.rb", "  # note"),
+            ("a.sql", "-- note"),
+            ("a.html", "<!-- note -->"),
+            ("a.php", "# note"),
+        ] {
+            assert!(is_comment(path, line), "{path}: {line}");
+        }
+        for (path, line) in [
+            ("a.rs", "#[serde(default = \"default_port\")]"),
+            ("a.rs", "#![allow(dead_code)]"),
+            ("a.c", "#include <stdio.h>"),
+            ("a.c", "*ptr = compute(x);"),
+            ("a.go", "*out = parse(in)"),
+            ("a.py", "x = 1  # trailing"),
+            ("a.php", "#[Route('/x')]"),
+        ] {
+            assert!(!is_comment(path, line), "{path}: {line}");
+        }
+        assert_eq!(
+            classify("a.c", "#include \"upload.h\"", "upload"),
+            UseKind::Import
+        );
+        assert_eq!(
+            classify(
+                "a.rs",
+                "#[serde(default = \"default_port\")]",
+                "default_port"
+            ),
+            UseKind::Reference
+        );
+    }
+
+    #[test]
+    fn a_function_used_only_in_an_attribute_is_not_unused() {
+        let (chunks, index) = corpus(&[(
+            "src/config.rs",
+            "pub struct Config {\n    #[serde(default = \"default_port\")]\n    port: u16,\n}\n\nfn default_port() -> u16 {\n    8080\n}\n",
+        )]);
+        let summary = unused(&index, &chunks, &[], "");
+        assert!(
+            !summary.private.iter().any(|d| d.name == "default_port"),
+            "{:?}",
+            summary.private
+        );
     }
 
     #[test]
@@ -1661,7 +1739,7 @@ pub fn unused(
             continue;
         }
         for (offset, line) in chunk.text.split('\n').enumerate() {
-            if patterns().comment.is_match(line) {
+            if is_comment(&chunk.path, line) {
                 continue;
             }
             for word in line
