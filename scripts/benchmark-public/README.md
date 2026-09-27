@@ -145,6 +145,27 @@ python3 scripts/benchmark-public/replay/selftest.py
 - This cannot show how an agent reacts: turns, trust, or final answers. Use the
   smoke or branch suite for that.
 
+## Same answers? Comparing two builds
+
+A refactor or a speedup should not change what Oko returns.
+`replay/compare_builds.py` replays recorded agent sessions call by call
+through two builds (no Jev, free) and diffs every answer. It exits 1 when any
+answer differs and writes the differing answers in full under
+`benchmarks/results/compare-builds/`.
+
+```sh
+python3 scripts/benchmark-public/replay/compare_builds.py --before /tmp/oko-old --after target/release/oko \
+    --transcripts 'benchmarks/results/sense-bench/results-run*/oko-dev/*/run-*/transcript.json' \
+    --corpus plans/corpus/calls.jsonl
+```
+
+- Transcripts are Claude Code session files whose path ends in
+  `<repository>/run-N/transcript.json`; `--repos name=path` adds or moves a
+  checkout.
+- The index line's `watched`/`rescanned` depends on timing and is ignored. A
+  parsed-file count that differs by one or two under load is a parse time
+  limit, not the build: rerun that session alone.
+
 ## Guided condition: what `oko setup`'s guidance does
 
 Blank-slate sessions strip every project instruction, including the guidance
