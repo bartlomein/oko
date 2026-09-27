@@ -64,6 +64,17 @@ Setup is **per project**. Run it again for another project. Codex desktop and CL
 share project MCP configuration for trusted projects; setup does not require a
 separate Codex CLI installation. For downloads, see the [installation guide](installation.md); see [release maintenance](releasing.md).
 
+For Claude Code, setup also writes `.claude/settings.local.json` (machine-local,
+added to `.gitignore`): an allow rule for `mcp__oko__search`, and hooks that run
+`oko hook`. They tell the main agent and every subagent, as plain facts, that the
+Oko tool is loaded; add a line naming Oko to the task of an exploring subagent
+(Explore, Plan, general-purpose) that does not mention it; and put a reminder
+beside the first grep or find for code, then every fourth, until an Oko search.
+A hook never blocks or changes a tool call otherwise; anything unexpected is
+ignored. Your own settings and hooks in that file are kept. The reminder counts
+live in the user cache directory and are removed after a day. `--no-hooks`
+skips all of this.
+
 For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
 agent instruction files untouched, and `--install-dir DIRECTORY` to choose the
 stable binary location. These options also support isolated setup tests.

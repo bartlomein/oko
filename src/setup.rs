@@ -11,7 +11,7 @@ use std::{
 };
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded\n(--no-hooks skips them).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
@@ -66,9 +66,11 @@ struct Options {
     install: PathBuf,
     offline: bool,
     instructions: bool,
+    hooks: bool,
 }
 fn options(args: &[String], cwd: &Path) -> Result<Options> {
-    let (mut root, mut install, mut offline, mut instructions) = (None, None, false, true);
+    let (mut root, mut install, mut offline, mut instructions, mut hooks) =
+        (None, None, false, true, true);
     let mut chosen = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -84,6 +86,7 @@ fn options(args: &[String], cwd: &Path) -> Result<Options> {
             }
             "--no-jev" if !offline => offline = true,
             "--no-instructions" if instructions => instructions = false,
+            "--no-hooks" if hooks => hooks = false,
             _ => bail!("Invalid setup arguments.\n{USAGE}"),
         }
     }
@@ -113,6 +116,7 @@ fn options(args: &[String], cwd: &Path) -> Result<Options> {
         install,
         offline,
         instructions,
+        hooks,
     })
 }
 fn executable_name(name: &str) -> String {
@@ -394,6 +398,128 @@ impl Claude {
         Ok(())
     }
 }
+/// Claude Code settings for this project and user: hooks that tell the main
+/// agent and its subagents that Oko is loaded and remind a grep for code, and
+/// an allow rule so a search never waits on a permission prompt. Other settings
+/// and hooks are kept; only handlers that run `oko hook` are replaced.
+fn claude_settings(original: &str, exe: &Path) -> Result<String> {
+    use serde_json::{Value, json};
+    let mut doc: Value = if original.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(original).map_err(|_| {
+            anyhow::anyhow!("Cannot parse .claude/settings.local.json; nothing was overwritten")
+        })?
+    };
+    let Some(settings) = doc.as_object_mut() else {
+        bail!(".claude/settings.local.json is not a JSON object; nothing was overwritten");
+    };
+    let program = shell_word(exe.to_str().context("Executable path must be UTF-8")?);
+    let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
+    let Some(hooks) = hooks.as_object_mut() else {
+        bail!(
+            "The hooks in .claude/settings.local.json are not an object; nothing was overwritten"
+        );
+    };
+    for (event, matcher, argument, timeout) in [
+        ("SessionStart", None, "session-start", 10),
+        ("SubagentStart", None, "subagent-start", 10),
+        // Agent adds Oko to an exploring subagent's task; Oko's own tool is
+        // matched so a search resets the reminder count.
+        (
+            "PreToolUse",
+            Some("^(Bash|Grep|Glob|Agent|mcp__oko__.*)$"),
+            "pre-tool-use",
+            5,
+        ),
+    ] {
+        let groups = hooks.entry(event).or_insert_with(|| json!([]));
+        let Some(groups) = groups.as_array_mut() else {
+            bail!(
+                "{event} hooks in .claude/settings.local.json are not a list; nothing was overwritten"
+            );
+        };
+        for group in groups.iter_mut() {
+            if let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) {
+                handlers
+                    .retain(|handler| !runs_oko_hook(handler["command"].as_str().unwrap_or("")));
+            }
+        }
+        groups.retain(|group| {
+            group["hooks"]
+                .as_array()
+                .is_none_or(|handlers| !handlers.is_empty())
+        });
+        let mut group = json!({"hooks": [{
+            "type": "command",
+            "command": format!("{program} hook {argument}"),
+            "timeout": timeout,
+        }]});
+        if let Some(matcher) = matcher {
+            group["matcher"] = json!(matcher);
+        }
+        groups.push(group);
+    }
+    let permissions = settings.entry("permissions").or_insert_with(|| json!({}));
+    let Some(allow) = permissions
+        .as_object_mut()
+        .map(|permissions| permissions.entry("allow").or_insert_with(|| json!([])))
+        .and_then(Value::as_array_mut)
+    else {
+        bail!(
+            "The permissions in .claude/settings.local.json are not in the expected form; nothing was overwritten"
+        );
+    };
+    if !allow.iter().any(|rule| rule == "mcp__oko__search") {
+        allow.push(json!("mcp__oko__search"));
+    }
+    Ok(serde_json::to_string_pretty(&doc)? + "\n")
+}
+/// Whether a hook command is one setup installed: an `oko` executable running `hook`.
+fn runs_oko_hook(command: &str) -> bool {
+    let Some((program, rest)) = split_shell_word(command) else {
+        return false;
+    };
+    Path::new(&program)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        == Some("oko")
+        && rest.trim_start().starts_with("hook ")
+}
+/// A path as one word for `sh`, quoted only when it needs to be.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@".contains(c))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+/// The first word of a command as `shell_word` writes it, and the rest.
+fn split_shell_word(command: &str) -> Option<(String, &str)> {
+    let command = command.trim_start();
+    if let Some(quoted) = command.strip_prefix('\'') {
+        let mut word = String::new();
+        let mut rest = quoted;
+        loop {
+            let end = rest.find('\'')?;
+            word.push_str(&rest[..end]);
+            rest = &rest[end + 1..];
+            // `'\''` continues the word after an embedded quote.
+            if let Some(after) = rest.strip_prefix("\\''") {
+                word.push('\'');
+                rest = after;
+            } else {
+                return Some((word, rest));
+            }
+        }
+    }
+    let end = command.find(char::is_whitespace).unwrap_or(command.len());
+    Some((command[..end].to_owned(), &command[end..]))
+}
 fn instructions(original: &str) -> Result<String> {
     let start = original
         .match_indices(START)
@@ -619,6 +745,20 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     } else {
         None
     };
+    if wants(Client::Claude) && options.hooks {
+        let path = options.root.join(".claude").join("settings.local.json");
+        let before = text(&path)?;
+        let after = claude_settings(before.as_deref().unwrap_or(""), &executable)?;
+        edits.push(Edit {
+            path,
+            before,
+            after,
+        });
+        ignored.push((
+            "/.claude/settings.local.json",
+            "# Oko: machine-local Claude Code hooks and permissions",
+        ));
+    }
     if options.instructions {
         // Codex and OpenCode read AGENTS.md; Claude Code reads CLAUDE.md, which
         // may itself import AGENTS.md.
@@ -710,7 +850,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                 Client::Codex =>
                     "Codex project configuration saved. Open this project in Codex, trust it if prompted, and start a new session. Use /mcp to check the connection.",
                 Client::Claude =>
-                    "Claude Code connection added for this project and user. Start a new session and use /mcp to check it.",
+                    "Claude Code connection added for this project and user, with its hooks and permission in .claude/settings.local.json. Start a new session and use /mcp to check it.",
                 Client::OpenCode =>
                     "OpenCode project configuration saved. Start a new session and run `opencode mcp list` to check the connection.",
             }

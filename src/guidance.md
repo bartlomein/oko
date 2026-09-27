@@ -1,5 +1,11 @@
 ## Oko code search
 Use the Oko MCP `search` tool first to locate unfamiliar code or where a behavior is implemented. Ask in the user's own terms and scope; do not add guessed frameworks or pipeline stages. For edits, describe the existing code to change; the new text need not exist yet. A function, class or method named in the question is always returned; ask "who calls X" for every use of a name, or "tests for X" for its tests. When you have several questions about one repository, send them together in `questions` (2–8) instead of one call each; to see named definitions, pass their names in `symbols`. For every file that depends on a definition, or its specs, ask "who uses X": each row is a path:line you can cite. For a deletion list, ask "unused definitions in <directory>". Use native grep only for literal text.
+
+| Looking for | Use |
+| --- | --- |
+| Where something happens, how a flow works | Oko `search` |
+| Where a function, type, or setting is defined or used | Oko `search` |
+| An exact string: error message, log line, config key | grep |
 When you hand code search to a subagent, tell it to locate code with the Oko MCP `search` tool first; subagents do not see these instructions.
 
 Oko returns exact, current file contents with real line numbers: the same text a file read would print. Treat each excerpt as a file read you have already done. A `Files using X` or `Callers of X` listing is complete for the indexed code: cite its rows as they are and do not grep for the name again; it names what it cannot see.

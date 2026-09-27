@@ -1,6 +1,7 @@
 mod auth;
 mod benchmark;
 mod config;
+mod hook;
 mod mcp;
 mod setup;
 
@@ -658,6 +659,9 @@ fn run() -> Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "setup") {
         return setup::run(&args[1..], &cwd);
+    }
+    if args.first().is_some_and(|arg| arg == "hook") {
+        return hook::run(&args[1..]);
     }
     let parsed = parse_arguments(&args).map_err(|error| anyhow::anyhow!("{error}\n\n{USAGE}"))?;
     let key = if parsed.no_jev { None } else { api_key(&cwd)? };

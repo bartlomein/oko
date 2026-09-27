@@ -249,8 +249,8 @@ fn stdio_handshake_schema_search_and_fresh_files() {
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["name"], "search");
     assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
-    // Unknown fields are ignored rather than refused (an agent sending
-    // `max_results` should still get an answer).
+    assert_eq!(tools[0]["_meta"]["anthropic/alwaysLoad"], true);
+    // Unknown fields are ignored rather than refused.
     assert_ne!(tools[0]["inputSchema"]["additionalProperties"], false);
     // Every agent turn pays for the tool definition, whether or not it searches.
     assert!(tools[0].get("outputSchema").is_none());
@@ -359,7 +359,10 @@ fn server_instructions_stay_brief_and_subdirectory_searches_state_their_path_bas
     let response = client.request("initialize", json!({"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"oko-tests","version":"1"}}));
     client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let instructions = response["result"]["instructions"].as_str().unwrap();
-    assert!(instructions.len() <= 320, "{}", instructions.len());
+    // Under tool search the instructions may be all an agent sees of Oko at
+    // first, so they say what it is for; they still cost every session.
+    assert!(instructions.len() <= 420, "{}", instructions.len());
+    assert!(instructions.starts_with("Oko finds code in this repository"));
 
     let scoped = client.search(json!({"question":"authentication token","directory":"server"}));
     assert_packet_envelope(&scoped);
