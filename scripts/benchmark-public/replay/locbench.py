@@ -135,8 +135,11 @@ def ranked(packet):
     return order, len(shown)
 
 
-def score(order, targets, files):
-    """Acc@k is strict, as in the LocAgent paper: every target must be in the top k."""
+def score(order, targets, files, total_functions):
+    """Acc@k is strict, as in the LocAgent paper: every target must be in the top k.
+    A target function whose range cannot be resolved (unparsable file, a
+    function the fix adds) counts as a miss, not as absent: `total_functions`
+    is the case's full list."""
     row = {}
     file_order = list(dict.fromkeys(path for path, _, _ in order))
     for k in FILE_K:
@@ -146,8 +149,8 @@ def score(order, targets, files):
     for k in FUNCTION_K:
         hit = {name for name, (path, start, end) in targets.items()
                if any(p == path and s <= end and start <= e for p, s, e in order[:k])}
-        row[f'functionAcc@{k}'] = bool(targets) and len(hit) == len(targets)
-        row[f'functionRecall@{k}'] = len(hit) / len(targets) if targets else None
+        row[f'functionAcc@{k}'] = total_functions > 0 and len(hit) == total_functions
+        row[f'functionRecall@{k}'] = len(hit) / total_functions if total_functions else None
     return row
 
 
@@ -177,7 +180,7 @@ def run(case, binary, live, timeout, extra_env=None):
                 client.close()
         order, shown = ranked(packet)
         retrieval = packet.get('retrieval') or {}
-        row.update(score(order, targets, files), ranking=packet.get('ranking'), shown=shown,
+        row.update(score(order, targets, files, len(case['edit_functions'])), ranking=packet.get('ranking'), shown=shown,
                    candidates=len(order), okoMs=(packet.get('timings') or {}).get('totalMs'),
                    jevMs=retrieval.get('rerankMs'),
                    # Where a miss happened: was the file even among the judged candidates?
@@ -200,6 +203,9 @@ def summarize(rows):
     for key in ('fileRecall@5', 'functionRecall@10'):
         values = [row[key] for row in scored if row.get(key) is not None]
         out[key] = round(100 * sum(values) / len(values), 1) if values else None
+    resolved = sum(r.get('targetsResolved') or 0 for r in scored)
+    wanted = sum(r.get('targetFunctions') or 0 for r in scored)
+    out['functionTargetsResolvedPct'] = round(100 * resolved / wanted, 1) if wanted else None
     out['fileShortlisted'] = round(100 * sum(bool(r.get('fileShortlisted')) for r in scored) / len(scored), 1) if scored else None
     return out
 
