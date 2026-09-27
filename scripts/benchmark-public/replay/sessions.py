@@ -32,11 +32,15 @@ MAX_BATCH = 8
 
 
 def runs_of(calls):
-    """Consecutive calls of one session, in order of position."""
+    """Consecutive calls of one session, in order of position, that one
+    `questions` call can carry: same directory and same intent (the batch is
+    sent with a single intent)."""
     calls = sorted(calls, key=lambda c: c['pos'])
     runs, current = [], [calls[0]]
     for previous, call in zip(calls, calls[1:]):
-        if call['pos'] == previous['pos'] + 1 and call.get('directory') == previous.get('directory'):
+        if (call['pos'] == previous['pos'] + 1
+                and call.get('directory') == previous.get('directory')
+                and call.get('intent') == previous.get('intent')):
             current.append(call)
         else:
             runs.append(current)
