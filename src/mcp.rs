@@ -316,7 +316,8 @@ impl Drop for Flight {
     }
 }
 impl OkoServer {
-    fn directory(&self, input: &SearchInput) -> Result<PathBuf> {
+    /// Reject what no route can answer, before any work.
+    fn validate(&self, input: &SearchInput) -> Result<()> {
         let question = input.question.as_deref().unwrap_or("");
         let symbols = input
             .symbols
@@ -361,6 +362,11 @@ impl OkoServer {
         if input.deep && self.no_jev {
             bail!("Deep search requires Jev; this server is running with --no-jev.");
         }
+        Ok(())
+    }
+
+    /// The directory to search: inside the configured workspace.
+    fn directory(&self, input: &SearchInput) -> Result<PathBuf> {
         let directory = self
             .root
             .join(input.directory.as_deref().unwrap_or("."))
@@ -446,6 +452,7 @@ impl OkoServer {
         let flight = Flight::begin(&self.in_flight, &self.started);
         let started = Instant::now();
         let (input, early_notes) = normalize(input);
+        self.validate(&input)?;
         let directory = self.directory(&input)?;
         let scope = input
             .directory
@@ -496,474 +503,61 @@ impl OkoServer {
         drop(cache);
         let snapshot = workspace.snapshot;
         let corpus = snapshot.chunks();
-        let scan_ms = workspace.timings.scan_ms;
         if cancelled() {
             bail!("Search cancelled.");
         }
-        let mut shortlist_ms = None;
-        let mut investigate_ms = None;
-        let mut lexical_fallback = None;
-        let mut candidates = Vec::new();
-        let mut runners_up = Vec::new();
-        let mut pins: Vec<(search::Chunk, f64)> = Vec::new();
-        let mut floor: Option<oko::floor::Floor> = None;
-        // A usages listing answers the question by itself; no ranking runs.
-        let mut direct: Option<String> = None;
-        // A listing shown beside the ranked code, for mixed questions.
-        let mut accompanying: Vec<String> = Vec::new();
-        // A single question answered beside a many-file listing: the listing
-        // rows carry the methods and lines, so one excerpt is enough.
-        let mut slim_single = false;
-        let mut symbols_missing: Vec<String> = Vec::new();
-        // Listings and lines shown in this answer, recorded as sent only when
-        // the answer is.
-        let mut pending: Vec<String> = Vec::new();
-        // Several questions: which question each winning chunk answers, and
-        // notes about the ones that found nothing.
-        let mut tagged: Vec<(search::Chunk, String)> = Vec::new();
-        let mut extra_notes: Vec<String> = early_notes;
-        // Definitions a batch question already lists in full or as a stub.
-        let mut listed_in_batch: Vec<String> = Vec::new();
-        // The focused query fused into a long prompt's shortlist, for the metrics.
-        let mut focused_terms: Option<Value> = None;
-        let winners = if input.deep {
-            let investigation_started = Instant::now();
-            let mut provider_calls = Vec::new();
-            let run = oko::investigate::investigate_snapshot_with(
-                question,
-                &snapshot,
-                input.intent.into(),
-                Some(input.max_steps.unwrap_or(5)),
-                |request| {
-                    if cancelled() {
-                        bail!("Search cancelled.");
-                    }
-                    oko::ranking::call_jev_observed(
-                        request,
-                        key.as_deref().expect("key checked above"),
-                        "deep",
-                        &mut provider_calls,
-                    )
-                },
-            )?;
-            investigate_ms = Some(investigation_started.elapsed().as_millis() as u64);
-            let results: Vec<_> = run
-                .results
-                .iter()
-                .map(|f| (f.chunk.clone(), f.score))
-                .collect();
-            let mut metadata = serde_json::to_value(&run)?;
-            metadata.as_object_mut().unwrap().remove("results");
-            metadata["providerCalls"] = serde_json::to_value(&provider_calls)?;
-            let retrieval = Some(json!({
-                "attempts": provider_calls.len(),
-                "jevCalls": provider_calls,
-            }));
-            (results, Some(metadata), retrieval)
-        } else if !questions.is_empty() {
-            let shortlist_started = Instant::now();
-            if cancelled() {
-                bail!("Search cancelled.");
-            }
-            // `mode: usages|enumerate` beside several questions: every question
-            // that names a definition gets its listing.
-            let force_listing = matches!(input.mode, Some(Mode::Usages | Mode::Enumerate));
-            let many = self.ask_many(
-                &questions,
-                &snapshot,
-                key.clone(),
-                input.intent.into(),
-                force_listing,
-                &flight,
-            )?;
-            shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-            lexical_fallback = many.lexical_fallback;
-            candidates = many.candidates;
-            runners_up = many.runners_up;
-            pins = many.pins;
-            floor = Some(many.floor);
-            tagged = many.tagged;
-            extra_notes.extend(many.notes);
-            pending.extend(many.sent);
-            listed_in_batch = many.listed;
-            // `symbols` beside several questions: those definitions too, whole.
-            if !symbols.is_empty() {
-                let named = oko::floor::pins_for_names(&symbols, snapshot.navigation(), corpus);
-                for pin in &named.pins {
-                    pins.push((pin.chunk.clone(), 1.0));
-                    tagged.push((pin.chunk.clone(), "symbols".to_owned()));
-                }
-                symbols_missing = missing_symbols(&symbols, &named.pins);
-            }
-            if input.mode == Some(Mode::Unused) {
-                let (summary, prefix) = self.unused_in(&directory, &snapshot, &symbols)?;
-                extra_notes.push(oko::usages::render_unused(&summary, &scope, &prefix));
-            }
-            (many.winners, None, Some(many.retrieval))
-        } else {
-            let shortlist_started = Instant::now();
-            let shortlist = if self.no_jev {
-                snapshot.rank(question)
-            } else {
-                snapshot.rank_with_intent(question, input.intent.into())
-            };
-            // A long prompt's constraint clauses crowd the shortlist: fuse in
-            // the ranking of its identifiers, literals and first sentence.
-            let (shortlist, focused) = match search::focused_terms(question) {
-                Some(terms) if !self.no_jev => {
-                    let focused_list = snapshot.rank_with_intent(&terms, input.intent.into());
-                    let before: std::collections::HashSet<(String, usize, usize)> = shortlist
-                        .iter()
-                        .map(|c| (c.path.clone(), c.start_line, c.end_line))
-                        .collect();
-                    let fused = search::fuse_rankings(shortlist, focused_list);
-                    let added = fused
-                        .iter()
-                        .filter(|c| !before.contains(&(c.path.clone(), c.start_line, c.end_line)))
-                        .count();
-                    (fused, Some(json!({"terms": terms, "added": added})))
-                }
-                _ => (shortlist, None),
-            };
-            focused_terms = focused;
-            // Definitions the question names lead the shortlist and are shown
-            // even if the ranker rejects them.
-            let found = if symbols.is_empty() {
-                oko::floor::floor(question, snapshot.navigation(), corpus)
-            } else {
-                oko::floor::pins_for_names(&symbols, snapshot.navigation(), corpus)
-            };
-            // `mode: unused` or "dead code in this package": the definitions
-            // nothing uses; no ranking.
-            let asks_unused = input.mode == Some(Mode::Unused)
-                || (input.mode.is_none()
-                    && !matches!(input.intent, Intent::Callers)
-                    && oko::usages::asks_for_unused(question));
-            // "unused definitions in src/" names the listing's own subject, so
-            // the code-words test of callers questions does not apply.
-            let unused_alone = input.mode == Some(Mode::Unused)
-                || (question.len() <= 120 && question.split_whitespace().count() <= 16);
-            // Uses are counted over the whole workspace; only the candidates
-            // come from the searched directory.
-            let (unused_summary, unused_prefix) = if asks_unused {
-                let (summary, prefix) = self.unused_in(&directory, &snapshot, &symbols)?;
-                (Some(summary), prefix)
-            } else {
-                (None, String::new())
-            };
-            if let Some(summary) = unused_summary.as_ref().filter(|_| !unused_alone) {
-                accompanying.push(oko::usages::render_unused(summary, &scope, &unused_prefix));
-            }
-            if let Some(summary) = unused_summary.filter(|_| unused_alone) {
-                direct = Some(oko::usages::render_unused(&summary, &scope, &unused_prefix));
-                floor = Some(found);
-                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-                (
-                    Vec::new(),
-                    None,
-                    Some(json!({"unused": {
-                        "checked": summary.checked,
-                        "private": summary.private.len(),
-                        "exported": summary.exported.len(),
-                        "testsOnly": summary.tests_only.len(),
-                    }})),
-                )
-            } else if input.mode == Some(Mode::Enumerate) {
-                let Some(pin) =
-                    found.pins.first().cloned().or_else(|| {
-                        oko::floor::named_target(question, snapshot.navigation(), corpus)
-                    })
-                else {
-                    bail!("mode requires a name the index defines, in symbols or the question.");
-                };
-                let summary = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
-                direct = Some(oko::usages::render_dependents(&summary));
-                floor = Some(found);
-                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-                (
-                    Vec::new(),
-                    None,
-                    Some(json!({"dependents": {
-                        "files": summary.files,
-                        "uses": summary.uses,
-                        "dataFiles": summary.data_files.len(),
-                        "testFiles": summary.test_files,
-                    }})),
-                )
-            } else if !symbols.is_empty() && input.mode.is_none() {
-                // Names alone: their definitions, whole, in the order asked.
-                if found.pins.is_empty() {
-                    bail!(
-                        "No definition named {} in the index.",
-                        symbols
-                            .iter()
-                            .map(|s| format!("`{s}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                }
-                // As pins, not winners: a pin keeps its own span (a long class
-                // becomes an outline); a winner would be focused by the words.
-                pins = found
-                    .pins
-                    .iter()
-                    .map(|pin| (pin.chunk.clone(), 1.0))
-                    .collect();
-                symbols_missing = missing_symbols(&symbols, &found.pins);
-                let retrieval = Some(json!({"symbols": symbols, "missing": symbols_missing}));
-                floor = Some(found);
-                shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-                (Vec::new(), None, retrieval)
-            } else {
-                let wants_callers = matches!(input.intent, Intent::Callers)
-                    || input.mode == Some(Mode::Usages)
-                    || (!matches!(input.intent, Intent::Explanation)
-                        && oko::usages::asks_for_callers(question));
-                let target = wants_callers
-                    .then(|| oko::floor::named_target(question, snapshot.navigation(), corpus))
-                    .flatten();
-                // "Definition and callers": the listing accompanies the ranked code.
-                let listing_only = matches!(input.intent, Intent::Callers)
-                    || input.mode == Some(Mode::Usages)
-                    || oko::usages::listing_can_stand_alone(question);
-                // Few files: every line. Many: one cite-able row per enclosing
-                // definition in every file, so no dependent is dropped.
-                let render = |pin: &oko::floor::Pin| {
-                    oko::usages::listing(
-                        pin,
-                        snapshot.navigation(),
-                        corpus,
-                        oko::usages::DEPENDENTS_BYTES,
-                    )
-                };
-                if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
-                    let listing = render(pin);
-                    slim_single = slims_for(question, &listing, pin);
-                    // Asked for ("who calls X"): whole, and recorded as sent.
-                    pending.push(format!("listing:{}", pin.qualified));
-                    accompanying.push(listing.text);
-                }
-                // An impact question ("what depends on Upload", "references to
-                // Upload") gets the dependents listing beside the ranked code.
-                // Or a central class named the Rails way ("use uploads").
-                let impact_target = if accompanying.is_empty()
-                    && target.is_none()
-                    && !matches!(input.intent, Intent::Explanation)
-                {
-                    if oko::usages::asks_for_dependents(question) {
-                        oko::floor::named_target(question, snapshot.navigation(), corpus)
-                    } else {
-                        oko::usages::central_class_used(question, snapshot.navigation(), corpus)
-                    }
-                } else {
-                    None
-                };
-                if let Some(pin) = impact_target
-                    && oko::usages::used_by(&pin, corpus).files.len()
-                        >= oko::usages::USED_BY_MIN_FILES
-                {
-                    let all = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
-                    let text = oko::usages::render_dependents_within(&all, SHARED_LISTING_BYTES);
-                    slim_single = !oko::usages::names_more_than(question, &pin.name);
-                    accompanying.push(self.once(
-                        &flight,
-                        format!("listing:{}", pin.qualified),
-                        text,
-                        listing_stub(&pin.qualified, all.files),
-                        &mut pending,
-                    ));
-                }
-                if let Some(pin) = target.as_ref().filter(|_| listing_only) {
-                    pending.push(format!("listing:{}", pin.qualified));
-                    let listing = render(pin);
-                    let retrieval = Some(listing.metrics);
-                    direct = Some(listing.text);
-                    floor = Some(found);
-                    shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-                    (Vec::new(), None, retrieval)
-                } else {
-                    let shortlist = oko::floor::pinned_shortlist(&found.pins, shortlist);
-                    pins = found
-                        .pins
-                        .iter()
-                        .map(|pin| (pin.chunk.clone(), 0.0))
-                        .collect();
-                    floor = Some(found);
-                    shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
-                    let (results, mut stats) = super::rank_code_with_stats(
-                        question,
-                        &shortlist,
-                        corpus,
-                        if self.no_jev {
-                            super::Reranker::Lexical
-                        } else {
-                            super::Reranker::Jev {
-                                key,
-                                patience: Some(jev_patience()),
-                            }
-                        },
-                        input.intent.into(),
-                        || {
-                            if cancelled() {
-                                bail!("Search cancelled.");
-                            }
-                            Ok(super::further_candidates(
-                                &snapshot,
-                                &shortlist,
-                                question,
-                                input.intent.into(),
-                            ))
-                        },
-                    )?;
-                    lexical_fallback = stats.lexical_fallback;
-                    candidates = stats.candidates.clone();
-                    runners_up = std::mem::take(&mut stats.runners_up)
-                        .into_iter()
-                        .map(super::CodeResult::into_scored_chunk)
-                        .collect();
-                    let retrieval = Some(serde_json::to_value(stats)?);
-                    let winners = results
-                        .into_iter()
-                        .map(super::CodeResult::into_scored_chunk)
-                        .collect();
-                    (winners, None, retrieval)
-                }
-            }
+        let ask = Ask {
+            input: &input,
+            question,
+            questions: &questions,
+            symbols: &symbols,
+            scope: &scope,
+            directory: &directory,
+            snapshot: &snapshot,
+            key,
+            flight: &flight,
+            cancelled: &cancelled,
         };
+        let mut found = match Route::of(&input, &questions, &symbols, question) {
+            Route::Deep => self.deep(&ask)?,
+            Route::Batch => self.batch(&ask)?,
+            route => self.single(&ask, route)?,
+        };
+        // Notes from reading the request come before the route's own.
+        found.notes.splice(0..0, early_notes);
         if cancelled() {
             bail!("Search cancelled.");
         }
         let context_started = Instant::now();
-        let (winners, mut investigation, retrieval) = winners;
-        // Source evidence has priority over repeated question/action text.
-        let mut trace_truncated = false;
-        if let Some(trace) = investigation
-            .as_mut()
-            .and_then(|v| v["trace"].as_array_mut())
-        {
-            for step in trace {
-                if let Some(action) = step["action"].as_str() {
-                    let short = prefix(action, 256);
-                    trace_truncated |= short.len() < action.len();
-                    step["action"] = json!(short);
-                }
-            }
-        }
-        if let Some(metadata) = &mut investigation {
-            metadata["traceTruncated"] = json!(trace_truncated);
-        }
-        // What the agent cannot infer from its own request and the excerpts.
-        // First, what was searched: how much of the repository the index holds.
-        // Shown on a session's first answer, and again only when it changed or
-        // names a skipped file the question mentions: the same line on every
-        // answer is bytes the agent already has.
-        let coverage = coverage_line(&snapshot, &workspace.timings, question);
-        let mut notes = if self.coverage_is_new(&coverage, &mut pending) {
-            coverage + "\n"
-        } else {
-            String::new()
-        };
-        if let Ok(scope) = directory.strip_prefix(&self.root)
-            && !scope.as_os_str().is_empty()
-        {
-            notes.push_str(&format!("Paths are relative to {}/.\n", scope.display()));
-        }
-        if let Some(run) = &investigation {
-            let steps = run["steps"].as_u64().unwrap_or(0);
-            notes.push_str(&format!(
-                "Deep search stopped after {steps} step{}: {}.\n",
-                if steps == 1 { "" } else { "s" },
-                run["stopReason"].as_str().unwrap_or("unknown")
-            ));
-        }
-        if lexical_fallback.is_some() {
-            notes.push_str(
-                "The relevance ranker did not respond, so these are keyword matches in keyword order; treat them as leads and verify them.\n",
-            );
-        }
-        // A batch collects each question's floor notes; one copy of each.
-        let mut shown_notes = std::collections::HashSet::new();
-        for note in floor.iter().flat_map(|found| found.notes.iter()) {
-            if shown_notes.insert(note.as_str()) {
-                notes.push_str(note);
-                notes.push('\n');
-            }
-        }
-        // "Tests for X": paired by file name and by mention, before the ranked code.
-        if oko::ranking::asks_for_tests(question)
-            && !input.deep
-            && let Some(pin) = oko::floor::named_target(question, snapshot.navigation(), corpus)
-        {
-            let tests = oko::usages::tests_for(&pin, snapshot.navigation(), corpus);
-            notes.push_str(&oko::usages::render_tests(&pin, &tests));
-        }
-        for name in &symbols_missing {
-            notes.push_str(&format!("`{name}`: no definition in the index.\n"));
-        }
-        for note in &extra_notes {
-            notes.push_str(note);
-            notes.push('\n');
-        }
-        // A widely used definition gets its dependents summarised in one line,
-        // so "what depends on X" needs no second question.
-        if direct.is_none()
-            && accompanying.is_empty()
-            && let Some(pin) = floor.as_ref().and_then(|found| found.pins.first())
-            && !listed_in_batch.contains(&pin.qualified)
-            && let Some(line) = oko::usages::used_by_line(pin, corpus)
-        {
-            // Asked for by name: the line is part of the answer, not a repeat.
-            let line = if input.mode.is_some() || !symbols.is_empty() {
-                pending.push(format!("usedby:{}", pin.qualified));
-                line
-            } else {
-                self.once(
-                    &flight,
-                    format!("usedby:{}", pin.qualified),
-                    line,
-                    String::new(),
-                    &mut pending,
-                )
-            };
-            notes.push_str(&line);
-        }
-        // A blank line between blocks, not above the first.
-        for text in accompanying.iter().chain(direct.iter()) {
-            if !notes.is_empty() {
-                notes.push('\n');
-            }
-            notes.push_str(text);
-        }
+        let investigation = found.investigation.take().map(shorten_trace);
+        let notes = self.notes(&ask, &mut found, &workspace.timings, investigation.as_ref());
         let shown_question = prefix(question, 512);
         let metadata = json!({"question":shown_question, "questionTruncated":shown_question.len() < question.len(), "directory":directory,
-            "ranking":if self.no_jev {"lexical"} else if lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
-            "investigation":investigation, "retrieval":retrieval, "floor":floor, "focused":focused_terms,
+            "ranking":if self.no_jev {"lexical"} else if found.lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
+            "investigation":investigation, "retrieval":found.retrieval, "floor":found.floor, "focused":found.focused,
             "coverage":{"files":snapshot.coverage(), "parsedFiles":snapshot.navigation().coverage().parsed_files,
                 "partialFiles":snapshot.navigation().coverage().partial_files, "definitions":snapshot.navigation().coverage().definitions},
-            "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":scan_ms,
-                "shortlistMs":shortlist_ms,"investigateMs":investigate_ms,
+            "timings":{"preparationMs":preparation_ms,"cacheWaitMs":cache_wait_ms,"scanMs":workspace.timings.scan_ms,
+                "shortlistMs":found.shortlist_ms,"investigateMs":found.investigate_ms,
                 "cache":workspace.timings}});
-        let mut max_results = (oko::context::RESULT_LIMIT
-            + EXTRA_QUESTION_RESULTS * questions.len().saturating_sub(1))
-        .min(MAX_MULTI_RESULTS);
-        let mut winners = winners;
-        if slim_single {
+        let (max_results, limit) = budget(questions.len(), found.slim_single, found.pins.len());
+        if found.slim_single {
             // The definition the question names stays; ranked extras go.
-            winners.truncate(1);
-            max_results = 1 + pins.len();
+            found.winners.truncate(1);
         }
         let mut packet = oko::context::build_packet_for_questions(
             corpus,
-            &winners,
-            &pins,
-            &runners_up,
+            &found.winners,
+            &found.pins,
+            &found.runners_up,
             question,
             snapshot.navigation(),
             max_results,
         );
-        if !tagged.is_empty() {
+        if !found.tagged.is_empty() {
             packet.tag_results(|excerpt| {
-                tagged
+                found
+                    .tagged
                     .iter()
                     .filter(|(chunk, _)| {
                         chunk.path == excerpt.path
@@ -974,25 +568,407 @@ impl OkoServer {
                     .collect::<Vec<_>>()
             });
         }
-        let limit = (MAX_MCP_RESULT_BYTES
-            + EXTRA_QUESTION_BYTES * questions.len().saturating_sub(1))
-        .min(MAX_MULTI_RESULT_BYTES);
         // No stubs for a search that overlapped another at any point.
-        let explicit =
-            direct.is_some() || input.mode.is_some() || !symbols.is_empty() || flight.overlapping();
+        let explicit = found.direct.is_some()
+            || input.mode.is_some()
+            || !symbols.is_empty()
+            || flight.overlapping();
         packet_result(
             metadata,
             packet,
             &notes,
-            &candidates,
-            direct.is_some(),
+            &found.candidates,
+            found.direct.is_some(),
             limit,
             started,
             context_started,
             &self.memory,
             explicit,
-            pending,
+            found.pending,
         )
+    }
+
+    /// `deep`: Jev chooses further searches and reads.
+    fn deep(&self, ask: &Ask<'_>) -> Result<Found> {
+        let investigation_started = Instant::now();
+        let mut provider_calls = Vec::new();
+        let run = oko::investigate::investigate_snapshot_with(
+            ask.question,
+            ask.snapshot,
+            ask.input.intent.into(),
+            Some(ask.input.max_steps.unwrap_or(5)),
+            |request| {
+                if (ask.cancelled)() {
+                    bail!("Search cancelled.");
+                }
+                oko::ranking::call_jev_observed(
+                    request,
+                    ask.key.as_deref().expect("key checked above"),
+                    "deep",
+                    &mut provider_calls,
+                )
+            },
+        )?;
+        let mut found = Found {
+            investigate_ms: Some(investigation_started.elapsed().as_millis() as u64),
+            winners: run
+                .results
+                .iter()
+                .map(|f| (f.chunk.clone(), f.score))
+                .collect(),
+            ..Found::default()
+        };
+        let mut metadata = serde_json::to_value(&run)?;
+        metadata.as_object_mut().unwrap().remove("results");
+        metadata["providerCalls"] = serde_json::to_value(&provider_calls)?;
+        found.retrieval = Some(json!({
+            "attempts": provider_calls.len(),
+            "jevCalls": provider_calls,
+        }));
+        found.investigation = Some(metadata);
+        Ok(found)
+    }
+
+    /// `questions`: each ranked on its own thread, merged into one answer.
+    fn batch(&self, ask: &Ask<'_>) -> Result<Found> {
+        let shortlist_started = Instant::now();
+        if (ask.cancelled)() {
+            bail!("Search cancelled.");
+        }
+        // `mode: usages|enumerate` beside several questions: every question
+        // that names a definition gets its listing.
+        let force_listing = matches!(ask.input.mode, Some(Mode::Usages | Mode::Enumerate));
+        let many = self.ask_many(
+            ask.questions,
+            ask.snapshot,
+            ask.key.clone(),
+            ask.input.intent.into(),
+            force_listing,
+            ask.flight,
+        )?;
+        let mut found = Found {
+            shortlist_ms: Some(shortlist_started.elapsed().as_millis() as u64),
+            lexical_fallback: many.lexical_fallback,
+            candidates: many.candidates,
+            runners_up: many.runners_up,
+            pins: many.pins,
+            floor: Some(many.floor),
+            tagged: many.tagged,
+            notes: many.notes,
+            pending: many.sent,
+            listed_in_batch: many.listed,
+            winners: many.winners,
+            retrieval: Some(many.retrieval),
+            ..Found::default()
+        };
+        // `symbols` beside several questions: those definitions too, whole.
+        if !ask.symbols.is_empty() {
+            let named =
+                oko::floor::pins_for_names(ask.symbols, ask.snapshot.navigation(), ask.corpus());
+            for pin in &named.pins {
+                found.pins.push((pin.chunk.clone(), 1.0));
+                found.tagged.push((pin.chunk.clone(), "symbols".to_owned()));
+            }
+            found.symbols_missing = missing_symbols(ask.symbols, &named.pins);
+        }
+        if ask.input.mode == Some(Mode::Unused) {
+            let (summary, prefix) = self.unused_in(ask.directory, ask.snapshot, ask.symbols)?;
+            found
+                .notes
+                .push(oko::usages::render_unused(&summary, ask.scope, &prefix));
+        }
+        Ok(found)
+    }
+
+    /// One question: its shortlist and the definitions it names, then the
+    /// route's answer. An unused-definitions listing that does not answer the
+    /// question alone accompanies whichever route follows.
+    fn single(&self, ask: &Ask<'_>, route: Route) -> Result<Found> {
+        let shortlist_started = Instant::now();
+        let (shortlist, focused) = self.shortlist(ask);
+        let mut found = Found {
+            focused,
+            ..Found::default()
+        };
+        // Definitions the question names lead the shortlist and are shown
+        // even if the ranker rejects them.
+        let named = if ask.symbols.is_empty() {
+            oko::floor::floor(ask.question, ask.snapshot.navigation(), ask.corpus())
+        } else {
+            oko::floor::pins_for_names(ask.symbols, ask.snapshot.navigation(), ask.corpus())
+        };
+        if asks_unused(ask.input, ask.question) {
+            // Uses are counted over the whole workspace; only the candidates
+            // come from the searched directory.
+            let (summary, prefix) = self.unused_in(ask.directory, ask.snapshot, ask.symbols)?;
+            let text = oko::usages::render_unused(&summary, ask.scope, &prefix);
+            if route == Route::Unused {
+                found.direct = Some(text);
+                found.retrieval = Some(json!({"unused": {
+                    "checked": summary.checked,
+                    "private": summary.private.len(),
+                    "exported": summary.exported.len(),
+                    "testsOnly": summary.tests_only.len(),
+                }}));
+                found.floor = Some(named);
+                found.shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+                return Ok(found);
+            }
+            found.accompanying.push(text);
+        }
+        match route {
+            Route::Enumerate => enumerate(ask, named, &mut found)?,
+            Route::Named => named_definitions(ask, named, &mut found)?,
+            // Records its own shortlist time: before ranking, not after it.
+            _ => {
+                return self.listing_or_ranked(ask, shortlist, named, found, shortlist_started);
+            }
+        }
+        found.shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+        Ok(found)
+    }
+
+    /// The keyword shortlist. A long prompt's constraint clauses crowd it, so
+    /// the ranking of its identifiers, literals and first sentence is fused in.
+    fn shortlist(&self, ask: &Ask<'_>) -> (Vec<search::Chunk>, Option<Value>) {
+        let intent = ask.input.intent.into();
+        let shortlist = if self.no_jev {
+            ask.snapshot.rank(ask.question)
+        } else {
+            ask.snapshot.rank_with_intent(ask.question, intent)
+        };
+        match search::focused_terms(ask.question) {
+            Some(terms) if !self.no_jev => {
+                let focused_list = ask.snapshot.rank_with_intent(&terms, intent);
+                let before: std::collections::HashSet<(String, usize, usize)> = shortlist
+                    .iter()
+                    .map(|c| (c.path.clone(), c.start_line, c.end_line))
+                    .collect();
+                let fused = search::fuse_rankings(shortlist, focused_list);
+                let added = fused
+                    .iter()
+                    .filter(|c| !before.contains(&(c.path.clone(), c.start_line, c.end_line)))
+                    .count();
+                (fused, Some(json!({"terms": terms, "added": added})))
+            }
+            _ => (shortlist, None),
+        }
+    }
+
+    /// A question that asks who calls or uses a name gets its listing, alone
+    /// or beside the ranked code; an impact question gets the dependents
+    /// listing beside it. Everything else is ranked.
+    fn listing_or_ranked(
+        &self,
+        ask: &Ask<'_>,
+        shortlist: Vec<search::Chunk>,
+        named: oko::floor::Floor,
+        mut found: Found,
+        shortlist_started: Instant,
+    ) -> Result<Found> {
+        let (question, input, corpus) = (ask.question, ask.input, ask.corpus());
+        let navigation = ask.snapshot.navigation();
+        let wants_callers = matches!(input.intent, Intent::Callers)
+            || input.mode == Some(Mode::Usages)
+            || (!matches!(input.intent, Intent::Explanation)
+                && oko::usages::asks_for_callers(question));
+        let target = wants_callers
+            .then(|| oko::floor::named_target(question, navigation, corpus))
+            .flatten();
+        // "Definition and callers": the listing accompanies the ranked code.
+        let listing_only = matches!(input.intent, Intent::Callers)
+            || input.mode == Some(Mode::Usages)
+            || oko::usages::listing_can_stand_alone(question);
+        // Few files: every line. Many: one cite-able row per enclosing
+        // definition in every file, so no dependent is dropped.
+        let render = |pin: &oko::floor::Pin| {
+            oko::usages::listing(pin, navigation, corpus, oko::usages::DEPENDENTS_BYTES)
+        };
+        if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
+            let listing = render(pin);
+            found.slim_single = slims_for(question, &listing, pin);
+            // Asked for ("who calls X"): whole, and recorded as sent.
+            found.pending.push(format!("listing:{}", pin.qualified));
+            found.accompanying.push(listing.text);
+        }
+        // An impact question ("what depends on Upload", "references to
+        // Upload") gets the dependents listing beside the ranked code.
+        // Or a central class named the Rails way ("use uploads").
+        let impact_target = if found.accompanying.is_empty()
+            && target.is_none()
+            && !matches!(input.intent, Intent::Explanation)
+        {
+            if oko::usages::asks_for_dependents(question) {
+                oko::floor::named_target(question, navigation, corpus)
+            } else {
+                oko::usages::central_class_used(question, navigation, corpus)
+            }
+        } else {
+            None
+        };
+        if let Some(pin) = impact_target
+            && oko::usages::used_by(&pin, corpus).files.len() >= oko::usages::USED_BY_MIN_FILES
+        {
+            let all = oko::usages::dependents(&pin, navigation, corpus);
+            let text = oko::usages::render_dependents_within(&all, SHARED_LISTING_BYTES);
+            found.slim_single = !oko::usages::names_more_than(question, &pin.name);
+            let text = self.once(
+                ask.flight,
+                format!("listing:{}", pin.qualified),
+                text,
+                listing_stub(&pin.qualified, all.files),
+                &mut found.pending,
+            );
+            found.accompanying.push(text);
+        }
+        if let Some(pin) = target.as_ref().filter(|_| listing_only) {
+            found.pending.push(format!("listing:{}", pin.qualified));
+            let listing = render(pin);
+            found.retrieval = Some(listing.metrics);
+            found.direct = Some(listing.text);
+            found.floor = Some(named);
+            found.shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+            return Ok(found);
+        }
+        let shortlist = oko::floor::pinned_shortlist(&named.pins, shortlist);
+        found.pins = named
+            .pins
+            .iter()
+            .map(|pin| (pin.chunk.clone(), 0.0))
+            .collect();
+        found.floor = Some(named);
+        found.shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
+        let (results, mut stats) = super::rank_code_with_stats(
+            question,
+            &shortlist,
+            corpus,
+            if self.no_jev {
+                super::Reranker::Lexical
+            } else {
+                super::Reranker::Jev {
+                    key: ask.key.clone(),
+                    patience: Some(jev_patience()),
+                }
+            },
+            input.intent.into(),
+            || {
+                if (ask.cancelled)() {
+                    bail!("Search cancelled.");
+                }
+                Ok(super::further_candidates(
+                    ask.snapshot,
+                    &shortlist,
+                    question,
+                    input.intent.into(),
+                ))
+            },
+        )?;
+        found.lexical_fallback = stats.lexical_fallback;
+        found.candidates = stats.candidates.clone();
+        found.runners_up = std::mem::take(&mut stats.runners_up)
+            .into_iter()
+            .map(super::CodeResult::into_scored_chunk)
+            .collect();
+        found.retrieval = Some(serde_json::to_value(stats)?);
+        found.winners = results
+            .into_iter()
+            .map(super::CodeResult::into_scored_chunk)
+            .collect();
+        Ok(found)
+    }
+
+    /// What the agent cannot infer from its own request and the excerpts,
+    /// shown above them.
+    fn notes(
+        &self,
+        ask: &Ask<'_>,
+        found: &mut Found,
+        timings: &oko::search_cache::CacheTimings,
+        investigation: Option<&Value>,
+    ) -> String {
+        let (question, corpus) = (ask.question, ask.corpus());
+        // First, what was searched: how much of the repository the index holds.
+        // Shown on a session's first answer, and again only when it changed or
+        // names a skipped file the question mentions: the same line on every
+        // answer is bytes the agent already has.
+        let coverage = coverage_line(ask.snapshot, timings, question);
+        let mut notes = if self.coverage_is_new(&coverage, &mut found.pending) {
+            coverage + "\n"
+        } else {
+            String::new()
+        };
+        if let Ok(scope) = ask.directory.strip_prefix(&self.root)
+            && !scope.as_os_str().is_empty()
+        {
+            notes.push_str(&format!("Paths are relative to {}/.\n", scope.display()));
+        }
+        if let Some(run) = investigation {
+            let steps = run["steps"].as_u64().unwrap_or(0);
+            notes.push_str(&format!(
+                "Deep search stopped after {steps} step{}: {}.\n",
+                if steps == 1 { "" } else { "s" },
+                run["stopReason"].as_str().unwrap_or("unknown")
+            ));
+        }
+        if found.lexical_fallback.is_some() {
+            notes.push_str(
+                "The relevance ranker did not respond, so these are keyword matches in keyword order; treat them as leads and verify them.\n",
+            );
+        }
+        // A batch collects each question's floor notes; one copy of each.
+        let mut shown_notes = std::collections::HashSet::new();
+        for note in found.floor.iter().flat_map(|floor| floor.notes.iter()) {
+            if shown_notes.insert(note.as_str()) {
+                notes.push_str(note);
+                notes.push('\n');
+            }
+        }
+        // "Tests for X": paired by file name and by mention, before the ranked code.
+        if oko::ranking::asks_for_tests(question)
+            && !ask.input.deep
+            && let Some(pin) = oko::floor::named_target(question, ask.snapshot.navigation(), corpus)
+        {
+            let tests = oko::usages::tests_for(&pin, ask.snapshot.navigation(), corpus);
+            notes.push_str(&oko::usages::render_tests(&pin, &tests));
+        }
+        for name in &found.symbols_missing {
+            notes.push_str(&format!("`{name}`: no definition in the index.\n"));
+        }
+        for note in &found.notes {
+            notes.push_str(note);
+            notes.push('\n');
+        }
+        // A widely used definition gets its dependents summarised in one line,
+        // so "what depends on X" needs no second question.
+        if found.direct.is_none()
+            && found.accompanying.is_empty()
+            && let Some(pin) = found.floor.as_ref().and_then(|floor| floor.pins.first())
+            && !found.listed_in_batch.contains(&pin.qualified)
+            && let Some(line) = oko::usages::used_by_line(pin, corpus)
+        {
+            // Asked for by name: the line is part of the answer, not a repeat.
+            let line = if ask.input.mode.is_some() || !ask.symbols.is_empty() {
+                found.pending.push(format!("usedby:{}", pin.qualified));
+                line
+            } else {
+                self.once(
+                    ask.flight,
+                    format!("usedby:{}", pin.qualified),
+                    line,
+                    String::new(),
+                    &mut found.pending,
+                )
+            };
+            notes.push_str(&line);
+        }
+        // A blank line between blocks, not above the first.
+        for text in found.accompanying.iter().chain(found.direct.iter()) {
+            if !notes.is_empty() {
+                notes.push('\n');
+            }
+            notes.push_str(text);
+        }
+        notes
     }
 
     /// Several independent questions in one call: each gets its own shortlist,
@@ -1256,6 +1232,183 @@ impl OkoServer {
         });
         Ok(many)
     }
+}
+
+/// One search's request, resolved: what every route reads.
+struct Ask<'a> {
+    input: &'a SearchInput,
+    /// The question that leads: `question`, else the first of `questions`,
+    /// else the names in `symbols`.
+    question: &'a str,
+    questions: &'a [String],
+    symbols: &'a [String],
+    /// The searched directory as the answer names it ("the workspace").
+    scope: &'a str,
+    directory: &'a std::path::Path,
+    snapshot: &'a Arc<oko::search_cache::WorkspaceSnapshot>,
+    key: Option<String>,
+    flight: &'a Flight,
+    cancelled: &'a dyn Fn() -> bool,
+}
+impl Ask<'_> {
+    fn corpus(&self) -> &[search::Chunk] {
+        self.snapshot.chunks()
+    }
+}
+
+/// How a search is answered, decided from the request alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Route {
+    /// `deep`: Jev chooses further searches and reads.
+    Deep,
+    /// `questions`: several questions ranked in parallel.
+    Batch,
+    /// Unused definitions answer the question by themselves.
+    Unused,
+    /// `mode: enumerate`: every file using a name.
+    Enumerate,
+    /// `symbols` alone: the named definitions, whole, unranked.
+    Named,
+    /// A callers listing, an impact listing, ranked code, or a mix.
+    Ranked,
+}
+impl Route {
+    fn of(input: &SearchInput, questions: &[String], symbols: &[String], question: &str) -> Self {
+        if input.deep {
+            Route::Deep
+        } else if !questions.is_empty() {
+            Route::Batch
+        } else if asks_unused(input, question)
+            // "unused definitions in src/" names the listing's own subject, so
+            // the code-words test of callers questions does not apply.
+            && (input.mode == Some(Mode::Unused)
+                || (question.len() <= 120 && question.split_whitespace().count() <= 16))
+        {
+            Route::Unused
+        } else if input.mode == Some(Mode::Enumerate) {
+            Route::Enumerate
+        } else if !symbols.is_empty() && input.mode.is_none() {
+            Route::Named
+        } else {
+            Route::Ranked
+        }
+    }
+}
+
+/// `mode: unused`, or "dead code in this package" in words.
+fn asks_unused(input: &SearchInput, question: &str) -> bool {
+    input.mode == Some(Mode::Unused)
+        || (input.mode.is_none()
+            && !matches!(input.intent, Intent::Callers)
+            && oko::usages::asks_for_unused(question))
+}
+
+/// What a route found, for the notes and the packet.
+#[derive(Default)]
+struct Found {
+    winners: Vec<(search::Chunk, f64)>,
+    /// Definitions shown whole beside the winners.
+    pins: Vec<(search::Chunk, f64)>,
+    runners_up: Vec<(search::Chunk, f64)>,
+    candidates: Vec<super::CandidateScore>,
+    /// Several questions: which question each chunk answers.
+    tagged: Vec<(search::Chunk, String)>,
+    floor: Option<oko::floor::Floor>,
+    /// A listing that answers the question by itself; no ranking ran.
+    direct: Option<String>,
+    /// Listings shown beside the ranked code, for mixed questions.
+    accompanying: Vec<String>,
+    /// A single question answered beside a many-file listing: the listing
+    /// rows carry the methods and lines, so one excerpt is enough.
+    slim_single: bool,
+    symbols_missing: Vec<String>,
+    notes: Vec<String>,
+    /// Definitions a batch question already lists in full or as a stub.
+    listed_in_batch: Vec<String>,
+    /// Listings and lines shown in this answer, recorded as sent only when
+    /// the answer is.
+    pending: Vec<String>,
+    /// The focused query fused into a long prompt's shortlist, for the metrics.
+    focused: Option<Value>,
+    lexical_fallback: Option<&'static str>,
+    investigation: Option<Value>,
+    retrieval: Option<Value>,
+    shortlist_ms: Option<u64>,
+    investigate_ms: Option<u64>,
+}
+
+/// `mode: enumerate`: every file using the named definition; no ranking.
+fn enumerate(ask: &Ask<'_>, named: oko::floor::Floor, found: &mut Found) -> Result<()> {
+    let Some(pin) = named.pins.first().cloned().or_else(|| {
+        oko::floor::named_target(ask.question, ask.snapshot.navigation(), ask.corpus())
+    }) else {
+        bail!("mode requires a name the index defines, in symbols or the question.");
+    };
+    let summary = oko::usages::dependents(&pin, ask.snapshot.navigation(), ask.corpus());
+    found.direct = Some(oko::usages::render_dependents(&summary));
+    found.retrieval = Some(json!({"dependents": {
+        "files": summary.files,
+        "uses": summary.uses,
+        "dataFiles": summary.data_files.len(),
+        "testFiles": summary.test_files,
+    }}));
+    found.floor = Some(named);
+    Ok(())
+}
+
+/// `symbols` alone: their definitions, whole, in the order asked.
+fn named_definitions(ask: &Ask<'_>, named: oko::floor::Floor, found: &mut Found) -> Result<()> {
+    if named.pins.is_empty() {
+        bail!(
+            "No definition named {} in the index.",
+            ask.symbols
+                .iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    // As pins, not winners: a pin keeps its own span (a long class becomes
+    // an outline); a winner would be focused by the words.
+    found.pins = named
+        .pins
+        .iter()
+        .map(|pin| (pin.chunk.clone(), 1.0))
+        .collect();
+    found.symbols_missing = missing_symbols(ask.symbols, &named.pins);
+    found.retrieval = Some(json!({"symbols": ask.symbols, "missing": found.symbols_missing}));
+    found.floor = Some(named);
+    Ok(())
+}
+
+/// Excerpts and response bytes one call may use: more for each further
+/// question; one excerpt plus the pins beside a many-file listing.
+fn budget(questions: usize, slim_single: bool, pins: usize) -> (usize, usize) {
+    let further = questions.saturating_sub(1);
+    let max_results = if slim_single {
+        1 + pins
+    } else {
+        (oko::context::RESULT_LIMIT + EXTRA_QUESTION_RESULTS * further).min(MAX_MULTI_RESULTS)
+    };
+    let limit = (MAX_MCP_RESULT_BYTES + EXTRA_QUESTION_BYTES * further).min(MAX_MULTI_RESULT_BYTES);
+    (max_results, limit)
+}
+
+/// Source evidence has priority over repeated question and action text in a
+/// deep search's trace.
+fn shorten_trace(mut investigation: Value) -> Value {
+    let mut truncated = false;
+    if let Some(trace) = investigation["trace"].as_array_mut() {
+        for step in trace {
+            if let Some(action) = step["action"].as_str() {
+                let short = prefix(action, 256);
+                truncated |= short.len() < action.len();
+                step["action"] = json!(short);
+            }
+        }
+    }
+    investigation["traceTruncated"] = json!(truncated);
+    investigation
 }
 
 /// The listing one question of a batch gets: who uses its target.
