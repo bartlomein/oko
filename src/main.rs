@@ -152,6 +152,32 @@ pub(crate) struct CodeResult {
     pub text: String,
 }
 
+impl CodeResult {
+    /// A copy of the result as a chunk.
+    pub(crate) fn to_chunk(&self) -> oko::search::Chunk {
+        oko::search::Chunk {
+            path: self.path.clone(),
+            start_line: self.start_line,
+            end_line: self.end_line,
+            text: self.text.clone(),
+            lexical_score: 0.0,
+        }
+    }
+    /// The result as a chunk with its score, for building packets.
+    pub(crate) fn into_scored_chunk(self) -> (oko::search::Chunk, f64) {
+        (
+            oko::search::Chunk {
+                path: self.path,
+                start_line: self.start_line,
+                end_line: self.end_line,
+                text: self.text,
+                lexical_score: 0.0,
+            },
+            self.score,
+        )
+    }
+}
+
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodeRankingStats {

@@ -749,7 +749,9 @@ const CALLERS_WORDS: &[&str] = &[
     "non",
 ];
 
-fn leaf_of(identifier: &str) -> &str {
+/// The last segment of a qualified name: `Upload` in `Discourse.Upload`,
+/// `url` in `Upload#url` or `Upload::url`.
+pub fn leaf_of(identifier: &str) -> &str {
     identifier
         .rsplit(['.', '#', ':'])
         .next()

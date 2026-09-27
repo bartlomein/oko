@@ -588,14 +588,7 @@ impl OkoServer {
                     pins.push((pin.chunk.clone(), 1.0));
                     tagged.push((pin.chunk.clone(), "symbols".to_owned()));
                 }
-                symbols_missing = symbols
-                    .iter()
-                    .filter(|name| {
-                        let leaf = name.rsplit(['.', ':', '#']).next().unwrap_or(name);
-                        !named.pins.iter().any(|pin| pin.name == leaf)
-                    })
-                    .cloned()
-                    .collect();
+                symbols_missing = missing_symbols(&symbols, &named.pins);
             }
             if input.mode == Some(Mode::Unused) {
                 let (summary, prefix) = self.unused_in(&directory, &snapshot, &symbols)?;
@@ -711,15 +704,8 @@ impl OkoServer {
                     .iter()
                     .map(|pin| (pin.chunk.clone(), 1.0))
                     .collect();
-                let missing: Vec<&String> = symbols
-                    .iter()
-                    .filter(|name| {
-                        let leaf = name.rsplit(['.', ':', '#']).next().unwrap_or(name);
-                        !found.pins.iter().any(|pin| pin.name == leaf)
-                    })
-                    .collect();
-                let retrieval = Some(json!({"symbols": symbols, "missing": missing}));
-                symbols_missing = missing.into_iter().cloned().collect();
+                symbols_missing = missing_symbols(&symbols, &found.pins);
+                let retrieval = Some(json!({"symbols": symbols, "missing": symbols_missing}));
                 floor = Some(found);
                 shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
                 (Vec::new(), None, retrieval)
@@ -828,34 +814,12 @@ impl OkoServer {
                     candidates = stats.candidates.clone();
                     runners_up = std::mem::take(&mut stats.runners_up)
                         .into_iter()
-                        .map(|r| {
-                            (
-                                search::Chunk {
-                                    path: r.path,
-                                    start_line: r.start_line,
-                                    end_line: r.end_line,
-                                    text: r.text,
-                                    lexical_score: 0.0,
-                                },
-                                r.score,
-                            )
-                        })
+                        .map(super::CodeResult::into_scored_chunk)
                         .collect();
                     let retrieval = Some(serde_json::to_value(stats)?);
                     let winners = results
                         .into_iter()
-                        .map(|r| {
-                            (
-                                search::Chunk {
-                                    path: r.path,
-                                    start_line: r.start_line,
-                                    end_line: r.end_line,
-                                    text: r.text,
-                                    lexical_score: 0.0,
-                                },
-                                r.score,
-                            )
-                        })
+                        .map(super::CodeResult::into_scored_chunk)
                         .collect();
                     (winners, None, retrieval)
                 }
@@ -1099,13 +1063,6 @@ impl OkoServer {
         });
         let mut many = Many::default();
         let mut per_question = Vec::new();
-        let chunk_of = |r: &super::CodeResult| search::Chunk {
-            path: r.path.clone(),
-            start_line: r.start_line,
-            end_line: r.end_line,
-            text: r.text.clone(),
-            lexical_score: 0.0,
-        };
         let outcomes: Vec<Outcome> = outcomes.into_iter().collect::<Result<_>>()?;
         // A question that asks who uses a name, or what depends on it, is
         // answered by a listing. Decided first: a question whose listing spans
@@ -1175,7 +1132,7 @@ impl OkoServer {
                     .results
                     .iter()
                     .take(if slim { 1 } else { usize::MAX })
-                    .map(|r| (chunk_of(r), r.score, tag.clone()))
+                    .map(|r| (r.to_chunk(), r.score, tag.clone()))
                     .collect(),
             );
             tagged_pins.push(if slim {
@@ -1272,7 +1229,7 @@ impl OkoServer {
                 many.runners_up = outcome
                     .runners_up
                     .iter()
-                    .map(|r| (chunk_of(r), r.score))
+                    .map(|r| (r.to_chunk(), r.score))
                     .collect();
                 many.floor = outcome.found;
             } else {
@@ -1566,6 +1523,18 @@ fn packet_result(
             .max(128);
         packet.fit_to_budget(packet_budget);
     }
+}
+
+/// Names asked for in `symbols` that no pinned definition answers.
+fn missing_symbols(symbols: &[String], pins: &[oko::floor::Pin]) -> Vec<String> {
+    symbols
+        .iter()
+        .filter(|name| {
+            let leaf = oko::floor::leaf_of(name);
+            !pins.iter().any(|pin| pin.name == leaf)
+        })
+        .cloned()
+        .collect()
 }
 
 /// A dependents listing already sent in this session.

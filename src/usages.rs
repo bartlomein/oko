@@ -155,7 +155,7 @@ pub fn central_class_used(
 /// reference" asks about the column, and the Upload listing is an extra).
 pub fn names_more_than(question: &str, target: &str) -> bool {
     crate::floor::identifiers(question).iter().any(|name| {
-        let leaf = name.rsplit(['.', ':', '#']).next().unwrap_or(name);
+        let leaf = crate::floor::leaf_of(name);
         leaf != target
     })
 }
@@ -1774,10 +1774,7 @@ pub fn unused(
     only: &[String],
     prefix: &str,
 ) -> Unused {
-    let only: HashSet<&str> = only
-        .iter()
-        .map(|n| n.rsplit(['.', ':', '#']).next().unwrap_or(n))
-        .collect();
+    let only: HashSet<&str> = only.iter().map(|n| crate::floor::leaf_of(n)).collect();
     // Candidates: definitions in non-test code with a name worth checking.
     let candidates: Vec<(&str, &crate::navigation::Definition)> = navigation
         .all_definitions()
