@@ -14,10 +14,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
 
 /// At most this many definitions are pinned per search.
-pub const MAX_PINS: usize = 3;
+const MAX_PINS: usize = 3;
 /// A leaf name defined this many times outside tests is common (`render`,
 /// `execute`, `Page`): pinning one needs a container or path hint.
-pub const COMMON_NAME_DEFINITIONS: usize = 5;
+const COMMON_NAME_DEFINITIONS: usize = 5;
 /// Identifiers considered per question, in order of appearance.
 const MAX_IDENTIFIERS: usize = 8;
 /// Same-named definitions listed beside the pinned one.
