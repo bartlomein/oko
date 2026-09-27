@@ -2304,6 +2304,38 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
 }
 
 #[test]
+fn a_batch_listing_covers_every_definition_of_its_name() {
+    // Uses are counted by name, so a listing for `Upload.url` already holds
+    // the files the one-line summary of `Thing.url` would name.
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("app/models")).unwrap();
+    fs::write(
+        root.path().join("app/models/upload.rb"),
+        "class Upload\n  def url\n    1\n  end\nend\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("app/models/thing.rb"),
+        "class Thing\n  def url\n    2\n  end\nend\n",
+    )
+    .unwrap();
+    for i in 0..5 {
+        fs::write(
+            root.path().join(format!("app/models/user{i}.rb")),
+            format!("class User{i}\n  def link(x); x.url; end\nend\n"),
+        )
+        .unwrap();
+    }
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let response =
+        client.search(json!({"questions":["Thing.url definition","who calls Upload.url"]}));
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(text.contains("Q2: Callers of Upload.url"), "{text}");
+    assert!(!text.contains("is used by"), "{text}");
+}
+
+#[test]
 fn an_impact_listing_is_a_stub_when_repeated_and_whole_when_asked_by_name() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir_all(root.path().join("app/models")).unwrap();

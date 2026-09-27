@@ -943,7 +943,7 @@ impl OkoServer {
         if found.direct.is_none()
             && found.accompanying.is_empty()
             && let Some(pin) = found.floor.as_ref().and_then(|floor| floor.pins.first())
-            && !found.listed_in_batch.contains(&pin.qualified)
+            && !found.listed_in_batch.contains(&pin.name)
             && let Some(line) = oko::usages::used_by_line(pin, corpus)
         {
             // Asked for by name: the line is part of the answer, not a repeat.
@@ -1160,7 +1160,7 @@ impl OkoServer {
             }) = listing
             {
                 noted.insert(target.name.clone());
-                many.listed.push(target.qualified.clone());
+                many.listed.push(target.name.clone());
                 let key = format!("listing:{}", target.qualified);
                 // "Who uses X" asks for the listing: always whole. An impact
                 // question only gets it attached, so a repeat is a stub.
@@ -1323,7 +1323,7 @@ struct Found {
     slim_single: bool,
     symbols_missing: Vec<String>,
     notes: Vec<String>,
-    /// Definitions a batch question already lists in full or as a stub.
+    /// Names a batch question already lists in full or as a stub.
     listed_in_batch: Vec<String>,
     /// Listings and lines shown in this answer, recorded as sent only when
     /// the answer is.
@@ -1452,8 +1452,9 @@ struct Many {
     slimmed: usize,
     /// Listing and line keys shown in this answer, committed when it is sent.
     sent: Vec<String>,
-    /// Definitions (qualified) whose listing or listing stub this answer
-    /// carries: their one-line summary would repeat it.
+    /// Names whose listing or listing stub this answer carries: their
+    /// one-line summary would repeat it. By name, not qualified name, since
+    /// uses are counted by name: `Thing.url` has the files `Upload.url` has.
     listed: Vec<String>,
     retrieval: Value,
 }
