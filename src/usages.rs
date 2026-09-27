@@ -901,6 +901,15 @@ pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
     result
 }
 
+/// The dependents line for a pinned definition, when it is widely used:
+/// for anything but a constant, whose uses are rarely what is asked.
+pub fn used_by_line(pin: &Pin, corpus: &[Chunk]) -> Option<String> {
+    if pin.kind == DefinitionKind::Constant {
+        return None;
+    }
+    render_used_by(&used_by(pin, corpus))
+}
+
 /// One line under a pinned definition: `Used by 41 files (386 uses): a.rb
 /// (12), b.rb (9), … +33 more; 19 test files`. Nothing when few files use it.
 pub fn render_used_by(summary: &UsedBy) -> Option<String> {

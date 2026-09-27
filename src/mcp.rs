@@ -940,15 +940,7 @@ impl OkoServer {
         if direct.is_none()
             && accompanying.is_empty()
             && let Some(pin) = floor.as_ref().and_then(|found| found.pins.first())
-            && matches!(
-                pin.kind,
-                oko::navigation::DefinitionKind::Class
-                    | oko::navigation::DefinitionKind::Module
-                    | oko::navigation::DefinitionKind::Type
-                    | oko::navigation::DefinitionKind::Function
-                    | oko::navigation::DefinitionKind::Method
-            )
-            && let Some(line) = oko::usages::render_used_by(&oko::usages::used_by(pin, corpus))
+            && let Some(line) = oko::usages::used_by_line(pin, corpus)
         {
             // Asked for by name: the line is part of the answer, not a repeat.
             let line = if input.mode.is_some() || !symbols.is_empty() {
@@ -1247,15 +1239,7 @@ impl OkoServer {
             if index > 0
                 && let Some(pin) = outcome.found.pins.first()
                 && !noted.contains(&pin.name)
-                && matches!(
-                    pin.kind,
-                    oko::navigation::DefinitionKind::Class
-                        | oko::navigation::DefinitionKind::Module
-                        | oko::navigation::DefinitionKind::Type
-                        | oko::navigation::DefinitionKind::Function
-                        | oko::navigation::DefinitionKind::Method
-                )
-                && let Some(line) = oko::usages::render_used_by(&oko::usages::used_by(pin, corpus))
+                && let Some(line) = oko::usages::used_by_line(pin, corpus)
             {
                 noted.insert(pin.name.clone());
                 let line = self.once(
