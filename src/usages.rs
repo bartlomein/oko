@@ -545,11 +545,14 @@ fn is_data_path(path: &str) -> bool {
     matches!(
         extension,
         "yml" | "yaml" | "json" | "xml" | "csv" | "toml" | "lock" | "rake" | "sql" | "txt" | "svg"
+            // gettext catalogs: every translated string that names the class.
+            | "po" | "pot"
     ) || lower.starts_with("script/")
         || lower.starts_with("scripts/")
         || lower.starts_with("db/")
         || lower.contains("/fixtures/")
         || lower.contains("/locales/")
+        || lower.contains("/locale/")
         || lower.contains("/generated/")
         || lower.ends_with(".min.js")
 }
@@ -1571,6 +1574,20 @@ mod tests {
             [(&2, &"  Upload.find(1)")]
         );
         assert!(scans.lines("Missing").is_empty());
+    }
+
+    #[test]
+    fn translation_catalogs_are_data_not_code() {
+        for path in [
+            "django/contrib/admin/locale/de/LC_MESSAGES/django.po",
+            "po/messages.pot",
+            "config/locales/client.en.yml",
+        ] {
+            assert!(is_data_path(path), "{path}");
+        }
+        for path in ["django/template/base.py", "app/models/locale.rb"] {
+            assert!(!is_data_path(path), "{path}");
+        }
     }
 
     #[test]

@@ -1633,9 +1633,10 @@ fn packet_result(
             }
         }
     }
+    let mut notes = notes.to_owned();
     let mut packet_budget = serde_json::to_vec(&packet)?.len().min(limit);
     loop {
-        let mut text = notes.to_owned();
+        let mut text = notes.clone();
         if packet.results.is_empty() && !direct_answer {
             text.push_str(
                 "No relevant code found. Rephrase the question, or use grep for exact identifiers.\n",
@@ -1671,7 +1672,13 @@ fn packet_result(
             return Ok(result);
         }
         if packet_budget <= 128 {
-            bail!("Search result exceeds the MCP response size limit.");
+            // The notes alone overflow: a long listing beside notes that do
+            // not shrink. Cut whole lines from their end, where listings sit,
+            // and say so, rather than fail the search.
+            notes = cut_notes(&notes, size - limit)
+                .context("Search result exceeds the MCP response size limit.")?;
+            metadata["notesCut"] = json!(true);
+            continue;
         }
         // The packet budget counts JSON bytes while the result is rendered
         // text. Reduce conservatively to retain evidence even for
@@ -1681,6 +1688,39 @@ fn packet_result(
             .max(128);
         packet.fit_to_budget(packet_budget);
     }
+}
+
+const CUT_NOTE: &str =
+    "lines cut to fit the response size; ask a narrower question or pass `directory` to see them.";
+
+/// `notes` without enough whole lines from its end to save `excess` bytes of
+/// the JSON response, ending with a line that says how many were cut. `None`
+/// when cutting would leave nothing.
+fn cut_notes(notes: &str, excess: usize) -> Option<String> {
+    let mut lines: Vec<&str> = notes.lines().collect();
+    let mut cut = 0;
+    // An earlier cut's line is counted and written again with the new total.
+    if let Some(earlier) = lines
+        .last()
+        .and_then(|line| line.strip_prefix("… "))
+        .and_then(|line| line.strip_suffix(CUT_NOTE))
+        .and_then(|count| count.trim().parse::<usize>().ok())
+    {
+        cut = earlier;
+        lines.pop();
+    }
+    let needed = excess + CUT_NOTE.len() + 16;
+    let mut saved = 0;
+    while saved < needed {
+        let line = lines.pop()?;
+        // As it appears in the JSON response: escapes and the newline's `\n`.
+        saved += serde_json::to_string(line).map_or(line.len(), |json| json.len());
+        cut += 1;
+    }
+    if lines.iter().all(|line| line.trim().is_empty()) {
+        return None;
+    }
+    Some(format!("{}\n… {cut} {CUT_NOTE}\n", lines.join("\n")))
 }
 
 /// Names asked for in `symbols` that no pinned definition answers.
@@ -1915,6 +1955,35 @@ mod tests {
 
     fn input(value: serde_json::Value) -> SearchInput {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn notes_that_cannot_fit_lose_lines_from_their_end_and_say_so() {
+        let notes: String = (0..50).map(|i| format!("  row {i}\tsome text\n")).collect();
+        let cut = cut_notes(&notes, 200).unwrap();
+        assert!(cut.starts_with("  row 0\t"));
+        let marker = cut.lines().last().unwrap();
+        assert!(
+            marker.starts_with("… ") && marker.ends_with(CUT_NOTE),
+            "{marker}"
+        );
+        let count: usize = marker[4..].split(' ').next().unwrap().parse().unwrap();
+        assert_eq!(cut.lines().count() - 1 + count, 50);
+        let saved = serde_json::to_string(&notes).unwrap().len()
+            - serde_json::to_string(&cut).unwrap().len();
+        assert!(saved >= 200, "{saved}");
+        // A second cut adds to the first count instead of stacking lines.
+        let again = cut_notes(&cut, 100).unwrap();
+        assert_eq!(again.matches(CUT_NOTE).count(), 1);
+        let total: usize = again.lines().last().unwrap()[4..]
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(again.lines().count() - 1 + total, 50);
+        // Nothing left to cut: the caller reports the error.
+        assert_eq!(cut_notes("one line\n", 10_000), None);
     }
 
     #[test]
