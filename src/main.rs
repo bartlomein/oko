@@ -783,8 +783,11 @@ fn run() -> Result<()> {
             {
                 let pin = &pin;
                 if parsed.json {
-                    let listing =
-                        oko::usages::usages(pin, snapshot.navigation(), snapshot.chunks());
+                    let listing = oko::usages::usages(
+                        pin,
+                        snapshot.navigation(),
+                        &oko::usages::Scans::new(snapshot.chunks()),
+                    );
                     println!(
                         "{}",
                         serde_json::to_string_pretty(
@@ -795,7 +798,7 @@ fn run() -> Result<()> {
                     let listing = oko::usages::listing(
                         pin,
                         snapshot.navigation(),
-                        snapshot.chunks(),
+                        &oko::usages::Scans::new(snapshot.chunks()),
                         oko::usages::DEPENDENTS_BYTES,
                     );
                     print!("{}", listing.text);

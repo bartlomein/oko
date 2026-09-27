@@ -506,6 +506,7 @@ impl OkoServer {
         if cancelled() {
             bail!("Search cancelled.");
         }
+        let scans = oko::usages::Scans::new(corpus);
         let ask = Ask {
             input: &input,
             question,
@@ -514,6 +515,7 @@ impl OkoServer {
             scope: &scope,
             directory: &directory,
             snapshot: &snapshot,
+            scans: &scans,
             key,
             flight: &flight,
             cancelled: &cancelled,
@@ -635,17 +637,7 @@ impl OkoServer {
         if (ask.cancelled)() {
             bail!("Search cancelled.");
         }
-        // `mode: usages|enumerate` beside several questions: every question
-        // that names a definition gets its listing.
-        let force_listing = matches!(ask.input.mode, Some(Mode::Usages | Mode::Enumerate));
-        let many = self.ask_many(
-            ask.questions,
-            ask.snapshot,
-            ask.key.clone(),
-            ask.input.intent.into(),
-            force_listing,
-            ask.flight,
-        )?;
+        let many = self.ask_many(ask)?;
         let mut found = Found {
             shortlist_ms: Some(shortlist_started.elapsed().as_millis() as u64),
             lexical_fallback: many.lexical_fallback,
@@ -782,7 +774,7 @@ impl OkoServer {
         // Few files: every line. Many: one cite-able row per enclosing
         // definition in every file, so no dependent is dropped.
         let render = |pin: &oko::floor::Pin| {
-            oko::usages::listing(pin, navigation, corpus, oko::usages::DEPENDENTS_BYTES)
+            oko::usages::listing(pin, navigation, ask.scans, oko::usages::DEPENDENTS_BYTES)
         };
         if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
             let listing = render(pin);
@@ -801,15 +793,15 @@ impl OkoServer {
             if oko::usages::asks_for_dependents(question) {
                 oko::floor::named_target(question, navigation, corpus)
             } else {
-                oko::usages::central_class_used(question, navigation, corpus)
+                oko::usages::central_class_used(question, navigation, ask.scans)
             }
         } else {
             None
         };
         if let Some(pin) = impact_target
-            && oko::usages::used_by(&pin, corpus).files.len() >= oko::usages::USED_BY_MIN_FILES
+            && oko::usages::used_by(&pin, ask.scans).files.len() >= oko::usages::USED_BY_MIN_FILES
         {
-            let all = oko::usages::dependents(&pin, navigation, corpus);
+            let all = oko::usages::dependents(&pin, navigation, ask.scans);
             let text = oko::usages::render_dependents_within(&all, SHARED_LISTING_BYTES);
             found.slim_single = !oko::usages::names_more_than(question, &pin.name);
             let text = self.once(
@@ -928,7 +920,7 @@ impl OkoServer {
             && !ask.input.deep
             && let Some(pin) = oko::floor::named_target(question, ask.snapshot.navigation(), corpus)
         {
-            let tests = oko::usages::tests_for(&pin, ask.snapshot.navigation(), corpus);
+            let tests = oko::usages::tests_for(&pin, ask.snapshot.navigation(), ask.scans);
             notes.push_str(&oko::usages::render_tests(&pin, &tests));
         }
         for name in &found.symbols_missing {
@@ -944,7 +936,7 @@ impl OkoServer {
             && found.accompanying.is_empty()
             && let Some(pin) = found.floor.as_ref().and_then(|floor| floor.pins.first())
             && !found.listed_in_batch.contains(&pin.name)
-            && let Some(line) = oko::usages::used_by_line(pin, corpus)
+            && let Some(line) = oko::usages::used_by_line(pin, ask.scans)
         {
             // Asked for by name: the line is part of the answer, not a repeat.
             let line = if ask.input.mode.is_some() || !ask.symbols.is_empty() {
@@ -975,15 +967,12 @@ impl OkoServer {
     /// floor and ranking on its own thread; the first question alone gets the
     /// side requests and the recovery call. One merged answer follows, the
     /// first question's winners leading, every winner tagged with its question.
-    fn ask_many(
-        &self,
-        questions: &[String],
-        snapshot: &Arc<oko::search_cache::WorkspaceSnapshot>,
-        key: Option<String>,
-        intent: RankingIntent,
-        force_listing: bool,
-        flight: &Flight,
-    ) -> Result<Many> {
+    fn ask_many(&self, ask: &Ask<'_>) -> Result<Many> {
+        let (questions, snapshot, flight) = (ask.questions, ask.snapshot, ask.flight);
+        let (key, intent): (_, RankingIntent) = (ask.key.clone(), ask.input.intent.into());
+        // `mode: usages|enumerate` beside several questions: every question
+        // that names a definition gets its listing.
+        let force_listing = matches!(ask.input.mode, Some(Mode::Usages | Mode::Enumerate));
         let corpus = snapshot.chunks();
         let no_jev = self.no_jev;
         let outcomes: Vec<Result<Outcome>> = std::thread::scope(|scope| {
@@ -1067,7 +1056,7 @@ impl OkoServer {
                         oko::usages::central_class_used(
                             &outcome.question,
                             snapshot.navigation(),
-                            corpus,
+                            ask.scans,
                         )
                     })
                     .flatten();
@@ -1081,7 +1070,7 @@ impl OkoServer {
                     }
                 };
                 if !callers
-                    && oko::usages::used_by(&target, corpus).files.len()
+                    && oko::usages::used_by(&target, ask.scans).files.len()
                         < oko::usages::USED_BY_MIN_FILES
                 {
                     return None;
@@ -1089,7 +1078,7 @@ impl OkoServer {
                 let listing = oko::usages::listing(
                     &target,
                     snapshot.navigation(),
-                    corpus,
+                    ask.scans,
                     SHARED_LISTING_BYTES,
                 );
                 Some(BatchListing {
@@ -1182,7 +1171,7 @@ impl OkoServer {
             if index > 0
                 && let Some(pin) = outcome.found.pins.first()
                 && !noted.contains(&pin.name)
-                && let Some(line) = oko::usages::used_by_line(pin, corpus)
+                && let Some(line) = oko::usages::used_by_line(pin, ask.scans)
             {
                 noted.insert(pin.name.clone());
                 let line = self.once(
@@ -1246,6 +1235,8 @@ struct Ask<'a> {
     scope: &'a str,
     directory: &'a std::path::Path,
     snapshot: &'a Arc<oko::search_cache::WorkspaceSnapshot>,
+    /// Name scans shared by every listing and line of this search.
+    scans: &'a oko::usages::Scans<'a>,
     key: Option<String>,
     flight: &'a Flight,
     cancelled: &'a dyn Fn() -> bool,
@@ -1344,7 +1335,7 @@ fn enumerate(ask: &Ask<'_>, named: oko::floor::Floor, found: &mut Found) -> Resu
     }) else {
         bail!("mode requires a name the index defines, in symbols or the question.");
     };
-    let summary = oko::usages::dependents(&pin, ask.snapshot.navigation(), ask.corpus());
+    let summary = oko::usages::dependents(&pin, ask.snapshot.navigation(), ask.scans);
     found.direct = Some(oko::usages::render_dependents(&summary));
     found.retrieval = Some(json!({"dependents": {
         "files": summary.files,

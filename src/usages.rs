@@ -121,7 +121,7 @@ pub fn asks_for_dependents(question: &str) -> bool {
 pub fn central_class_used(
     question: &str,
     navigation: &NavigationIndex,
-    corpus: &[Chunk],
+    scans: &Scans<'_>,
 ) -> Option<Pin> {
     static AFTER: OnceLock<Regex> = OnceLock::new();
     static BEFORE: OnceLock<Regex> = OnceLock::new();
@@ -135,7 +135,8 @@ pub fn central_class_used(
         .map(|c| c[1].to_owned());
     for word in words {
         let name = rails::camelize(&rails::singularize(&word));
-        let found = crate::floor::pins_for_names(std::slice::from_ref(&name), navigation, corpus);
+        let found =
+            crate::floor::pins_for_names(std::slice::from_ref(&name), navigation, scans.corpus());
         let Some(pin) = found
             .pins
             .into_iter()
@@ -143,7 +144,7 @@ pub fn central_class_used(
         else {
             continue;
         };
-        if used_by(&pin, corpus).files.len() >= CENTRAL_FILES {
+        if used_by(&pin, scans).files.len() >= CENTRAL_FILES {
             return Some(pin);
         }
     }
@@ -189,28 +190,74 @@ fn asks_for_code_too(question: &str) -> bool {
     .is_match(question)
 }
 
-/// Lines of every file that mentions `name` somewhere: the substring test
-/// over chunk text is the cheap part, and it rules out most files.
-fn lines_by_path<'a>(
+/// Lines by file, then by line number.
+type FileLines<'a> = BTreeMap<&'a str, BTreeMap<usize, &'a str>>;
+
+/// The corpus, with each name's scan kept for reuse. One question can need a
+/// definition's used-by line, its listing and its dependents, and each needs
+/// every line naming it: without this a search scanned the whole corpus
+/// about ten times, mostly for one name. Make one per search; it assumes the
+/// corpus does not change while it lives.
+pub struct Scans<'a> {
     corpus: &'a [Chunk],
-    name: &str,
-) -> BTreeMap<&'a str, BTreeMap<usize, &'a str>> {
+    memo: std::cell::RefCell<HashMap<String, std::rc::Rc<FileLines<'a>>>>,
+}
+
+impl<'a> Scans<'a> {
+    pub fn new(corpus: &'a [Chunk]) -> Self {
+        Scans {
+            corpus,
+            memo: Default::default(),
+        }
+    }
+    pub fn corpus(&self) -> &'a [Chunk] {
+        self.corpus
+    }
+    /// The lines that contain `name`, scanned once per name.
+    fn lines(&self, name: &str) -> std::rc::Rc<FileLines<'a>> {
+        if let Some(lines) = self.memo.borrow().get(name) {
+            return std::rc::Rc::clone(lines);
+        }
+        let lines = std::rc::Rc::new(lines_by_path(self.corpus, name));
+        self.memo
+            .borrow_mut()
+            .insert(name.to_owned(), std::rc::Rc::clone(&lines));
+        lines
+    }
+}
+
+/// The lines that contain `name`, by file. Every reader looks only at lines
+/// naming the definition (as a word, or through a Rails association, whose
+/// needle is scanned for separately), so other lines are never copied.
+fn lines_by_path<'a>(corpus: &'a [Chunk], name: &str) -> FileLines<'a> {
+    // One searcher for the whole corpus: `str::contains` would build a new
+    // one per chunk, which cost as much as the search itself.
+    let finder = memchr::memmem::Finder::new(name.as_bytes());
     let mentioning: std::collections::HashSet<&str> = corpus
         .iter()
-        .filter(|chunk| chunk.text.contains(name))
+        .filter(|chunk| finder.find(chunk.text.as_bytes()).is_some())
         .map(|chunk| chunk.path.as_str())
         .collect();
     let mut files: BTreeMap<&str, BTreeMap<usize, &str>> = BTreeMap::new();
-    for chunk in corpus {
-        if !mentioning.contains(chunk.path.as_str()) {
+    if mentioning.is_empty() {
+        return files;
+    }
+    // A file's chunks are adjacent in a snapshot, so the set is consulted
+    // once per run of one path rather than once per chunk.
+    for run in corpus.chunk_by(|a, b| a.path == b.path) {
+        let path = run[0].path.as_str();
+        if !mentioning.contains(path) {
             continue;
         }
-        let Some(chunk_lines) = search::chunk_lines(chunk) else {
-            continue;
-        };
-        let lines = files.entry(chunk.path.as_str()).or_default();
-        for (number, text) in chunk_lines {
-            lines.entry(number).or_insert(text);
+        for chunk in run {
+            let Some(chunk_lines) = search::chunk_lines(chunk) else {
+                continue;
+            };
+            for (number, text) in chunk_lines {
+                if finder.find(text.as_bytes()).is_some() {
+                    files.entry(path).or_default().entry(number).or_insert(text);
+                }
+            }
         }
     }
     files
@@ -218,19 +265,13 @@ fn lines_by_path<'a>(
 
 /// The lines to scan for a pin: every line naming it, plus, for a Ruby
 /// class, the association lines that refer to it without its constant.
-fn lines_for<'a>(
-    pin: &Pin,
-    corpus: &'a [Chunk],
-) -> (
-    BTreeMap<&'a str, BTreeMap<usize, &'a str>>,
-    Option<rails::Associations>,
-) {
-    let mut files = lines_by_path(corpus, &pin.name);
+fn lines_for<'a>(pin: &Pin, scans: &Scans<'a>) -> (FileLines<'a>, Option<rails::Associations>) {
+    let mut files = (*scans.lines(&pin.name)).clone();
     let associations = (pin.path.ends_with(".rb") && pin.kind == DefinitionKind::Class)
         .then(|| rails::associations(&pin.name))
         .flatten();
     if let Some(associations) = &associations {
-        for (path, lines) in lines_by_path(corpus, &associations.needle) {
+        for (path, lines) in scans.lines(&associations.needle).iter() {
             if !path.ends_with(".rb") {
                 continue;
             }
@@ -357,7 +398,7 @@ fn trim_row_to(text: &str, max: usize) -> String {
 
 /// Every whole-word use of `pin`'s name across the snapshot, except the
 /// definition's own line.
-pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usages {
+pub fn usages(pin: &Pin, navigation: &NavigationIndex, scans: &Scans<'_>) -> Usages {
     let name = pin.name.as_str();
     let mut result = Usages {
         name: pin.name.clone(),
@@ -365,7 +406,7 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
         definition: Some((pin.path.clone(), pin.start_line)),
         ..Usages::default()
     };
-    let (files, associations) = lines_for(pin, corpus);
+    let (files, associations) = lines_for(pin, scans);
     let mut per_file: Vec<(&str, Vec<Use>)> = Vec::new();
     for (path, lines) in &files {
         let test = search::is_test_path(path);
@@ -522,7 +563,7 @@ fn area_of(path: &str) -> String {
     }
 }
 
-pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Dependents {
+pub fn dependents(pin: &Pin, navigation: &NavigationIndex, scans: &Scans<'_>) -> Dependents {
     let name = pin.name.as_str();
     let mut result = Dependents {
         name: pin.name.clone(),
@@ -531,7 +572,7 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
         ..Dependents::default()
     };
     let mut by_area: BTreeMap<String, Vec<DependentFile>> = BTreeMap::new();
-    let (files, associations) = lines_for(pin, corpus);
+    let (files, associations) = lines_for(pin, scans);
     result.rails = associations.is_some();
     for (path, lines) in &files {
         if is_docs_path(path) {
@@ -650,10 +691,10 @@ pub struct Listing {
 pub fn listing(
     pin: &Pin,
     navigation: &NavigationIndex,
-    corpus: &[Chunk],
+    scans: &Scans<'_>,
     budget: usize,
 ) -> Listing {
-    let usages = usages(pin, navigation, corpus);
+    let usages = usages(pin, navigation, scans);
     if usages.omitted_files == 0 {
         return Listing {
             text: render_usages(&usages),
@@ -662,7 +703,7 @@ pub fn listing(
             metrics: serde_json::json!({ "usages": usages }),
         };
     }
-    let all = dependents(pin, navigation, corpus);
+    let all = dependents(pin, navigation, scans);
     Listing {
         text: render_dependents_within(&all, budget),
         wide: true,
@@ -854,14 +895,14 @@ pub struct UsedBy {
 pub const USED_BY_MIN_FILES: usize = 4;
 const USED_BY_SHOWN: usize = 10;
 
-pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
+pub fn used_by(pin: &Pin, scans: &Scans<'_>) -> UsedBy {
     let name = pin.name.as_str();
     let mut result = UsedBy {
         name: pin.name.clone(),
         qualified: pin.qualified.clone(),
         ..UsedBy::default()
     };
-    let (files, associations) = lines_for(pin, corpus);
+    let (files, associations) = lines_for(pin, scans);
     for (path, lines) in &files {
         // Dependents are other code files: not the definition's own file, not
         // documentation.
@@ -898,11 +939,11 @@ pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
 
 /// The dependents line for a pinned definition, when it is widely used:
 /// for anything but a constant, whose uses are rarely what is asked.
-pub fn used_by_line(pin: &Pin, corpus: &[Chunk]) -> Option<String> {
+pub fn used_by_line(pin: &Pin, scans: &Scans<'_>) -> Option<String> {
     if pin.kind == DefinitionKind::Constant {
         return None;
     }
-    render_used_by(&used_by(pin, corpus))
+    render_used_by(&used_by(pin, scans))
 }
 
 /// One line under a pinned definition: `Used by 41 files (386 uses): a.rb
@@ -1038,11 +1079,11 @@ fn named_after(test_path: &str, file_stem: &str, name: &str) -> bool {
 /// Test files for `pin`: named after its file or its name (high), or
 /// mentioning the name (medium), each with the mentioning lines and their
 /// enclosing test function.
-pub fn tests_for(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Vec<TestMatch> {
-    let files = lines_by_path(corpus, &pin.name);
+pub fn tests_for(pin: &Pin, navigation: &NavigationIndex, scans: &Scans<'_>) -> Vec<TestMatch> {
+    let files = scans.lines(&pin.name);
     let file_stem = stem(&pin.path);
     let mut matches = Vec::new();
-    for (path, lines) in &files {
+    for (path, lines) in files.iter() {
         if !search::is_test_path(path) || *path == pin.path {
             continue;
         }
@@ -1084,7 +1125,11 @@ pub fn tests_for(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> V
     }
     // A test file named after the definition's file tests it even when it
     // never spells the name (`probe.test.ts` for `probe.ts`).
-    let mut paths: Vec<&str> = corpus.iter().map(|chunk| chunk.path.as_str()).collect();
+    let mut paths: Vec<&str> = scans
+        .corpus()
+        .iter()
+        .map(|chunk| chunk.path.as_str())
+        .collect();
     paths.dedup();
     for path in paths {
         if path != pin.path
@@ -1495,7 +1540,7 @@ mod tests {
         let pin = floor::pins_for_names(&["inferRemoteSize".into()], &index, &chunks)
             .pins
             .remove(0);
-        let tests = tests_for(&pin, &index, &chunks);
+        let tests = tests_for(&pin, &index, &Scans::new(&chunks));
         assert_eq!(
             tests.len(),
             1,
@@ -1509,6 +1554,23 @@ mod tests {
         assert!(
             render_tests(&pin, &tests).contains("  src/probe.test.ts — named after it, high\n")
         );
+    }
+
+    #[test]
+    fn a_name_is_scanned_once_and_only_its_lines_are_kept() {
+        let (chunks, _) = corpus(&[
+            ("a.rb", "class A\n  Upload.find(1)\n  other\nend\n"),
+            ("b.rb", "nothing here\n"),
+        ]);
+        let scans = Scans::new(&chunks);
+        let first = scans.lines("Upload");
+        assert!(std::rc::Rc::ptr_eq(&first, &scans.lines("Upload")));
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            first["a.rb"].iter().collect::<Vec<_>>(),
+            [(&2, &"  Upload.find(1)")]
+        );
+        assert!(scans.lines("Missing").is_empty());
     }
 
     #[test]
@@ -1610,7 +1672,7 @@ mod tests {
         let pin = floor::pins_for_names(&["Upload".into()], &index, &chunks)
             .pins
             .remove(0);
-        let summary = dependents(&pin, &index, &chunks);
+        let summary = dependents(&pin, &index, &Scans::new(&chunks));
         assert_eq!((summary.files, summary.uses), (3, 6));
         assert_eq!(summary.own_file_uses, 1);
         assert_eq!((summary.test_files, summary.tests), (1, 2));
@@ -1673,7 +1735,7 @@ mod tests {
         let pin = floor::pins_for_names(&["Upload".into()], &index, &chunks)
             .pins
             .remove(0);
-        let summary = dependents(&pin, &index, &chunks);
+        let summary = dependents(&pin, &index, &Scans::new(&chunks));
         let text = render_dependents_within(&summary, 4_000);
         for i in 0..60 {
             assert!(
@@ -1837,11 +1899,14 @@ mod tests {
             "How does backup and restore reference the uploads?",
             "CustomEmoji model and Draft model upload references",
         ] {
-            let pin = central_class_used(q, &index, &chunks).expect(q);
+            let pin = central_class_used(q, &index, &Scans::new(&chunks)).expect(q);
             assert_eq!(pin.name, "Upload", "{q}");
         }
         for q in ["how to use the config", "jobs that use workers"] {
-            assert!(central_class_used(q, &index, &chunks).is_none(), "{q}");
+            assert!(
+                central_class_used(q, &index, &Scans::new(&chunks)).is_none(),
+                "{q}"
+            );
         }
     }
 
@@ -1926,7 +1991,7 @@ mod tests {
         ]);
         let found = floor::floor("callers of wsgi_app", &index, &chunks);
         let pin = &found.pins[0];
-        let uses = usages(pin, &index, &chunks);
+        let uses = usages(pin, &index, &Scans::new(&chunks));
         assert_eq!(
             (
                 uses.calls,
@@ -1958,7 +2023,7 @@ mod tests {
             "{text}"
         );
 
-        let tests = tests_for(pin, &index, &chunks);
+        let tests = tests_for(pin, &index, &Scans::new(&chunks));
         assert_eq!(tests.len(), 1);
         assert_eq!(
             (tests[0].path.as_str(), tests[0].confidence, tests[0].how),
@@ -1990,7 +2055,7 @@ mod tests {
             .collect();
         let (chunks, index) = corpus(&refs);
         let found = floor::floor("Upload model", &index, &chunks);
-        let summary = used_by(&found.pins[0], &chunks);
+        let summary = used_by(&found.pins[0], &Scans::new(&chunks));
         assert_eq!(
             (
                 summary.files.len(),
@@ -2012,7 +2077,7 @@ mod tests {
         // Few users: no summary line.
         let (chunks, index) = corpus(&refs[..2]);
         let found = floor::floor("Upload model", &index, &chunks);
-        assert!(render_used_by(&used_by(&found.pins[0], &chunks)).is_none());
+        assert!(render_used_by(&used_by(&found.pins[0], &Scans::new(&chunks))).is_none());
     }
 
     #[test]
@@ -2029,7 +2094,7 @@ mod tests {
             ("test/other.test.ts", "it('x', () => 1);\n"),
         ]);
         let found = floor::floor("tests for inferRemoteSize", &index, &chunks);
-        let tests = tests_for(&found.pins[0], &index, &chunks);
+        let tests = tests_for(&found.pins[0], &index, &Scans::new(&chunks));
         assert_eq!(tests.len(), 1);
         assert_eq!(
             (tests[0].path.as_str(), tests[0].confidence),

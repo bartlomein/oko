@@ -1324,6 +1324,7 @@ dependencies = [
  "dirs",
  "keyring",
  "libc",
+ "memchr",
  "notify",
  "postcard",
  "regex",
