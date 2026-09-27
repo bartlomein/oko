@@ -444,16 +444,40 @@ impl<'a> Definitions<'a> {
                     self.push(name, None, kind, None, span, exported(name));
                 }
             }
-            "const_declaration" | "var_declaration" if container.is_none() => {
+            // `const a, b = 1, 2`, `const ( … )` and `var ( … )` (whose specs
+            // sit in a `var_spec_list`): every name is a definition, spanning
+            // its own spec when the declaration groups several.
+            "const_declaration" | "var_declaration" => {
                 let mut cursor = node.walk();
-                for spec in node.named_children(&mut cursor) {
-                    if let Some(name) = self.name_of(spec) {
+                let mut specs = Vec::new();
+                for child in node.named_children(&mut cursor) {
+                    if child.kind() == "var_spec_list" {
+                        let mut inner = child.walk();
+                        specs.extend(
+                            child
+                                .named_children(&mut inner)
+                                .filter(|c| c.kind() == "var_spec"),
+                        );
+                    } else if matches!(child.kind(), "const_spec" | "var_spec") {
+                        specs.push(child);
+                    }
+                }
+                let grouped = specs.len() > 1;
+                for spec in specs {
+                    let span = if grouped { spec } else { node };
+                    let mut names = spec.walk();
+                    let names: Vec<&'a str> = spec
+                        .children_by_field_name("name", &mut names)
+                        .filter(|n| n.kind() == "identifier")
+                        .map(|n| self.text(n))
+                        .collect();
+                    for name in names {
                         self.push(
                             name,
                             None,
                             DefinitionKind::Constant,
                             None,
-                            node,
+                            span,
                             exported(name),
                         );
                     }
@@ -2389,6 +2413,40 @@ mod tests {
             ("New", DefinitionKind::Function, 9, 9, None, true),
             ("Context.Next", DefinitionKind::Method, 11, 11, None, true),
             ("Engine.run", DefinitionKind::Method, 13, 13, None, false),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+    }
+
+    #[test]
+    fn go_grouped_and_multi_name_constants_and_vars_are_each_definitions() {
+        let source = "package gin\n\nconst Single = 1\n\nconst a, b = 1, 2\n\nconst (\n\tDebugMode = \"debug\"\n\tReleaseMode = \"release\"\n)\n\nvar (\n\tdefaultPlatform string\n\tdefaultTrustedCIDRs = []string{}\n)\n\nvar Version = \"1\"\n";
+        let got = summary("mode.go", source);
+        let want = [
+            ("Single", DefinitionKind::Constant, 3, 3, None, true),
+            ("a", DefinitionKind::Constant, 5, 5, None, false),
+            ("b", DefinitionKind::Constant, 5, 5, None, false),
+            ("DebugMode", DefinitionKind::Constant, 8, 8, None, true),
+            ("ReleaseMode", DefinitionKind::Constant, 9, 9, None, true),
+            (
+                "defaultPlatform",
+                DefinitionKind::Constant,
+                13,
+                13,
+                None,
+                false,
+            ),
+            (
+                "defaultTrustedCIDRs",
+                DefinitionKind::Constant,
+                14,
+                14,
+                None,
+                false,
+            ),
+            ("Version", DefinitionKind::Constant, 17, 17, None, true),
         ];
         assert_eq!(
             got,
