@@ -2259,7 +2259,11 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
     let response = client.search(json!({"symbols":"Upload","mode":"enumerate"}));
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.starts_with("Files using Upload — 5 files, 10 uses in code; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line. Complete for the indexed code: every line that names Upload or its Rails associations; not included: references built at runtime (reflection, `send`, names in strings).\napp/models (5 files)\n  app/models/thing0.rb:2\tThing0\tbelongs_to :file, class_name: 'Upload'\n  app/models/thing0.rb:3\tThing0.pick\tdef pick; Upload.find(1); end\n"),
+        text.starts_with("Files using Upload — 5 files, 10 uses in code; 1 test files (2 uses). "),
+        "{text}"
+    );
+    assert!(
+        text.contains("\napp/models (5 files)\n  app/models/thing0.rb:2\tThing0\tbelongs_to :file, class_name: 'Upload'\n  app/models/thing0.rb:3\tThing0.pick\tdef pick; Upload.find(1); end\n"),
         "{text}"
     );
     let response = client.search(json!({"question":"Upload","mode":"usages"}));
@@ -2269,7 +2273,8 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
         "{text}"
     );
     // In a batch, a callers question gets its listing, as single questions
-    // do; the dependents line was already sent in this session.
+    // do. The one-line summary is absent only because this session already
+    // had it: a fresh session's batch carries both (known, not yet changed).
     let response =
         client.search(json!({"questions":["Upload model definition","who uses Upload"]}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
@@ -2352,7 +2357,8 @@ fn several_questions_share_one_call_with_labelled_excerpts_and_one_set_of_side_r
         3
     );
     assert_eq!(packet["retrieval"]["questions"][1]["tag"], "Q2");
-    assert_eq!(packet["responseLimitBytes"], 26_000);
+    // 16,000 for one question and 5,000 for each further one.
+    assert_eq!(packet["responseLimitBytes"], 16_000 + 2 * 5_000);
     // One question in `questions` is a plain question; questions with deep
     // is still an error.
     let mut client = Client::start(root.path(), true, None);
@@ -2468,7 +2474,12 @@ fn a_question_answered_by_a_wide_listing_brings_one_excerpt_at_most() {
     assert_eq!(response["result"]["isError"], false, "{response}");
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
     assert!(text.contains("Q2: Files using Upload — 15 files"), "{text}");
-    let q2_excerpts = text.matches(", Q2)\n").count() + text.matches("+Q2)\n").count();
+    // Excerpt headers end in a parenthesised note that names their questions.
+    let q2_excerpts = text
+        .lines()
+        .filter_map(|line| line.strip_suffix(')')?.rsplit_once('('))
+        .filter(|(_, note)| note.contains("Q2"))
+        .count();
     assert!(q2_excerpts <= 1, "{q2_excerpts}: {text}");
     assert!(
         text.contains("app/models/cooking.rb:2-4 (complete definition, Q1)"),

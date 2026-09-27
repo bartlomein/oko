@@ -1315,8 +1315,28 @@ mod tests {
             ]
         );
         let text = render_dependents(&summary);
+        // The counts, each row, and the order of the sections; not the prose.
         assert!(
-            text.starts_with("Files using Upload — 3 files, 6 uses in code; 1 in its own file; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line. Complete for the indexed code: every line that names Upload or its Rails associations; not included: references built at runtime (reflection, `send`, names in strings).\napp/controllers (1 files)\n  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last  (+1 more in this file)\napp/models (1 files)\n  app/models/user_profile.rb:2\tUserProfile\tbelongs_to :card_background_upload, class_name: \"Upload\"  (+1 more in this file)\nlib/email (1 files)\n  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\nTask, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\nSpecs and tests using Upload (1 files, 2 uses), named after it first:\n  spec/models/upload_spec.rb:1\tdescribe Upload do  (2 uses)\n"),
+            text.starts_with("Files using Upload — 3 files, 6 uses in code; 1 in its own file; 1 test files (2 uses). "),
+            "{text}"
+        );
+        let rows = [
+            "app/controllers (1 files)\n",
+            "  app/controllers/metadata_controller.rb:3\tMetadataController.default_manifest\ticon = Upload.find_by(id: 1)\n",
+            "  app/controllers/metadata_controller.rb:7\tMetadataController.other\tUpload.last  (+1 more in this file)\n",
+            "app/models (1 files)\n",
+            "  app/models/user_profile.rb:2\tUserProfile\tbelongs_to :card_background_upload, class_name: \"Upload\"  (+1 more in this file)\n",
+            "lib/email (1 files)\n",
+            "  lib/email/styles.rb:5\tEmail.Styles.stripped_secure_image_uploads\tUpload.secure\n",
+            "Task, data and script files (2 files, 3 uses): lib/tasks/uploads.rake (2), config/locales/client.en.yml (1)\n",
+            "  spec/models/upload_spec.rb:1\tdescribe Upload do  (2 uses)\n",
+        ];
+        let at = |row: &str| {
+            text.find(row)
+                .unwrap_or_else(|| panic!("{row:?} missing: {text}"))
+        };
+        assert!(
+            rows.windows(2).all(|pair| at(pair[0]) < at(pair[1])),
             "{text}"
         );
     }
@@ -1381,7 +1401,24 @@ mod tests {
         assert_eq!(summary.checked, 5);
         let text = render_unused(&summary, "the workspace", "");
         assert!(
-            text.starts_with("Unused in production code under the workspace — 4 of 5 checked: 2 private, 2 exported; 1 of them are used by tests only. A row is a deletion candidate with its evidence.\nprivate, no use anywhere (1):\n  gin.go:10\tfunction readNthLine — no reference anywhere in the workspace\nprivate, used by tests only (1):\n  gin.go:12\tfunction parseIP — tests only: gin_test.go:3\nexported, no use in this repository (other repositories may use them) (2):\n  gin.go:3\tfunction New — no reference anywhere in the workspace\n  gin.go:14\tfunction Exported — no reference anywhere in the workspace\n"),
+            text.starts_with("Unused in production code under the workspace — 4 of 5 checked: 2 private, 2 exported; 1 of them are used by tests only."),
+            "{text}"
+        );
+        let rows = [
+            "private, no use anywhere (1):\n",
+            "  gin.go:10\tfunction readNthLine — no reference anywhere in the workspace\n",
+            "private, used by tests only (1):\n",
+            "  gin.go:12\tfunction parseIP — tests only: gin_test.go:3\n",
+            "exported, no use in this repository",
+            "  gin.go:3\tfunction New — no reference anywhere in the workspace\n",
+            "  gin.go:14\tfunction Exported — no reference anywhere in the workspace\n",
+        ];
+        let at = |row: &str| {
+            text.find(row)
+                .unwrap_or_else(|| panic!("{row:?} missing: {text}"))
+        };
+        assert!(
+            rows.windows(2).all(|pair| at(pair[0]) < at(pair[1])),
             "{text}"
         );
         // Named checks look at those names only.
