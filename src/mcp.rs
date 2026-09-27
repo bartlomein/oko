@@ -738,27 +738,19 @@ impl OkoServer {
                 // Few files: every line. Many: one cite-able row per enclosing
                 // definition in every file, so no dependent is dropped.
                 let render = |pin: &oko::floor::Pin| {
-                    let listing = oko::usages::usages(pin, snapshot.navigation(), corpus);
-                    if listing.omitted_files > 0 {
-                        let all = oko::usages::dependents(pin, snapshot.navigation(), corpus);
-                        (
-                            oko::usages::render_dependents(&all),
-                            json!({"dependents": {"files": all.files, "uses": all.uses}}),
-                        )
-                    } else {
-                        (
-                            oko::usages::render_usages(&listing),
-                            json!({"usages": listing}),
-                        )
-                    }
+                    oko::usages::listing(
+                        pin,
+                        snapshot.navigation(),
+                        corpus,
+                        oko::usages::DEPENDENTS_BYTES,
+                    )
                 };
                 if let Some(pin) = target.as_ref().filter(|_| !listing_only) {
-                    let (text, shape) = render(pin);
-                    slim_single = shape.get("dependents").is_some()
-                        && !oko::usages::names_more_than(question, &pin.name);
+                    let listing = render(pin);
+                    slim_single = slims_for(question, &listing, pin);
                     // Asked for ("who calls X"): whole, and recorded as sent.
                     pending.push(format!("listing:{}", pin.qualified));
-                    accompanying.push(text);
+                    accompanying.push(listing.text);
                 }
                 // An impact question ("what depends on Upload", "references to
                 // Upload") gets the dependents listing beside the ranked code.
@@ -792,9 +784,9 @@ impl OkoServer {
                 }
                 if let Some(pin) = target.as_ref().filter(|_| listing_only) {
                     pending.push(format!("listing:{}", pin.qualified));
-                    let (text, retrieval) = render(pin);
-                    let retrieval = Some(retrieval);
-                    direct = Some(text);
+                    let listing = render(pin);
+                    let retrieval = Some(listing.metrics);
+                    direct = Some(listing.text);
                     floor = Some(found);
                     shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
                     (Vec::new(), None, retrieval)
@@ -1160,23 +1152,16 @@ impl OkoServer {
                 {
                     return None;
                 }
-                let listing = oko::usages::usages(&target, snapshot.navigation(), corpus);
-                let wide = listing.omitted_files > 0;
-                let (text, files) = if wide {
-                    let all = oko::usages::dependents(&target, snapshot.navigation(), corpus);
-                    (
-                        oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES),
-                        all.files,
-                    )
-                } else {
-                    (oko::usages::render_usages(&listing), listing.files())
-                };
+                let listing = oko::usages::listing(
+                    &target,
+                    snapshot.navigation(),
+                    corpus,
+                    BATCH_LISTING_BYTES,
+                );
                 Some(BatchListing {
                     target,
-                    text,
-                    wide,
+                    listing,
                     callers,
-                    files,
                 })
             })
             .collect();
@@ -1189,10 +1174,9 @@ impl OkoServer {
             let tag = format!("Q{}", index + 1);
             // A many-file listing answers the question, unless it names
             // something of its own besides the listed class.
-            let slim = listings[index].as_ref().is_some_and(|listing| {
-                listing.wide
-                    && !oko::usages::names_more_than(&outcome.question, &listing.target.name)
-            });
+            let slim = listings[index]
+                .as_ref()
+                .is_some_and(|l| slims_for(&outcome.question, &l.listing, &l.target));
             many.slimmed += usize::from(slim);
             tagged_winners.push(
                 outcome
@@ -1237,10 +1221,8 @@ impl OkoServer {
             let tag = format!("Q{}", index + 1);
             if let Some(BatchListing {
                 target,
-                text,
+                listing: oko::usages::Listing { text, files, .. },
                 callers,
-                files,
-                ..
             }) = listing
             {
                 noted.insert(target.name.clone());
@@ -1328,12 +1310,18 @@ impl OkoServer {
 /// The listing one question of a batch gets: who uses its target.
 struct BatchListing {
     target: oko::floor::Pin,
-    text: String,
-    /// Many files: the dependents shape, and the question's excerpts slimmed.
-    wide: bool,
+    listing: oko::usages::Listing,
     /// Asked for ("who uses X"): always whole, never a stub.
     callers: bool,
-    files: usize,
+}
+
+/// A question answered by a many-file listing brings one excerpt: the
+/// listing's rows already give each method and line. Not when it names
+/// something of its own besides the listed definition. The single-question
+/// path keeps the question's pinned definition beside that excerpt; a batch
+/// shows it through the question that asks for the definition.
+fn slims_for(question: &str, listing: &oko::usages::Listing, target: &oko::floor::Pin) -> bool {
+    listing.wide && !oko::usages::names_more_than(question, &target.name)
 }
 
 /// One question's share of a several-question call.

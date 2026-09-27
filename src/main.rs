@@ -756,20 +756,23 @@ fn run() -> Result<()> {
                 )
             {
                 let pin = &pin;
-                let listing = oko::usages::usages(pin, snapshot.navigation(), snapshot.chunks());
                 if parsed.json {
+                    let listing =
+                        oko::usages::usages(pin, snapshot.navigation(), snapshot.chunks());
                     println!(
                         "{}",
                         serde_json::to_string_pretty(
                             &json!({"question": parsed.question, "usages": listing})
                         )?
                     );
-                } else if listing.omitted_files > 0 {
-                    let all =
-                        oko::usages::dependents(pin, snapshot.navigation(), snapshot.chunks());
-                    print!("{}", oko::usages::render_dependents(&all));
                 } else {
-                    print!("{}", oko::usages::render_usages(&listing));
+                    let listing = oko::usages::listing(
+                        pin,
+                        snapshot.navigation(),
+                        snapshot.chunks(),
+                        oko::usages::DEPENDENTS_BYTES,
+                    );
+                    print!("{}", listing.text);
                 }
                 return Ok(());
             }

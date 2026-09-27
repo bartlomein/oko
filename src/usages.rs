@@ -633,12 +633,48 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
 
 /// The listing stays under this many bytes: every file keeps at least its
 /// first row; extra rows go first, then whole areas are summarised.
-const DEPENDENTS_BYTES: usize = 14_000;
+pub const DEPENDENTS_BYTES: usize = 14_000;
 /// Dependents rows show less of the line than a callers row: the path and
 /// the enclosing definition are the point.
 const DEPENDENT_TEXT_BYTES: usize = 90;
 const DATA_FILES_SHOWN: usize = 6;
 const TEST_FILES_SHOWN: usize = 12;
+
+/// Who uses `pin`, in the shape that fits: every line when a few files use
+/// it, else the dependents listing (one row per file and enclosing
+/// definition) within `budget` bytes.
+pub struct Listing {
+    pub text: String,
+    /// The dependents shape: more files than a callers listing shows.
+    pub wide: bool,
+    pub files: usize,
+    /// Retrieval metrics for the answer.
+    pub metrics: serde_json::Value,
+}
+
+pub fn listing(
+    pin: &Pin,
+    navigation: &NavigationIndex,
+    corpus: &[Chunk],
+    budget: usize,
+) -> Listing {
+    let usages = usages(pin, navigation, corpus);
+    if usages.omitted_files == 0 {
+        return Listing {
+            text: render_usages(&usages),
+            wide: false,
+            files: usages.files(),
+            metrics: serde_json::json!({ "usages": usages }),
+        };
+    }
+    let all = dependents(pin, navigation, corpus);
+    Listing {
+        text: render_dependents_within(&all, budget),
+        wide: true,
+        files: all.files,
+        metrics: serde_json::json!({ "dependents": { "files": all.files, "uses": all.uses } }),
+    }
+}
 
 /// `mode: enumerate` and long callers lists: `path:line<TAB>Enclosing<TAB>text`
 /// per enclosing definition, grouped by area with counts, code before data.
