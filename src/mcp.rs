@@ -271,9 +271,47 @@ struct OkoServer {
     gate: Arc<Semaphore>,
     cache: Arc<Mutex<WorkspaceCache>>,
     memory: Arc<Mutex<Memory>>,
-    /// Searches in progress: more than one at once usually means parallel
-    /// subagents, which do not share each other's context.
+    /// Searches in progress, and searches ever started: together they tell a
+    /// search whether any other ran during it (parallel subagents share this
+    /// server but not each other's context).
     in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    started: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// One search's place among the others: it overlapped another if one was
+/// running when it began, or if any began before it finished. Such a search
+/// is never given a stub, since what one subagent saw another has not.
+struct Flight {
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    started: Arc<std::sync::atomic::AtomicUsize>,
+    ticket: usize,
+    joined_others: bool,
+}
+impl Flight {
+    fn begin(
+        in_flight: &Arc<std::sync::atomic::AtomicUsize>,
+        started: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        use std::sync::atomic::Ordering;
+        let joined_others = in_flight.fetch_add(1, Ordering::SeqCst) > 0;
+        let ticket = started.fetch_add(1, Ordering::SeqCst);
+        Flight {
+            in_flight: Arc::clone(in_flight),
+            started: Arc::clone(started),
+            ticket,
+            joined_others,
+        }
+    }
+    fn overlapping(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.joined_others || self.started.load(Ordering::SeqCst) != self.ticket + 1
+    }
+}
+impl Drop for Flight {
+    fn drop(&mut self) {
+        self.in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 impl OkoServer {
     fn directory(&self, input: &SearchInput) -> Result<PathBuf> {
@@ -393,9 +431,16 @@ impl OkoServer {
     }
 
     /// Keys go to `pending` and are recorded only when the answer is sent.
-    fn once(&self, key: String, text: String, stub: String, pending: &mut Vec<String>) -> String {
-        use std::sync::atomic::Ordering;
-        if self.in_flight.load(Ordering::SeqCst) > 1 {
+    /// A search that overlapped another always gets the full text.
+    fn once(
+        &self,
+        flight: &Flight,
+        key: String,
+        text: String,
+        stub: String,
+        pending: &mut Vec<String>,
+    ) -> String {
+        if flight.overlapping() {
             pending.push(key);
             return text;
         }
@@ -403,15 +448,7 @@ impl OkoServer {
     }
 
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
-        use std::sync::atomic::Ordering;
-        struct Flight(Arc<std::sync::atomic::AtomicUsize>);
-        impl Drop for Flight {
-            fn drop(&mut self) {
-                self.0.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-        let parallel = self.in_flight.fetch_add(1, Ordering::SeqCst) > 0;
-        let _flight = Flight(Arc::clone(&self.in_flight));
+        let flight = Flight::begin(&self.in_flight, &self.started);
         let started = Instant::now();
         let (input, mut early_notes) = normalize(input);
         let directory = self.directory(&input)?;
@@ -549,10 +586,10 @@ impl OkoServer {
             let many = self.ask_many(
                 &questions,
                 &snapshot,
-                corpus,
                 key.clone(),
                 input.intent.into(),
                 force_listing,
+                &flight,
             )?;
             shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
             lexical_fallback = many.lexical_fallback;
@@ -763,6 +800,7 @@ impl OkoServer {
                     let text = oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES);
                     slim_single = !oko::usages::names_more_than(question, &pin.name);
                     accompanying = Some(self.once(
+                        &flight,
                         format!("listing:{}", pin.qualified),
                         text,
                         listing_stub(&pin.qualified, all.files),
@@ -943,6 +981,7 @@ impl OkoServer {
                 line
             } else {
                 self.once(
+                    &flight,
                     format!("usedby:{}", pin.qualified),
                     line,
                     String::new(),
@@ -998,7 +1037,9 @@ impl OkoServer {
         let limit = (MAX_MCP_RESULT_BYTES
             + EXTRA_QUESTION_BYTES * questions.len().saturating_sub(1))
         .min(MAX_MULTI_RESULT_BYTES);
-        let explicit = direct.is_some() || input.mode.is_some() || !symbols.is_empty() || parallel;
+        // No stubs for a search that overlapped another at any point.
+        let explicit =
+            direct.is_some() || input.mode.is_some() || !symbols.is_empty() || flight.overlapping();
         packet_result(
             metadata,
             packet,
@@ -1022,11 +1063,12 @@ impl OkoServer {
         &self,
         questions: &[String],
         snapshot: &Arc<oko::search_cache::WorkspaceSnapshot>,
-        corpus: &[search::Chunk],
         key: Option<String>,
         intent: RankingIntent,
         force_listing: bool,
+        flight: &Flight,
     ) -> Result<Many> {
+        let corpus = snapshot.chunks();
         let no_jev = self.no_jev;
         let outcomes: Vec<Result<Outcome>> = std::thread::scope(|scope| {
             let handles: Vec<_> = questions
@@ -1227,6 +1269,7 @@ impl OkoServer {
                     text
                 } else {
                     self.once(
+                        flight,
                         key,
                         text,
                         listing_stub(&target.qualified, files),
@@ -1251,6 +1294,7 @@ impl OkoServer {
             {
                 noted.insert(pin.name.clone());
                 let line = self.once(
+                    flight,
                     format!("usedby:{}", pin.qualified),
                     line,
                     String::new(),
@@ -1730,6 +1774,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         cache: Arc::new(Mutex::new(WorkspaceCache::new())),
         memory: Arc::new(Mutex::new(Memory::default())),
         in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        started: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     prewarm(&server);
     tokio::runtime::Builder::new_multi_thread()
@@ -1745,6 +1790,24 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_overlaps_any_search_that_began_during_it() {
+        let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first = Flight::begin(&in_flight, &started);
+        assert!(!first.overlapping());
+        // A second search begins and finishes while the first still runs:
+        // at no single moment after it ends are two in flight, yet they
+        // overlapped.
+        let second = Flight::begin(&in_flight, &started);
+        assert!(second.overlapping());
+        drop(second);
+        assert!(first.overlapping());
+        drop(first);
+        let alone = Flight::begin(&in_flight, &started);
+        assert!(!alone.overlapping());
+    }
 
     #[test]
     fn a_poisoned_memory_is_recovered_not_fatal() {

@@ -667,6 +667,55 @@ fn ripgrep_config_cannot_enable_outside_symlink_reads() {
 /// ranking call is observable rather than merely producing a connection error.
 #[test]
 fn parallel_searches_all_run_instead_of_one_being_turned_away() {
+    use std::sync::atomic::Ordering;
+    // Agents send several searches in one turn. Each must get results, and
+    // their Jev requests must overlap rather than queue behind one another.
+    let root = fixture();
+    let (endpoint, most, done, server) = slow_provider();
+    let mut client = Client::start(root.path(), false, Some(&endpoint));
+    client.initialize();
+    // One more than run at once, so the last call has to wait for a slot.
+    let ids: Vec<u64> = (1..=5).map(|n| 100 + n).collect();
+    for id in &ids {
+        client.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":"search","arguments":{"question":"authentication"}}}));
+    }
+    let mut responses = std::collections::HashMap::new();
+    while responses.len() < ids.len() {
+        let response = client
+            .output
+            .recv_timeout(Duration::from_secs(15))
+            .expect("MCP response timed out");
+        if let Some(id) = response["id"].as_u64() {
+            responses.insert(id, response);
+        }
+    }
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+    for id in &ids {
+        let response = &responses[id];
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        assert!(
+            body(response["result"]["content"][0]["text"].as_str().unwrap())
+                .starts_with("auth.rs:"),
+            "{response}"
+        );
+    }
+    assert!(
+        most.load(Ordering::SeqCst) > 1,
+        "searches ran one at a time"
+    );
+}
+
+/// A mock provider that holds every request for 300 ms, so searches sent
+/// together overlap. Returns its endpoint, the most requests it held at once,
+/// the flag that stops it, and its thread.
+fn slow_provider() -> (
+    String,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread::JoinHandle<()>,
+) {
     use std::{
         io::Read,
         net::TcpListener,
@@ -676,9 +725,6 @@ fn parallel_searches_all_run_instead_of_one_being_turned_away() {
         },
         time::Instant,
     };
-    // Agents send several searches in one turn. Each must get results, and
-    // their Jev requests must overlap rather than queue behind one another.
-    let root = fixture();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -738,39 +784,7 @@ fn parallel_searches_all_run_instead_of_one_being_turned_away() {
             handler.join().unwrap();
         }
     });
-    let mut client = Client::start(root.path(), false, Some(&endpoint));
-    client.initialize();
-    // One more than run at once, so the last call has to wait for a slot.
-    let ids: Vec<u64> = (1..=5).map(|n| 100 + n).collect();
-    for id in &ids {
-        client.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
-            "params":{"name":"search","arguments":{"question":"authentication"}}}));
-    }
-    let mut responses = std::collections::HashMap::new();
-    while responses.len() < ids.len() {
-        let response = client
-            .output
-            .recv_timeout(Duration::from_secs(15))
-            .expect("MCP response timed out");
-        if let Some(id) = response["id"].as_u64() {
-            responses.insert(id, response);
-        }
-    }
-    done.store(true, Ordering::Release);
-    server.join().unwrap();
-    for id in &ids {
-        let response = &responses[id];
-        assert_eq!(response["result"]["isError"], false, "{response}");
-        assert!(
-            body(response["result"]["content"][0]["text"].as_str().unwrap())
-                .starts_with("auth.rs:"),
-            "{response}"
-        );
-    }
-    assert!(
-        most.load(Ordering::SeqCst) > 1,
-        "searches ran one at a time"
-    );
+    (endpoint, most, done, server)
 }
 
 fn search_with_counted_provider(
@@ -2521,4 +2535,59 @@ fn a_repeated_batch_listing_states_its_file_count_and_unused_sees_the_workspace(
         "{text}"
     );
     assert!(!text.contains("shorten_upload_name —"), "{text}");
+}
+
+#[test]
+fn searches_running_together_never_get_stubs() {
+    use std::sync::atomic::Ordering;
+    // Subagents share one server and not their context: an excerpt one of
+    // them saw must reach another in full, including the first search of a
+    // parallel group, which starts before the others arrive.
+    let root = tempfile::tempdir().unwrap();
+    let mut body_text = String::from("pub fn authenticate_session(token: &str) -> bool {\n");
+    for i in 0..20 {
+        body_text.push_str(&format!("    let step_{i} = check(token, {i});\n"));
+    }
+    body_text.push_str("    true\n}\n");
+    fs::write(root.path().join("auth.rs"), &body_text).unwrap();
+    let (endpoint, most, done, server) = slow_provider();
+    let mut client = Client::start(root.path(), false, Some(&endpoint));
+    client.initialize();
+    let question = json!({"question":"how is a session authenticated"});
+    let first = client.search(question.clone());
+    assert!(
+        first["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("step_19"),
+        "{first}"
+    );
+    let ids: Vec<u64> = (1..=3).map(|n| 200 + n).collect();
+    for id in &ids {
+        client.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":"search","arguments":question.clone()}}));
+    }
+    let mut responses = std::collections::HashMap::new();
+    while responses.len() < ids.len() {
+        let response = client
+            .output
+            .recv_timeout(Duration::from_secs(15))
+            .expect("MCP response timed out");
+        if let Some(id) = response["id"].as_u64() {
+            responses.insert(id, response);
+        }
+    }
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+    assert!(
+        most.load(Ordering::SeqCst) > 1,
+        "searches ran one at a time"
+    );
+    for id in &ids {
+        let text = responses[id]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(!text.contains("shown in an earlier answer"), "{id}: {text}");
+        assert!(text.contains("step_19"), "{id}: {text}");
+    }
 }
