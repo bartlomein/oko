@@ -437,6 +437,13 @@ const FILE_EXTENSIONS: &[&str] = &[
     "swift", "scala", "json", "md", "yml", "yaml", "toml", "html", "css", "scss", "vue", "svelte",
 ];
 
+/// A Rust `impl` block: the only Rust definition recorded as a class (structs,
+/// enums and traits are types).
+fn is_rust_impl(navigation: &NavigationIndex, reference: DefinitionRef) -> bool {
+    navigation.get(reference).kind == DefinitionKind::Class
+        && navigation.path(reference).ends_with(".rs")
+}
+
 /// Everything the question names that the index defines, as pins.
 pub fn floor(question: &str, navigation: &NavigationIndex, corpus: &[Chunk]) -> Floor {
     resolve(
@@ -481,6 +488,11 @@ fn resolve(
         let mut candidates = lookup(navigation, identifier);
         if candidates.is_empty() {
             continue;
+        }
+        // A Rust type with several `impl` blocks is one definition, not one
+        // per block: the struct, enum or trait is what its name means.
+        if candidates.iter().any(|r| !is_rust_impl(navigation, *r)) {
+            candidates.retain(|r| !is_rust_impl(navigation, *r));
         }
         let leaf = leaf_of(identifier);
         let hinted = |reference: &DefinitionRef| {
@@ -969,6 +981,18 @@ mod tests {
         let found = floor("where is `handle` defined", &index, &chunks);
         assert_eq!(found.pins[0].qualified, "handle");
         assert_eq!(found.pins[0].path, "src/server/base-server.ts");
+    }
+
+    #[test]
+    fn a_rust_type_with_many_impl_blocks_is_pinned_by_its_name() {
+        let source = "pub struct Searcher {\n    x: u8,\n}\n\nimpl Searcher {\n    pub fn new() -> Self { Self { x: 0 } }\n}\n\nimpl std::fmt::Display for Searcher {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) }\n}\n\nimpl std::fmt::Debug for Searcher {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) }\n}\n\nimpl From<u8> for Searcher {\n    fn from(x: u8) -> Self { Self { x } }\n}\n\nimpl Default for Searcher {\n    fn default() -> Self { Self { x: 0 } }\n}\n";
+        let (chunks, index) = corpus(&[("crates/searcher/src/searcher.rs", source)]);
+        let floor_ = floor("how does the Searcher struct work", &index, &chunks);
+        assert_eq!(floor_.pins.len(), 1, "{:?}", floor_.notes);
+        assert_eq!((floor_.pins[0].start_line, floor_.pins[0].end_line), (1, 3));
+        // Methods inside the impls are still found by their qualified names.
+        let floor_ = floor("Searcher.new constructor", &index, &chunks);
+        assert_eq!(floor_.pins[0].qualified, "Searcher.new");
     }
 
     #[test]
