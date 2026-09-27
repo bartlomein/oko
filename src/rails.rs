@@ -1,9 +1,9 @@
-//! Rails names a model in more ways than its constant. `belongs_to :upload`,
-//! `has_many :uploads`, `class_name: "Upload"` and `upload_id` all refer to
-//! `Upload`, by the rules ActiveRecord itself applies (`derive_class_name`:
-//! singularize then camelize; `derive_foreign_key`: `name_id`). A text scan
-//! for the constant misses every one of them, so a model's dependents list
-//! stops at the files that spell its name.
+//! Rails names a model in more ways than its constant. `belongs_to :upload`
+//! and `has_many :uploads` refer to `Upload` by the rules ActiveRecord itself
+//! applies (`derive_class_name`: singularize then camelize). A text scan for
+//! the constant misses them, so a model's dependents list would stop at the
+//! files that spell its name. (`class_name: "Upload"` spells it, so the plain
+//! scan already finds it.)
 
 use regex::Regex;
 use std::sync::OnceLock;
@@ -191,11 +191,11 @@ pub fn camelize(word: &str) -> String {
 
 /// The Ruby tokens that refer to the model `name` (a constant's leaf, such
 /// as `Upload` or `OptimizedImage`) without spelling it: association macros
-/// with the singular and plural names and `class_name:` with the constant.
-/// The foreign key (`upload_id`) is left out: it names a column in
-/// serializers, params and jobs far more often than a dependency.
+/// with the singular and plural names. The foreign key (`upload_id`) is left
+/// out: it names a column in serializers, params and jobs far more often
+/// than a dependency.
 pub struct Associations {
-    /// Lower-case substring every matching line contains, for the cheap
+    /// The underscored name every matching line contains, for the cheap
     /// prefilter over chunk text.
     pub needle: String,
     pub patterns: Vec<(AssociationRule, Regex)>,
@@ -209,7 +209,6 @@ pub fn associations(name: &str) -> Option<Associations> {
     let plural = pluralize(&singular);
     let escaped_singular = regex::escape(&singular);
     let escaped_plural = regex::escape(&plural);
-    let escaped_name = regex::escape(name);
     let patterns = vec![
         (
             AssociationRule {
@@ -229,15 +228,6 @@ pub fn associations(name: &str) -> Option<Associations> {
             ))
             .ok()?,
         ),
-        (
-            AssociationRule {
-                label: "class_name:",
-            },
-            Regex::new(&format!(
-                r#"\bclass_name:\s*["'](?:::)?(?:\w+::)*{escaped_name}["']"#
-            ))
-            .ok()?,
-        ),
     ];
     Some(Associations {
         needle: singular,
@@ -248,7 +238,7 @@ pub fn associations(name: &str) -> Option<Associations> {
 impl Associations {
     /// The first rule a line satisfies.
     pub fn matches(&self, line: &str) -> Option<AssociationRule> {
-        if !line.to_ascii_lowercase().contains(&self.needle) {
+        if !line.contains(&self.needle) {
             return None;
         }
         self.patterns
@@ -296,11 +286,6 @@ mod tests {
                 "belongs_to / has_one",
             ),
             ("  has_many :uploads", "has_many / habtm"),
-            (
-                "belongs_to :image, class_name: \"Upload\", optional: true",
-                "class_name:",
-            ),
-            ("  belongs_to :avatar, class_name: 'Upload'", "class_name:"),
         ] {
             assert_eq!(upload.matches(line).map(|r| r.label), Some(label), "{line}");
         }

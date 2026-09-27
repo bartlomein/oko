@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// Rows shown before the rest is summarised as a count.
-pub const MAX_ROWS: usize = 40;
-pub const MAX_FILES: usize = 12;
+const MAX_ROWS: usize = 40;
+const MAX_FILES: usize = 12;
 const ROW_TEXT_BYTES: usize = 120;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -42,7 +42,6 @@ pub struct Use {
     /// The definition the line sits in, qualified, when the parser knows it.
     pub enclosing: Option<String>,
     pub text: String,
-    pub test: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -181,7 +180,7 @@ pub fn listing_can_stand_alone(question: &str) -> bool {
 /// The question asks for the definition or behaviour as well ("definition
 /// and callers", "implementation and usage"): the listing then accompanies
 /// the ranked code instead of replacing it.
-pub fn asks_for_code_too(question: &str) -> bool {
+fn asks_for_code_too(question: &str) -> bool {
     static CODE: OnceLock<Regex> = OnceLock::new();
     CODE.get_or_init(|| {
         Regex::new(r"(?i)\b(?:definitions?|implementations?|implemented|implement|how\b|what\b|why\b|logic|explain|body|source)\b")
@@ -351,7 +350,7 @@ fn trim_row(text: &str) -> String {
 }
 
 /// Every whole-word use of `pin`'s name across the snapshot, except the
-/// definition's own span.
+/// definition's own line.
 pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usages {
     let name = pin.name.as_str();
     let mut result = Usages {
@@ -367,9 +366,7 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
         let docs = !test && is_docs_path(path);
         let mut uses = Vec::new();
         for (number, text) in lines {
-            if *path == pin.path
-                && (pin.start_line..=pin.start_line.max(pin.start_line)).contains(number)
-            {
+            if *path == pin.path && *number == pin.start_line {
                 continue;
             }
             let Some(rule) = refers(path, text, name, associations.as_ref()) else {
@@ -408,7 +405,6 @@ pub fn usages(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> Usag
                     Some(rule) => format!("{}  [{}]", trim_row(text), rule.label),
                     None => trim_row(text),
                 },
-                test,
             });
         }
         if !uses.is_empty() {
@@ -451,7 +447,6 @@ pub struct DependentRow {
     pub line: usize,
     /// The enclosing definition, qualified; `None` at file top level.
     pub enclosing: Option<String>,
-    pub kind: UseKind,
     pub text: String,
     /// Uses inside this enclosing definition beyond the row shown.
     pub more: usize,
@@ -464,7 +459,6 @@ pub struct DependentRow {
 #[serde(rename_all = "camelCase")]
 pub struct DependentFile {
     pub path: String,
-    pub area: String,
     pub uses: usize,
     pub rows: Vec<DependentRow>,
 }
@@ -577,11 +571,6 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
                         DependentRow {
                             line: *number,
                             enclosing: enclosing.map(|d| d.qualified.clone()),
-                            kind: if rule.is_some() {
-                                UseKind::Reference
-                            } else {
-                                classify(path, text, name)
-                            },
                             text: {
                                 let mut row = trim_row(text);
                                 if row.len() > DEPENDENT_TEXT_BYTES {
@@ -618,13 +607,11 @@ pub fn dependents(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> 
         } else {
             result.files += 1;
             result.uses += count;
-            let area = area_of(path);
             by_area
-                .entry(area.clone())
+                .entry(area_of(path))
                 .or_default()
                 .push(DependentFile {
                     path: (*path).to_owned(),
-                    area,
                     uses: count,
                     rows: rows.into_values().collect(),
                 });
@@ -835,7 +822,6 @@ pub struct UsedBy {
 /// A summary is offered on its own only when this many files use the name.
 pub const USED_BY_MIN_FILES: usize = 4;
 const USED_BY_SHOWN: usize = 10;
-const ENUMERATE_FILES: usize = 40;
 
 pub fn used_by(pin: &Pin, corpus: &[Chunk]) -> UsedBy {
     let name = pin.name.as_str();
@@ -910,32 +896,6 @@ pub fn render_used_by(summary: &UsedBy) -> Option<String> {
     line.push_str(&summary.name);
     line.push_str("\" for every file with path:line and the enclosing definition.\n");
     Some(line)
-}
-
-/// `mode: enumerate`: every file that uses the name, one row each with the
-/// count and first line, up to 40, then a count of the rest.
-pub fn render_enumerate(summary: &UsedBy) -> String {
-    let mut out = format!(
-        "Files using {} — {} files, {} uses",
-        summary.qualified,
-        summary.files.len(),
-        summary.uses
-    );
-    if summary.test_files > 0 {
-        out.push_str(&format!(
-            "; {} test files ({} uses) hidden",
-            summary.test_files, summary.tests
-        ));
-    }
-    out.push('\n');
-    for (path, count, first) in summary.files.iter().take(ENUMERATE_FILES) {
-        out.push_str(&format!("  {path}:{first}\t{count}\n"));
-    }
-    let more = summary.files.len().saturating_sub(ENUMERATE_FILES);
-    if more > 0 {
-        out.push_str(&format!("  … {more} more files\n"));
-    }
-    out
 }
 
 /// The rendered usages answer.
@@ -1623,8 +1583,6 @@ mod tests {
             line.contains("; 1 test files. Ask \"who uses Upload\" for every file with path:line and the enclosing definition."),
             "{line}"
         );
-        let listing = render_enumerate(&summary);
-        assert!(listing.starts_with("Files using Upload — 5 files, 10 uses; 1 test files (2 uses) hidden\n  app/models/user0.rb:2\t2\n"), "{listing}");
         // Few users: no summary line.
         let (chunks, index) = corpus(&refs[..2]);
         let found = floor::floor("Upload model", &index, &chunks);
