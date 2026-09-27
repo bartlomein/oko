@@ -38,6 +38,24 @@ pub struct Pin {
 }
 
 impl Pin {
+    /// A definition pinned whole: its span's text as the chunk.
+    fn new(definition: &crate::navigation::Definition, path: &str, text: String) -> Self {
+        Pin {
+            name: definition.name.clone(),
+            qualified: definition.qualified.clone(),
+            path: path.to_owned(),
+            start_line: definition.start_line,
+            end_line: definition.end_line,
+            kind: definition.kind,
+            chunk: Chunk {
+                path: path.to_owned(),
+                start_line: definition.start_line,
+                end_line: definition.end_line,
+                text,
+                lexical_score: 0.0,
+            },
+        }
+    }
     pub fn is(&self, chunk: &Chunk) -> bool {
         chunk.path == self.path
             && chunk.start_line == self.start_line
@@ -562,21 +580,7 @@ fn resolve(
             continue;
         };
         seen.insert(key);
-        result.pins.push(Pin {
-            name: definition.name.clone(),
-            qualified: definition.qualified.clone(),
-            path: path.to_owned(),
-            start_line: definition.start_line,
-            end_line: definition.end_line,
-            kind: definition.kind,
-            chunk: Chunk {
-                path: path.to_owned(),
-                start_line: definition.start_line,
-                end_line: definition.end_line,
-                text,
-                lexical_score: 0.0,
-            },
-        });
+        result.pins.push(Pin::new(definition, path, text));
         let others: Vec<String> = candidates
             .iter()
             .skip(1)
@@ -612,21 +616,7 @@ pub fn pin_for(
     let path = navigation.path(reference);
     let lines = file_lines(corpus, path);
     let text = span_text(&lines, definition.start_line, definition.end_line)?;
-    Some(Pin {
-        name: definition.name.clone(),
-        qualified: definition.qualified.clone(),
-        path: path.to_owned(),
-        start_line: definition.start_line,
-        end_line: definition.end_line,
-        kind: definition.kind,
-        chunk: Chunk {
-            path: path.to_owned(),
-            start_line: definition.start_line,
-            end_line: definition.end_line,
-            text,
-            lexical_score: 0.0,
-        },
-    })
+    Some(Pin::new(definition, path, text))
 }
 
 /// For "who calls X" and "tests for X": the name may be a plain word
