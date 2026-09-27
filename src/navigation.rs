@@ -371,10 +371,8 @@ impl<'a> Definitions<'a> {
                 let is_class = node.kind() == "class_definition";
                 let kind = if is_class {
                     DefinitionKind::Class
-                } else if container.is_some() {
-                    DefinitionKind::Method
                 } else {
-                    DefinitionKind::Function
+                    callable(container)
                 };
                 let id = self.push(name, None, kind, container, span, !name.starts_with('_'));
                 if let Some(body) = node.child_by_field_name("body") {
@@ -409,11 +407,10 @@ impl<'a> Definitions<'a> {
                     .child_by_field_name("receiver")
                     .and_then(|list| list.named_child(0))
                     .and_then(|parameter| parameter.child_by_field_name("type"))
-                    .map(|mut ty| {
-                        while let Some(inner) = ty.child_by_field_name("type") {
-                            ty = inner;
-                        }
-                        self.text(ty).trim_start_matches('*').to_owned()
+                    .map(|ty| {
+                        self.text(innermost_type(ty))
+                            .trim_start_matches('*')
+                            .to_owned()
                     });
                 let qualified = receiver.map(|receiver| format!("{receiver}.{name}"));
                 self.push(
@@ -496,11 +493,7 @@ impl<'a> Definitions<'a> {
         match node.kind() {
             "function_item" | "function_signature_item" => {
                 if let Some(name) = self.name_of(node) {
-                    let kind = if container.is_some() {
-                        DefinitionKind::Method
-                    } else {
-                        DefinitionKind::Function
-                    };
+                    let kind = callable(container);
                     self.push(name, None, kind, container, node, public(node));
                 }
             }
@@ -520,12 +513,9 @@ impl<'a> Definitions<'a> {
             "impl_item" => {
                 // `impl<'a> Searcher<'a>` and `impl Matcher for Searcher` both
                 // define members of `Searcher`.
-                let name = node.child_by_field_name("type").map(|mut ty| {
-                    while let Some(inner) = ty.child_by_field_name("type") {
-                        ty = inner;
-                    }
-                    self.text(ty).to_owned()
-                });
+                let name = node
+                    .child_by_field_name("type")
+                    .map(|ty| self.text(innermost_type(ty)).to_owned());
                 if let Some(name) = name {
                     let id = self.push(&name, None, DefinitionKind::Class, None, node, true);
                     if let Some(body) = node.child_by_field_name("body") {
@@ -587,11 +577,7 @@ impl<'a> Definitions<'a> {
             }
             "method" | "singleton_method" => {
                 if let Some(name) = self.name_of(node) {
-                    let kind = if container.is_some() {
-                        DefinitionKind::Method
-                    } else {
-                        DefinitionKind::Function
-                    };
+                    let kind = callable(container);
                     self.push(name, None, kind, container, node, true);
                 }
             }
@@ -661,11 +647,7 @@ impl<'a> Definitions<'a> {
             }
             "function_declaration" => {
                 if let Some(name) = self.name_of(node) {
-                    let kind = if container.is_some() {
-                        DefinitionKind::Method
-                    } else {
-                        DefinitionKind::Function
-                    };
+                    let kind = callable(container);
                     let exported = exported(&words(node));
                     self.push(name, None, kind, container, node, exported);
                 }
@@ -772,11 +754,7 @@ impl<'a> Definitions<'a> {
             | "compact_constructor_declaration" => {
                 if let Some(name) = self.name_of(node) {
                     let exported = modifiers(node).contains(&"public") || in_interface(node);
-                    let kind = if container.is_some() {
-                        DefinitionKind::Method
-                    } else {
-                        DefinitionKind::Function
-                    };
+                    let kind = callable(container);
                     self.push(name, None, kind, container, node, exported);
                 }
             }
@@ -2205,6 +2183,24 @@ fn parse_config(text: &str) -> Option<ModuleConfig> {
         }
     }
     Some(config)
+}
+
+/// A function inside a type is its method; anywhere else it stands alone.
+fn callable(container: Option<usize>) -> DefinitionKind {
+    if container.is_some() {
+        DefinitionKind::Method
+    } else {
+        DefinitionKind::Function
+    }
+}
+
+/// The named type under wrappers: `*Context` in a Go receiver, the
+/// `Searcher` of `impl<'a> Searcher<'a>`.
+fn innermost_type(mut ty: Node<'_>) -> Node<'_> {
+    while let Some(inner) = ty.child_by_field_name("type") {
+        ty = inner;
+    }
+    ty
 }
 
 #[cfg(test)]
