@@ -14,7 +14,7 @@ Provide a JSON array of items:
 oko rank --input examples/items.json "Who needs a refund?" --json
 ```
 
-Files are limited to 1 MiB and 30 items. IDs must be unique, nonempty strings of
+Files are limited to 1 MiB and 60 items. IDs must be unique, nonempty strings of
 at most 200 UTF-16 code units (the existing JavaScript contract); text must be
 nonempty. `source` is optional. Unknown fields are discarded.
 

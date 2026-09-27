@@ -14,16 +14,16 @@ and matches English word forms using the Porter stemmer.
 
 Candidates use BM25 with `k1=1.2` and `b=0.75`: uncommon query words carry
 more weight, repeated words have diminishing returns, and document length is
-normalized. Two rankings select up to 100 local candidates each: content/path
+normalized. Two rankings select up to 120 local candidates each: content/path
 matches (`content + 0.3 * path`) and the same evidence boosted by function names.
 Reciprocal rank fusion (`k=60`) merges their positions into a shortlist of up to
-30 candidates. A bounded cross-file identifier hint favors referenced
+60 candidates. A bounded cross-file identifier hint favors referenced
 declarations; this is a lexical heuristic, not a resolved call graph.
 Identical source candidates are counted once. Final selection suppresses
 same-file excerpts overlapping at least half the shorter range, while distinct
 functions and the lightly overlapping windows of long functions remain eligible.
 There is no blanket penalty for additional matches from the same file.
-For normal implementation searches, up to 15 of the 30 slots are reserved for
+For normal implementation searches, up to 30 of the 60 slots are reserved for
 matching source candidates from the same ranking applied to supported code files.
 Remaining slots come from the broad ranking, with overlapping excerpts counted
 once. This prevents documentation from crowding out all implementations while
@@ -38,9 +38,10 @@ The last four slots go to short matching chunks (under 60 lines) that directly
 adjoin one of the five strongest candidates in the same file. A helper a few
 lines long has too few words to rank by itself, yet a question about its larger
 neighbour often needs it. A neighbour must match the question; adjacency only
-decides between otherwise weak candidates. On 169 replayed agent questions these
-two rules raised the share of expected locations reaching the shortlist from 76%
-to 89% without lowering it for any task.
+decides between otherwise weak candidates. On 169 replayed agent questions, when
+the shortlist held 30 candidates, these two rules raised the share of expected
+locations reaching the shortlist from 76% to 89% without lowering it for any
+task.
 Declaration hints cover common Rust, Python, JavaScript/TypeScript, Go, Java,
 C#, C/C++, Kotlin and Swift syntax. Other syntax and non-code files retain
 content/path search. No repository-specific paths or framework rules are used.
@@ -59,7 +60,7 @@ block, so nearby predicates and outcomes can survive the preview budget.
 This is an indentation-based context hint, not a language parser; multiline
 conditions and unsupported syntax use the existing preview selection.
 Preview selection itself adds no model requests. Each Jev request keeps the
-30-item, 32,000-byte budget. See the
+60-item, 32,000-byte budget. See the
 [rank-fusion audit](../benchmarks/rank-fusion.md) for offline results and limits;
 the [earlier shortlist audit](../benchmarks/shortlist.md) documents the prior design.
 
@@ -68,13 +69,18 @@ The earlier [BM25 validation](../benchmarks/bm25.md) scored 42/45 first-result h
 with medians of 1.35 s and 1.95 s respectively. These development results match
 the earlier agent comparison on this fixture, not general accuracy parity.
 
-Recognized Rust, JavaScript/TypeScript `function`, and Python `def` declarations
-start sections of up to 120 lines, keeping nearby comments with their functions.
-This is a declaration heuristic, not an AST parser. Longer sections are split;
-other syntax uses 40-line windows. Results preserve source text, relative paths,
-and inclusive 1-based line ranges.
+Files in a parsed language (Python, Go, Rust, Ruby, Java, Kotlin,
+JavaScript/TypeScript) are chunked along the definitions tree-sitter finds.
+Each top-level or member definition starts a section, pulled up over the
+comments, decorators and attributes above it. Sections under 20 lines merge with
+the next, and sections over 120 lines are split. Definitions nested in a
+function body do not start sections. A parsed file over 256 KiB (up to 1 MiB)
+keeps only its functions, methods and class headers. Other files, and parsed
+files with no definitions, use a declaration heuristic for sections of up to 120
+lines and 40-line windows elsewhere. Results preserve source text, relative
+paths, and inclusive 1-based line ranges.
 
-Normal `ask` sends the question and up to 30 shortlisted code chunks to TypeSafe
+Normal `ask` sends the question and up to 60 shortlisted code chunks to TypeSafe
 AI for an initial Jev request. Two more requests run at the same time, so they
 add no wait beyond the slowest of the three:
 
@@ -86,7 +92,7 @@ add no wait beyond the slowest of the three:
   nothing. These links are lexical, not parsed, and are built once per workspace
   snapshot. Jev judges them as connected code, because the implementation
   criteria exclude tests and callers by design.
-- **Further keyword matches.** The 30 candidates after the shortlist.
+- **Further keyword matches.** Up to 60 candidates after the shortlist.
 
 Neither can change what is shown. Excerpts, possible matches and the recovery
 request below are decided by the shortlist alone, and a slow or failed extra
@@ -95,7 +101,8 @@ list of other places an agent can open; a connected candidate's relevance is
 scaled by 0.4 there, since it was judged by different criteria. On
 [Agent Retrieval Bench](../scripts/benchmark-public/replay/arb.py) this raised
 the share of needed files among the first twenty ranked from 0.42 to 0.61
-without changing a single excerpt on 323 replayed agent questions.
+without changing a single excerpt on 323 replayed agent questions (measured when
+the shortlist and each request held 30 candidates).
 
 A question that asks for tests ("where are the tests for…", "which tests
 cover…") is judged by criteria that accept tests. A pasted failure log, a test
@@ -109,7 +116,7 @@ reuses the captured snapshot and prepared index; recovery does not rescan files.
 An identical-evidence retry is skipped. Genuine misses can still return nothing.
 Deep mode retains its existing investigation budget; generic `rank` is unchanged.
 
-It never sends the full repository: at most 90 chunks per search, in three
+It never sends the full repository: at most 150 chunks per search, in three
 requests. Each request is limited to 32,000 bytes before the model field is added. This is a byte budget, not a token count. Requests have
 a 10-second timeout; HTTP errors are not retried. MCP retrieval metadata (written
 to `OKO_METRICS_FILE`, not returned to the agent) includes
