@@ -2462,3 +2462,63 @@ fn a_question_answered_by_a_wide_listing_brings_one_excerpt_at_most() {
     );
     assert_eq!(response["metrics"]["retrieval"]["slimmedForListing"], 1);
 }
+
+#[test]
+fn a_repeated_batch_listing_states_its_file_count_and_unused_sees_the_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("app/models")).unwrap();
+    fs::create_dir_all(root.path().join("lib")).unwrap();
+    fs::write(
+        root.path().join("app/models/upload.rb"),
+        "class Upload < ActiveRecord::Base\n  def url\n    1\n  end\nend\n",
+    )
+    .unwrap();
+    // Fifteen files, each with two methods using Upload: 30 rows, 15 files.
+    for i in 0..15 {
+        fs::write(
+            root.path().join(format!("app/models/user{i}.rb")),
+            format!(
+                "class User{i}\n  def avatar\n    Upload.find({i})\n  end\n  def banner\n    Upload.last\n  end\nend\n"
+            ),
+        )
+        .unwrap();
+    }
+    // A helper in lib/ used only from app/.
+    fs::write(
+        root.path().join("lib/formatting.rb"),
+        "module Formatting\n  def self.shorten_upload_name(name)\n    name[0, 10]\n  end\nend\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("app/models/label.rb"),
+        "class Label\n  def text\n    Formatting.shorten_upload_name('x')\n  end\nend\n",
+    )
+    .unwrap();
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let batch = json!({"questions":["what depends on Upload", "how are labels rendered"]});
+    let first = client.search(batch.clone());
+    let first = body(first["result"]["content"][0]["text"].as_str().unwrap()).to_owned();
+    assert!(
+        first.contains("Q1: Files using Upload — 15 files"),
+        "{first}"
+    );
+    let second = client.search(batch);
+    let second = body(second["result"]["content"][0]["text"].as_str().unwrap()).to_owned();
+    assert!(
+        second.contains("Files using Upload: listed in an earlier answer (15 files)."),
+        "{second}"
+    );
+    // `mode: unused` in a batch scoped to lib/ counts uses from app/ too.
+    let response = client.search(json!({
+        "questions":["unused helpers", "formatting module"],
+        "mode":"unused",
+        "directory":"lib"
+    }));
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Unused in production code under lib"),
+        "{text}"
+    );
+    assert!(!text.contains("shorten_upload_name —"), "{text}");
+}

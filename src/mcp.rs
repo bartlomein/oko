@@ -371,6 +371,36 @@ impl OkoServer {
 
     /// An automatic listing or line, once per recent stretch of the session;
     /// always in full while another search runs at the same time.
+    /// Unused definitions under `directory`, their uses counted over the
+    /// whole workspace, and the directory prefix for rendering paths.
+    fn unused_in(
+        &self,
+        directory: &std::path::Path,
+        snapshot: &oko::search_cache::WorkspaceSnapshot,
+        symbols: &[String],
+    ) -> Result<(oko::usages::Unused, String)> {
+        let prefix = directory
+            .strip_prefix(&self.root)
+            .ok()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .filter(|p| !p.is_empty())
+            .map(|p| format!("{}/", p.trim_end_matches('/')))
+            .unwrap_or_default();
+        if prefix.is_empty() {
+            let summary =
+                oko::usages::unused(snapshot.navigation(), snapshot.chunks(), symbols, "");
+            return Ok((summary, prefix));
+        }
+        let whole = self
+            .cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Search cache worker failed. Restart the server."))?
+            .load(&self.root)?
+            .snapshot;
+        let summary = oko::usages::unused(whole.navigation(), whole.chunks(), symbols, &prefix);
+        Ok((summary, prefix))
+    }
+
     /// Keys go to `pending` and are recorded only when the answer is sent.
     fn once(&self, key: String, text: String, stub: String, pending: &mut Vec<String>) -> String {
         use std::sync::atomic::Ordering;
@@ -559,8 +589,8 @@ impl OkoServer {
                     .collect();
             }
             if input.mode == Some(Mode::Unused) {
-                let summary = oko::usages::unused(snapshot.navigation(), corpus, &symbols, "");
-                extra_notes.push(oko::usages::render_unused(&summary, &scope, ""));
+                let (summary, prefix) = self.unused_in(&directory, &snapshot, &symbols)?;
+                extra_notes.push(oko::usages::render_unused(&summary, &scope, &prefix));
             }
             (many.winners, None, Some(many.retrieval))
         } else {
@@ -608,40 +638,11 @@ impl OkoServer {
                 || (question.len() <= 120 && question.split_whitespace().count() <= 16);
             // Uses are counted over the whole workspace; only the candidates
             // come from the searched directory.
-            let unused_prefix = directory
-                .strip_prefix(&self.root)
-                .ok()
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .filter(|p| !p.is_empty())
-                .map(|p| format!("{}/", p.trim_end_matches('/')))
-                .unwrap_or_default();
-            let unused_summary = if asks_unused {
-                let prefix = unused_prefix.clone();
-                if prefix.is_empty() {
-                    Some(oko::usages::unused(
-                        snapshot.navigation(),
-                        corpus,
-                        &symbols,
-                        "",
-                    ))
-                } else {
-                    let whole = self
-                        .cache
-                        .lock()
-                        .map_err(|_| {
-                            anyhow::anyhow!("Search cache worker failed. Restart the server.")
-                        })?
-                        .load(&self.root)?
-                        .snapshot;
-                    Some(oko::usages::unused(
-                        whole.navigation(),
-                        whole.chunks(),
-                        &symbols,
-                        &prefix,
-                    ))
-                }
+            let (unused_summary, unused_prefix) = if asks_unused {
+                let (summary, prefix) = self.unused_in(&directory, &snapshot, &symbols)?;
+                (Some(summary), prefix)
             } else {
-                None
+                (None, String::new())
             };
             if let Some(summary) = unused_summary.as_ref().filter(|_| !unused_alone) {
                 accompanying = Some(oko::usages::render_unused(summary, &scope, &unused_prefix));
@@ -1112,7 +1113,7 @@ impl OkoServer {
         // answered by a listing. Decided first: a question whose listing spans
         // many files keeps one excerpt and no pinned definition, since the
         // listing rows already name each method and line.
-        let listings: Vec<Option<(oko::floor::Pin, String, bool, bool)>> = outcomes
+        let listings: Vec<Option<BatchListing>> = outcomes
             .iter()
             .map(|outcome| {
                 let callers = force_listing || oko::usages::asks_for_callers(&outcome.question);
@@ -1147,13 +1148,22 @@ impl OkoServer {
                 }
                 let listing = oko::usages::usages(&target, snapshot.navigation(), corpus);
                 let wide = listing.omitted_files > 0;
-                let text = if wide {
+                let (text, files) = if wide {
                     let all = oko::usages::dependents(&target, snapshot.navigation(), corpus);
-                    oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES)
+                    (
+                        oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES),
+                        all.files,
+                    )
                 } else {
-                    oko::usages::render_usages(&listing)
+                    (oko::usages::render_usages(&listing), listing.files())
                 };
-                Some((target, text, wide, callers))
+                Some(BatchListing {
+                    target,
+                    text,
+                    wide,
+                    callers,
+                    files,
+                })
             })
             .collect();
         // Round-robin: every question's best result before any question's
@@ -1163,11 +1173,12 @@ impl OkoServer {
         let mut tagged_pins: Vec<Vec<(search::Chunk, String)>> = Vec::new();
         for (index, outcome) in outcomes.iter().enumerate() {
             let tag = format!("Q{}", index + 1);
-            let slim = !listings[index].as_ref().is_some_and(|(pin, _, _, _)| {
-                oko::usages::names_more_than(&outcome.question, &pin.name)
-            }) && listings[index]
-                .as_ref()
-                .is_some_and(|(_, _, wide, _)| *wide);
+            // A many-file listing answers the question, unless it names
+            // something of its own besides the listed class.
+            let slim = listings[index].as_ref().is_some_and(|listing| {
+                listing.wide
+                    && !oko::usages::names_more_than(&outcome.question, &listing.target.name)
+            });
             many.slimmed += usize::from(slim);
             tagged_winners.push(
                 outcome
@@ -1210,9 +1221,15 @@ impl OkoServer {
         let mut noted: std::collections::HashSet<String> = std::collections::HashSet::new();
         for ((index, outcome), listing) in outcomes.into_iter().enumerate().zip(listings) {
             let tag = format!("Q{}", index + 1);
-            if let Some((target, text, _, callers)) = listing {
+            if let Some(BatchListing {
+                target,
+                text,
+                callers,
+                files,
+                ..
+            }) = listing
+            {
                 noted.insert(target.name.clone());
-                let files = text.lines().filter(|l| l.starts_with("  ")).count();
                 let key = format!("listing:{}", target.qualified);
                 // "Who uses X" asks for the listing: always whole. An impact
                 // question only gets it attached, so a repeat is a stub.
@@ -1290,6 +1307,17 @@ impl OkoServer {
         });
         Ok(many)
     }
+}
+
+/// The listing one question of a batch gets: who uses its target.
+struct BatchListing {
+    target: oko::floor::Pin,
+    text: String,
+    /// Many files: the dependents shape, and the question's excerpts slimmed.
+    wide: bool,
+    /// Asked for ("who uses X"): always whole, never a stub.
+    callers: bool,
+    files: usize,
 }
 
 /// One question's share of a several-question call.

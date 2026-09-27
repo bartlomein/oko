@@ -809,6 +809,15 @@ pub fn render_dependents_within(summary: &Dependents, budget: usize) -> String {
     out
 }
 
+impl Usages {
+    /// Files with at least one listed use: those shown plus those summarised.
+    pub fn files(&self) -> usize {
+        let shown: std::collections::HashSet<&str> =
+            self.shown.iter().map(|u| u.path.as_str()).collect();
+        shown.len() + self.omitted_files
+    }
+}
+
 /// Files that use a name, most first, with counts: the answer to "what
 /// depends on X" in one line, and the shape of `mode: enumerate`.
 #[derive(Clone, Debug, Default, Serialize)]
