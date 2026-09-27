@@ -1082,6 +1082,25 @@ pub fn tests_for(pin: &Pin, navigation: &NavigationIndex, corpus: &[Chunk]) -> V
             lines: mentions,
         });
     }
+    // A test file named after the definition's file tests it even when it
+    // never spells the name (`probe.test.ts` for `probe.ts`).
+    let mut paths: Vec<&str> = corpus.iter().map(|chunk| chunk.path.as_str()).collect();
+    paths.dedup();
+    for path in paths {
+        if path != pin.path
+            && !files.contains_key(path)
+            && search::is_test_path(path)
+            && named_after(path, file_stem, &pin.name)
+            && !matches.iter().any(|m: &TestMatch| m.path == path)
+        {
+            matches.push(TestMatch {
+                path: path.to_owned(),
+                confidence: "high",
+                how: "named after it",
+                lines: Vec::new(),
+            });
+        }
+    }
     matches.sort_by(|a, b| {
         (b.confidence == "high")
             .cmp(&(a.confidence == "high"))
@@ -1150,6 +1169,38 @@ mod tests {
             facts.push((*path, Arc::new(preparer.prepare(path, text))));
         }
         (chunks, NavigationIndex::new_shared(facts))
+    }
+
+    #[test]
+    fn a_test_file_named_after_the_source_counts_without_the_name() {
+        let (chunks, index) = corpus(&[
+            (
+                "src/probe.ts",
+                "export function inferRemoteSize(url: string): number {\n  return url.length;\n}\n",
+            ),
+            (
+                "src/probe.test.ts",
+                "import { size } from './probe';\nit('measures', () => expect(size('x')).toBe(1));\n",
+            ),
+            ("src/other.test.ts", "it('other', () => 1);\n"),
+        ]);
+        let pin = floor::pins_for_names(&["inferRemoteSize".into()], &index, &chunks)
+            .pins
+            .remove(0);
+        let tests = tests_for(&pin, &index, &chunks);
+        assert_eq!(
+            tests.len(),
+            1,
+            "{:?}",
+            tests.iter().map(|t| &t.path).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            (tests[0].path.as_str(), tests[0].confidence, tests[0].how),
+            ("src/probe.test.ts", "high", "named after it")
+        );
+        assert!(
+            render_tests(&pin, &tests).contains("  src/probe.test.ts — named after it, high\n")
+        );
     }
 
     #[test]
