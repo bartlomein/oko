@@ -510,6 +510,9 @@ fn healthcheck(exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<()> 
                 .arg(root)
                 .current_dir(root)
                 .env("OKO_RIPGREP", rg)
+                // The check needs the tool list only; indexing the project
+                // at startup would compete with it on a large repository.
+                .env("OKO_NO_PREWARM", "1")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -519,7 +522,8 @@ fn healthcheck(exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<()> 
             }
             let mut child = command.spawn().context("Cannot launch installed Oko")?;
             let transport = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
-            let result = tokio::time::timeout(Duration::from_secs(10), async {
+            // Generous: a cold start of a large binary on a busy machine.
+            let result = tokio::time::timeout(Duration::from_secs(30), async {
                 let service = ().serve(transport).await.context("MCP initialization failed")?;
                 let tools = service
                     .list_tools(None)
