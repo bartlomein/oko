@@ -1014,7 +1014,6 @@ fn relevance_response(request: &Value, score: impl Fn(&Value) -> f64) -> Value {
     json!({"answers":answers})
 }
 
-/// The answer after its coverage line (`Index: N of M files, ...`).
 /// The answer without its coverage line, which only a session's first
 /// answer (or a changed index) carries.
 fn body(text: &str) -> &str {
@@ -2255,9 +2254,10 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
     let response = client.search(json!({"question":"Upload model class definition"}));
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     assert!(!text.contains("is used by"), "{text}");
-    // mode: enumerate lists the files; mode: usages the lines.
+    // mode: enumerate lists the files; mode: usages the lines. Later in the
+    // session there is no coverage line, and no blank line above the listing.
     let response = client.search(json!({"symbols":"Upload","mode":"enumerate"}));
-    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
         text.starts_with("Files using Upload — 5 files, 10 uses in code; 1 test files (2 uses). One row per enclosing definition: path:line, definition, line. Complete for the indexed code: every line that names Upload or its Rails associations; not included: references built at runtime (reflection, `send`, names in strings).\napp/models (5 files)\n  app/models/thing0.rb:2\tThing0\tbelongs_to :file, class_name: 'Upload'\n  app/models/thing0.rb:3\tThing0.pick\tdef pick; Upload.find(1); end\n"),
         "{text}"

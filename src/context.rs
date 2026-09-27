@@ -13,10 +13,11 @@ use std::{
 };
 
 pub const PACKET_MAX_BYTES: usize = 16_000;
-// Five was measured on 169 replayed agent questions: Jev rarely accepts more
-// than three candidates, so coverage did not move, while keyword-ranked
-// responses grew by half. Further candidates are named by path instead.
 /// Excerpts one question may show; a several-question call gets more.
+/// Three, not five: on 169 replayed agent questions five did not move
+/// coverage (Jev rarely accepts more than three candidates) while
+/// keyword-ranked responses grew by half. Further candidates are named by
+/// path instead.
 pub const RESULT_LIMIT: usize = 3;
 const RELATED_LIMIT: usize = 2;
 const EXCERPT_LINES: usize = 60;

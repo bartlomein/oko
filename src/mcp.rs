@@ -90,9 +90,10 @@ enum Mode {
 
 /// Names per call in `symbols`.
 const MAX_SYMBOLS: usize = 12;
-/// A dependents listing inside a several-question answer keeps to this many
-/// bytes so the other questions keep their room.
-const BATCH_LISTING_BYTES: usize = 8_000;
+/// A dependents listing that shares an answer with ranked excerpts (beside an
+/// impact question's excerpts, or as one question of several) keeps to this
+/// many bytes so the excerpts keep their room.
+const SHARED_LISTING_BYTES: usize = 8_000;
 /// Questions per call in `questions`.
 const MAX_QUESTIONS: usize = 8;
 /// Each question beyond the first earns the response this much more room,
@@ -119,7 +120,7 @@ struct SearchInput {
     /// file using it (both need a name). unused: definitions in the directory
     /// nothing uses.
     mode: Option<Mode>,
-    /// 2-8 independent questions answered in one call, ranked in parallel;
+    /// Up to 8 independent questions answered in one call, ranked in parallel;
     /// each excerpt is labelled Q1, Q2... The first question leads.
     questions: Option<Vec<String>>,
     /// Subdirectory of the workspace to search. Defaults to the root.
@@ -140,9 +141,10 @@ struct SearchInput {
 /// citable one-line stub instead of the same source again. The server cannot
 /// tell a subagent from its parent, nor see context compaction, so a repeat is
 /// only stubbed while the earlier answer is recent (within `SEEN_WINDOW_BYTES`
-/// of later output), only for long excerpts, and never on an explicit request
+/// of later output), only for long excerpts, never on an explicit request
 /// (`symbols`, `mode`, a callers listing): asking by name always returns the
-/// full text.
+/// full text, and never in a search that overlapped another (see `Flight`),
+/// since parallel calls often come from different subagents.
 #[derive(Default)]
 struct Memory {
     /// Bytes of answers sent so far.
@@ -415,7 +417,9 @@ impl OkoServer {
         let whole = self
             .cache
             .lock()
-            .map_err(|_| anyhow::anyhow!("Search cache worker failed. Restart the server."))?
+            .map_err(|_| {
+                anyhow::anyhow!("Search cache worker failed. Restart the server and retry.")
+            })?
             .load(&self.root)?
             .snapshot;
         let summary = oko::usages::unused(whole.navigation(), whole.chunks(), symbols, &prefix);
@@ -485,10 +489,9 @@ impl OkoServer {
         // An unfinished startup preparation holds this lock; waiting for it is
         // never slower than repeating its work.
         let wait_started = Instant::now();
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Search cache worker failed. Restart the server."))?;
+        let mut cache = self.cache.lock().map_err(|_| {
+            anyhow::anyhow!("Search cache worker failed. Restart the server and retry.")
+        })?;
         let cache_wait_ms = wait_started.elapsed().as_millis() as u64;
         let workspace = cache.load(&directory)?;
         drop(cache);
@@ -758,7 +761,7 @@ impl OkoServer {
                         >= oko::usages::USED_BY_MIN_FILES
                 {
                     let all = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
-                    let text = oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES);
+                    let text = oko::usages::render_dependents_within(&all, SHARED_LISTING_BYTES);
                     slim_single = !oko::usages::names_more_than(question, &pin.name);
                     accompanying.push(self.once(
                         &flight,
@@ -921,8 +924,11 @@ impl OkoServer {
             };
             notes.push_str(&line);
         }
+        // A blank line between blocks, not above the first.
         for text in accompanying.iter().chain(direct.iter()) {
-            notes.push('\n');
+            if !notes.is_empty() {
+                notes.push('\n');
+            }
             notes.push_str(text);
         }
         let shown_question = prefix(question, 512);
@@ -1105,7 +1111,7 @@ impl OkoServer {
                     &target,
                     snapshot.navigation(),
                     corpus,
-                    BATCH_LISTING_BYTES,
+                    SHARED_LISTING_BYTES,
                 );
                 Some(BatchListing {
                     target,

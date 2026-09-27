@@ -1555,7 +1555,7 @@ pub struct DefinitionRef {
 /// What the index holds, for the coverage line of an answer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IndexCoverage {
-    /// Parsed files by extension, most first.
+    /// Parsed files by extension, in extension order.
     pub extensions: std::collections::BTreeMap<String, usize>,
     /// Files of a supported language that parsed (fully or with errors).
     pub parsed_files: usize,
