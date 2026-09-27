@@ -1276,6 +1276,7 @@ pub fn build_packet_for_questions(
     )
 }
 
+#[cfg(test)]
 pub fn build_packet_with_pins(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
@@ -1297,6 +1298,7 @@ pub fn build_packet_with_pins(
 /// As `build_packet_with_navigation`, offering candidates rated just below the
 /// relevance cutoff for slots the accepted winners leave free. They appear only
 /// while the packet is small, and are labelled as possible matches.
+#[cfg(test)]
 pub fn build_packet_with_runners_up(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
@@ -2170,11 +2172,6 @@ mod tests {
         );
         assert!(text.contains("300\t}\n"), "{text}");
 
-        let pin = corpus
-            .iter()
-            .filter(|c| c.path == "server.ts")
-            .fold(None::<Chunk>, |_, _| None);
-        assert!(pin.is_none());
         let class_lines = class.trim_end().to_owned();
         let pinned = (
             Chunk {

@@ -5,7 +5,6 @@
 //! Prints one JSON line: files, parsed files, definitions by kind, cold
 //! preparation time and the snapshot size on disk. Ignored by default because
 //! it needs a repository to point at.
-use oko::navigation::DefinitionKind;
 use oko::search_cache::WorkspaceCache;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -22,22 +21,14 @@ fn index_stats() {
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     let mut partial_definitions = 0;
     let mut with_container = 0;
-    for chunk_path in loaded
-        .snapshot
-        .chunks()
-        .iter()
-        .map(|chunk| chunk.path.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-    {
-        for definition in navigation.definitions(chunk_path) {
-            *kinds
-                .entry(format!("{:?}", definition.kind).to_lowercase())
-                .or_default() += 1;
-            partial_definitions += usize::from(!definition.complete);
-            with_container += usize::from(definition.container.is_some());
-        }
+    // Every parsed file, including big files kept without chunks.
+    for (_, definition) in navigation.all_definitions() {
+        *kinds
+            .entry(format!("{:?}", definition.kind).to_lowercase())
+            .or_default() += 1;
+        partial_definitions += usize::from(!definition.complete);
+        with_container += usize::from(definition.container.is_some());
     }
-    let _ = DefinitionKind::Function;
     let snapshot_bytes = std::fs::read_dir(disk.path())
         .unwrap()
         .flatten()

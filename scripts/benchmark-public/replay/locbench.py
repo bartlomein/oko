@@ -18,9 +18,7 @@ Everything lands under benchmarks/results/locbench/, which Git ignores.
 import argparse
 import ast
 import hashlib
-import importlib.util
 import json
-import os
 import shutil
 import subprocess
 import sys
