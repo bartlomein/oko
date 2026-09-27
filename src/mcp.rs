@@ -321,14 +321,12 @@ impl OkoServer {
             .as_deref()
             .map(split_names)
             .unwrap_or_default();
-        let has_questions = input
-            .questions
-            .as_ref()
-            .is_some_and(|qs| qs.iter().any(|q| !q.trim().is_empty()));
+        // `normalize` has run: `questions` is absent or holds 2 to 8
+        // nonblank questions.
         if symbols.is_empty()
-            && !has_questions
+            && input.questions.is_none()
             && input.mode != Some(Mode::Unused)
-            && (question.trim().is_empty() || question.len() > 4096)
+            && question.trim().is_empty()
         {
             bail!("Question must contain 1–4096 bytes of nonblank text, or name symbols.");
         }
@@ -345,12 +343,6 @@ impl OkoServer {
             bail!("deep cannot be combined with symbols or mode.");
         }
         if let Some(questions) = &input.questions {
-            let count = questions.iter().filter(|q| !q.trim().is_empty()).count();
-            if !(2..=MAX_QUESTIONS).contains(&count) {
-                bail!(
-                    "questions takes 2 to {MAX_QUESTIONS} nonblank questions; use question for one."
-                );
-            }
             if questions.iter().any(|q| q.len() > 4096) {
                 bail!("Each question must contain at most 4096 bytes.");
             }
@@ -450,7 +442,7 @@ impl OkoServer {
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
         let flight = Flight::begin(&self.in_flight, &self.started);
         let started = Instant::now();
-        let (input, mut early_notes) = normalize(input);
+        let (input, early_notes) = normalize(input);
         let directory = self.directory(&input)?;
         let scope = input
             .directory
@@ -463,14 +455,7 @@ impl OkoServer {
             .as_deref()
             .map(split_names)
             .unwrap_or_default();
-        let questions: Vec<String> = input
-            .questions
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|q| q.trim().to_owned())
-            .filter(|q| !q.is_empty())
-            .collect();
+        let questions: Vec<String> = input.questions.clone().unwrap_or_default();
         // Names alone: the question for ranking, notes and metrics is the names.
         // Several questions: the first leads the notes and the floor.
         let question_text = input
@@ -479,11 +464,7 @@ impl OkoServer {
             .filter(|q| !q.trim().is_empty())
             .or_else(|| questions.first().cloned())
             .unwrap_or_else(|| symbols.join(" "));
-        let input = SearchInput {
-            question: Some(question_text),
-            ..input
-        };
-        let question = input.question.as_deref().expect("set above");
+        let question = question_text.as_str();
         // Credentials belong to the operator-selected root, never a model-selected subdirectory.
         let key = if self.no_jev {
             None
@@ -538,7 +519,7 @@ impl OkoServer {
         // Several questions: which question each winning chunk answers, and
         // notes about the ones that found nothing.
         let mut tagged: Vec<(search::Chunk, String)> = Vec::new();
-        let mut extra_notes: Vec<String> = std::mem::take(&mut early_notes);
+        let mut extra_notes: Vec<String> = early_notes;
         // The focused query fused into a long prompt's shortlist, for the metrics.
         let mut focused_terms: Option<Value> = None;
         let winners = if input.deep {
@@ -1009,7 +990,7 @@ impl OkoServer {
             + EXTRA_QUESTION_RESULTS * questions.len().saturating_sub(1))
         .min(MAX_MULTI_RESULTS);
         let mut winners = winners;
-        if slim_single && questions.is_empty() {
+        if slim_single {
             // The definition the question names stays; ranked extras go.
             winners.truncate(1);
             max_results = 1 + pins.len();
@@ -1381,8 +1362,6 @@ struct Many {
     sent: Vec<String>,
     retrieval: Value,
 }
-
-impl OkoServer {}
 
 /// `Index: 6,375 of 6,600 files (225 skipped: 15 over size, 210 unreadable),
 /// 3,047 parsed for symbols (ts, js), watched · skipped: app-render.tsx (289 KiB)`.
