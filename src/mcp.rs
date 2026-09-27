@@ -522,6 +522,8 @@ impl OkoServer {
         // notes about the ones that found nothing.
         let mut tagged: Vec<(search::Chunk, String)> = Vec::new();
         let mut extra_notes: Vec<String> = early_notes;
+        // Definitions a batch question already lists in full or as a stub.
+        let mut listed_in_batch: Vec<String> = Vec::new();
         // The focused query fused into a long prompt's shortlist, for the metrics.
         let mut focused_terms: Option<Value> = None;
         let winners = if input.deep {
@@ -583,6 +585,7 @@ impl OkoServer {
             tagged = many.tagged;
             extra_notes.extend(many.notes);
             pending.extend(many.sent);
+            listed_in_batch = many.listed;
             // `symbols` beside several questions: those definitions too, whole.
             if !symbols.is_empty() {
                 let named = oko::floor::pins_for_names(&symbols, snapshot.navigation(), corpus);
@@ -906,6 +909,7 @@ impl OkoServer {
         if direct.is_none()
             && accompanying.is_empty()
             && let Some(pin) = floor.as_ref().and_then(|found| found.pins.first())
+            && !listed_in_batch.contains(&pin.qualified)
             && let Some(line) = oko::usages::used_by_line(pin, corpus)
         {
             // Asked for by name: the line is part of the answer, not a repeat.
@@ -1180,6 +1184,7 @@ impl OkoServer {
             }) = listing
             {
                 noted.insert(target.name.clone());
+                many.listed.push(target.qualified.clone());
                 let key = format!("listing:{}", target.qualified);
                 // "Who uses X" asks for the listing: always whole. An impact
                 // question only gets it attached, so a repeat is a stub.
@@ -1294,6 +1299,9 @@ struct Many {
     slimmed: usize,
     /// Listing and line keys shown in this answer, committed when it is sent.
     sent: Vec<String>,
+    /// Definitions (qualified) whose listing or listing stub this answer
+    /// carries: their one-line summary would repeat it.
+    listed: Vec<String>,
     retrieval: Value,
 }
 

@@ -2273,13 +2273,21 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
         "{text}"
     );
     // In a batch, a callers question gets its listing, as single questions
-    // do. The one-line summary is absent only because this session already
-    // had it: a fresh session's batch carries both (known, not yet changed).
-    let response =
-        client.search(json!({"questions":["Upload model definition","who uses Upload"]}));
+    // do, and the listing replaces the one-line summary for that definition.
+    // A fresh session, so the line is absent because of the listing.
+    let mut fresh = Client::start(root.path(), true, None);
+    fresh.initialize();
+    let response = fresh.search(json!({"questions":["Upload model definition","who uses Upload"]}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
     assert!(!text.contains("is used by"), "{text}");
     assert!(text.contains("Q2: Callers of Upload — "), "{text}");
+    // A listing for another definition leaves the line in place.
+    let mut fresh = Client::start(root.path(), true, None);
+    fresh.initialize();
+    let response = fresh.search(json!({"questions":["Upload model definition","who uses Thing0"]}));
+    let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
+    assert!(text.contains("`Upload` is used by 5 files"), "{text}");
+    assert!(text.contains("Q2: "), "{text}");
     // mode: unused needs no name and lists what nothing uses.
     let response = client.search(json!({"mode":"unused","question":"dead code"}));
     let text = body(response["result"]["content"][0]["text"].as_str().unwrap());
