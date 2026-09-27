@@ -148,6 +148,24 @@ fn patterns() -> &'static Patterns {
     })
 }
 /// A conventional test location or file name; a naming hint, not a parse.
+/// A chunk's lines with their file line numbers, or `None` when its text
+/// does not match its line range (a malformed or partial chunk).
+pub fn chunk_lines(chunk: &Chunk) -> Option<impl Iterator<Item = (usize, &str)>> {
+    if chunk.start_line == 0
+        || chunk.end_line < chunk.start_line
+        || chunk.text.split('\n').count() != chunk.end_line - chunk.start_line + 1
+    {
+        return None;
+    }
+    Some(
+        chunk
+            .text
+            .split('\n')
+            .enumerate()
+            .map(move |(offset, text)| (chunk.start_line + offset, text)),
+    )
+}
+
 pub fn is_test_path(path: &str) -> bool {
     patterns().test_path.is_match(path)
 }
@@ -1531,6 +1549,23 @@ fn read_workspace_paths_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_lines_rejects_chunks_whose_text_does_not_match_their_range() {
+        let chunk = |start, end, text: &str| Chunk {
+            path: "a.rs".into(),
+            start_line: start,
+            end_line: end,
+            text: text.into(),
+            lexical_score: 0.0,
+        };
+        let good = chunk(3, 4, "a\nb");
+        let lines: Vec<_> = chunk_lines(&good).unwrap().collect();
+        assert_eq!(lines, [(3, "a"), (4, "b")]);
+        assert!(chunk_lines(&chunk(0, 1, "a\nb")).is_none());
+        assert!(chunk_lines(&chunk(5, 2, "a")).is_none());
+        assert!(chunk_lines(&chunk(1, 3, "a\nb")).is_none());
+    }
 
     #[test]
     fn jvm_test_files_are_test_paths_by_stem() {

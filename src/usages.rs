@@ -203,15 +203,15 @@ fn lines_by_path<'a>(
         .collect();
     let mut files: BTreeMap<&str, BTreeMap<usize, &str>> = BTreeMap::new();
     for chunk in corpus {
-        if !mentioning.contains(chunk.path.as_str())
-            || chunk.start_line == 0
-            || chunk.text.split('\n').count() != chunk.end_line - chunk.start_line + 1
-        {
+        if !mentioning.contains(chunk.path.as_str()) {
             continue;
         }
+        let Some(chunk_lines) = search::chunk_lines(chunk) else {
+            continue;
+        };
         let lines = files.entry(chunk.path.as_str()).or_default();
-        for (offset, text) in chunk.text.split('\n').enumerate() {
-            lines.entry(chunk.start_line + offset).or_insert(text);
+        for (number, text) in chunk_lines {
+            lines.entry(number).or_insert(text);
         }
     }
     files
@@ -1792,13 +1792,13 @@ pub fn unused(
     // One pass over the code: where each candidate name occurs, capped.
     let mut occurrences: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
     for chunk in corpus {
-        if is_docs_path(&chunk.path)
-            || chunk.start_line == 0
-            || chunk.text.split('\n').count() != chunk.end_line - chunk.start_line + 1
-        {
+        if is_docs_path(&chunk.path) {
             continue;
         }
-        for (offset, line) in chunk.text.split('\n').enumerate() {
+        let Some(lines) = search::chunk_lines(chunk) else {
+            continue;
+        };
+        for (number, line) in lines {
             if is_comment(&chunk.path, line) {
                 continue;
             }
@@ -1809,7 +1809,7 @@ pub fn unused(
                 if let Some(name) = names.get(word) {
                     let seen = occurrences.entry(name).or_default();
                     if seen.len() < USE_CAP {
-                        seen.push((chunk.path.as_str(), chunk.start_line + offset));
+                        seen.push((chunk.path.as_str(), number));
                     }
                 }
             }

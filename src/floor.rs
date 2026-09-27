@@ -821,13 +821,8 @@ fn path_hint(path: &str, name: &str, question: &str) -> bool {
 fn file_lines<'a>(corpus: &'a [Chunk], path: &str) -> BTreeMap<usize, &'a str> {
     let mut lines = BTreeMap::new();
     for chunk in corpus.iter().filter(|chunk| chunk.path == path) {
-        if chunk.start_line == 0
-            || chunk.text.split('\n').count() != chunk.end_line - chunk.start_line + 1
-        {
-            continue;
-        }
-        for (offset, text) in chunk.text.split('\n').enumerate() {
-            lines.entry(chunk.start_line + offset).or_insert(text);
+        for (number, text) in search::chunk_lines(chunk).into_iter().flatten() {
+            lines.entry(number).or_insert(text);
         }
     }
     lines
