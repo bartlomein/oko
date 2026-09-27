@@ -1153,6 +1153,314 @@ pub fn render_tests(pin: &Pin, matches: &[TestMatch]) -> String {
     out
 }
 
+/// A definition nothing else uses.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnusedDefinition {
+    pub name: String,
+    pub qualified: String,
+    pub path: String,
+    pub line: usize,
+    pub kind: DefinitionKind,
+    pub exported: bool,
+    /// Uses in test files only.
+    pub tests: usize,
+    /// Up to three of those uses, as evidence: `(path, line)`.
+    pub test_locations: Vec<(String, usize)>,
+}
+
+/// `mode: unused`: the definitions of the searched directory whose name
+/// appears nowhere in non-test code outside the definition itself.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Unused {
+    pub checked: usize,
+    /// Not exported: nothing in the repository uses them.
+    pub private: Vec<UnusedDefinition>,
+    /// Exported: nothing in this repository uses them; other repositories may.
+    pub exported: Vec<UnusedDefinition>,
+    /// Used by test files only.
+    pub tests_only: Vec<UnusedDefinition>,
+}
+
+/// Names a language runtime or framework calls without a reference in the
+/// repository, so their absence from the code means nothing.
+const ENTRY_POINTS: &[&str] = &[
+    "main",
+    "init",
+    "new",
+    "String",
+    "Error",
+    "ServeHTTP",
+    "MarshalJSON",
+    "UnmarshalJSON",
+    "MarshalText",
+    "UnmarshalText",
+    "Close",
+    "Read",
+    "Write",
+    "Len",
+    "Less",
+    "Swap",
+    "Reset",
+    "setUp",
+    "tearDown",
+    "setup",
+    "teardown",
+    "__init__",
+    "__str__",
+    "__repr__",
+    "__eq__",
+    "__hash__",
+    "__enter__",
+    "__exit__",
+    "__call__",
+    "__iter__",
+    "__next__",
+    "__len__",
+    "__getitem__",
+    "__setitem__",
+    "initialize",
+    "to_s",
+    "inspect",
+    "call",
+    "perform",
+    "fmt",
+    "drop",
+    "default",
+    "from",
+    "into",
+    "clone",
+    "eq",
+    "hash",
+    "deref",
+    "index",
+    "run",
+    "handle",
+    "toString",
+    "equals",
+    "hashCode",
+    "compareTo",
+    "invoke",
+    "apply",
+    "accept",
+    "get",
+    "set",
+];
+
+/// Occurrences of a name beyond this are not recorded: it is plainly used.
+const USE_CAP: usize = 96;
+const UNUSED_SHOWN: usize = 60;
+/// Exported names only tests use are a footnote: a library's public API
+/// looks like this, so a few rows and a count are enough.
+const EXPORTED_TESTS_ONLY_SHOWN: usize = 12;
+
+/// `prefix` limits the candidates to one directory (`app/models/`), with a
+/// trailing slash; uses are counted over the whole corpus given.
+pub fn unused(
+    navigation: &NavigationIndex,
+    corpus: &[Chunk],
+    only: &[String],
+    prefix: &str,
+) -> Unused {
+    let only: HashSet<&str> = only.iter().map(|n| crate::floor::leaf_of(n)).collect();
+    // Candidates: definitions in non-test code with a name worth checking.
+    let candidates: Vec<(&str, &crate::navigation::Definition)> = navigation
+        .all_definitions()
+        .filter(|(path, d)| {
+            path.starts_with(prefix)
+                && !search::is_test_path(path)
+                && d.name.len() >= 3
+                && !ENTRY_POINTS.contains(&d.name.as_str())
+                && !d.name.starts_with("Test")
+                && !d.name.starts_with("test_")
+                && (only.is_empty() || only.contains(d.name.as_str()))
+        })
+        .collect();
+    let names: HashSet<&str> = candidates.iter().map(|(_, d)| d.name.as_str()).collect();
+    // One pass over the code: where each candidate name occurs, capped.
+    let mut occurrences: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
+    for chunk in corpus {
+        if is_docs_path(&chunk.path) {
+            continue;
+        }
+        let Some(lines) = search::chunk_lines(chunk) else {
+            continue;
+        };
+        for (number, line) in lines {
+            if is_comment(&chunk.path, line) {
+                continue;
+            }
+            for word in line
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty() && !w.starts_with(|c: char| c.is_ascii_digit()))
+            {
+                if let Some(name) = names.get(word) {
+                    let seen = occurrences.entry(name).or_default();
+                    if seen.len() < USE_CAP {
+                        seen.push((chunk.path.as_str(), number));
+                    }
+                }
+            }
+        }
+    }
+    let mut result = Unused {
+        checked: candidates.len(),
+        ..Unused::default()
+    };
+    for (path, d) in candidates {
+        let Some(seen) = occurrences.get(d.name.as_str()) else {
+            continue;
+        };
+        if seen.len() >= USE_CAP {
+            continue;
+        }
+        let mut seen = seen.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        let (mut code, mut tests) = (0, 0);
+        let mut test_locations = Vec::new();
+        for (at, line) in seen {
+            // The definition's own lines, including its doc comment, do not count.
+            if at == path && (d.start_line..=d.end_line).contains(&line) {
+                continue;
+            }
+            if search::is_test_path(at) {
+                tests += 1;
+                if test_locations.len() < 3 {
+                    test_locations.push((at.to_owned(), line));
+                }
+            } else {
+                code += 1;
+            }
+        }
+        if code > 0 {
+            continue;
+        }
+        let entry = UnusedDefinition {
+            name: d.name.clone(),
+            qualified: d.qualified.clone(),
+            path: path.to_owned(),
+            line: d.start_line,
+            kind: d.kind,
+            exported: d.exported(),
+            tests,
+            test_locations,
+        };
+        if tests > 0 {
+            result.tests_only.push(entry);
+        } else if d.exported() {
+            result.exported.push(entry);
+        } else {
+            result.private.push(entry);
+        }
+    }
+    for list in [&mut result.private, &mut result.exported] {
+        list.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
+    }
+    // A private name only tests use is dead in production; a public one is
+    // an API without internal callers, listed after.
+    result.tests_only.sort_by(|a, b| {
+        a.exported
+            .cmp(&b.exported)
+            .then(a.path.cmp(&b.path))
+            .then(a.line.cmp(&b.line))
+    });
+    result
+}
+
+fn kind_word(kind: DefinitionKind) -> &'static str {
+    match kind {
+        DefinitionKind::Function => "function",
+        DefinitionKind::Constant => "constant",
+        DefinitionKind::Type => "type",
+        DefinitionKind::Class => "class",
+        DefinitionKind::Method => "method",
+        DefinitionKind::Module => "module",
+    }
+}
+
+/// The unused answer, framed as a deletion candidate list: private names
+/// with no use anywhere, private names only tests use (dead in production,
+/// with the test locations as evidence), then exported names in the same
+/// two groups; each row `path:line<TAB>kind qualified — evidence`.
+pub fn render_unused(summary: &Unused, scope: &str, prefix: &str) -> String {
+    let (private_tests, exported_tests): (Vec<_>, Vec<_>) =
+        summary.tests_only.iter().partition(|d| !d.exported);
+    let private_total = summary.private.len() + private_tests.len();
+    let exported_total = summary.exported.len() + exported_tests.len();
+    let mut out = format!(
+        "Unused in production code under {scope} — {} of {} checked: {private_total} private, {exported_total} exported",
+        private_total + exported_total,
+        summary.checked
+    );
+    if !summary.tests_only.is_empty() {
+        out.push_str(&format!(
+            "; {} of them are used by tests only",
+            summary.tests_only.len()
+        ));
+    }
+    out.push_str(". A row is a deletion candidate with its evidence.\n");
+    let strip = |path: &str| path.strip_prefix(prefix).unwrap_or(path).to_owned();
+    let row = |out: &mut String, entry: &UnusedDefinition| {
+        out.push_str(&format!(
+            "  {}:{}\t{} {}",
+            strip(&entry.path),
+            entry.line,
+            kind_word(entry.kind),
+            entry.qualified
+        ));
+        if entry.tests > 0 {
+            let places: Vec<String> = entry
+                .test_locations
+                .iter()
+                .map(|(path, line)| format!("{}:{line}", strip(path)))
+                .collect();
+            out.push_str(&format!(" — tests only: {}", places.join(", ")));
+            if entry.tests > places.len() {
+                out.push_str(&format!(", +{} more", entry.tests - places.len()));
+            }
+        } else {
+            out.push_str(" — no reference anywhere in the workspace");
+        }
+        out.push('\n');
+    };
+    let mut shown = 0;
+    for (label, list, cap) in [
+        (
+            "private, no use anywhere",
+            summary.private.iter().collect::<Vec<_>>(),
+            UNUSED_SHOWN,
+        ),
+        ("private, used by tests only", private_tests, UNUSED_SHOWN),
+        (
+            "exported, no use in this repository (other repositories may use them)",
+            summary.exported.iter().collect::<Vec<_>>(),
+            UNUSED_SHOWN,
+        ),
+        (
+            "exported, used by tests only",
+            exported_tests,
+            EXPORTED_TESTS_ONLY_SHOWN,
+        ),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("{label} ({}):\n", list.len()));
+        for (index, entry) in list.iter().enumerate() {
+            if shown >= UNUSED_SHOWN || index >= cap {
+                out.push_str(&format!("  … {} more\n", list.len() - index));
+                break;
+            }
+            shown += 1;
+            row(&mut out, entry);
+        }
+    }
+    out.push_str("Checked by name over the indexed code: a method that implements an interface, a name used through reflection, a route or a template, or a public API can look unused. Confirm before deleting.\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1735,312 +2043,4 @@ mod tests {
         ));
         assert!(!named_after("tests/test_basic.py", "app", "Flask"));
     }
-}
-
-/// A definition nothing else uses.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnusedDefinition {
-    pub name: String,
-    pub qualified: String,
-    pub path: String,
-    pub line: usize,
-    pub kind: DefinitionKind,
-    pub exported: bool,
-    /// Uses in test files only.
-    pub tests: usize,
-    /// Up to three of those uses, as evidence: `(path, line)`.
-    pub test_locations: Vec<(String, usize)>,
-}
-
-/// `mode: unused`: the definitions of the searched directory whose name
-/// appears nowhere in non-test code outside the definition itself.
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Unused {
-    pub checked: usize,
-    /// Not exported: nothing in the repository uses them.
-    pub private: Vec<UnusedDefinition>,
-    /// Exported: nothing in this repository uses them; other repositories may.
-    pub exported: Vec<UnusedDefinition>,
-    /// Used by test files only.
-    pub tests_only: Vec<UnusedDefinition>,
-}
-
-/// Names a language runtime or framework calls without a reference in the
-/// repository, so their absence from the code means nothing.
-const ENTRY_POINTS: &[&str] = &[
-    "main",
-    "init",
-    "new",
-    "String",
-    "Error",
-    "ServeHTTP",
-    "MarshalJSON",
-    "UnmarshalJSON",
-    "MarshalText",
-    "UnmarshalText",
-    "Close",
-    "Read",
-    "Write",
-    "Len",
-    "Less",
-    "Swap",
-    "Reset",
-    "setUp",
-    "tearDown",
-    "setup",
-    "teardown",
-    "__init__",
-    "__str__",
-    "__repr__",
-    "__eq__",
-    "__hash__",
-    "__enter__",
-    "__exit__",
-    "__call__",
-    "__iter__",
-    "__next__",
-    "__len__",
-    "__getitem__",
-    "__setitem__",
-    "initialize",
-    "to_s",
-    "inspect",
-    "call",
-    "perform",
-    "fmt",
-    "drop",
-    "default",
-    "from",
-    "into",
-    "clone",
-    "eq",
-    "hash",
-    "deref",
-    "index",
-    "run",
-    "handle",
-    "toString",
-    "equals",
-    "hashCode",
-    "compareTo",
-    "invoke",
-    "apply",
-    "accept",
-    "get",
-    "set",
-];
-
-/// Occurrences of a name beyond this are not recorded: it is plainly used.
-const USE_CAP: usize = 96;
-const UNUSED_SHOWN: usize = 60;
-/// Exported names only tests use are a footnote: a library's public API
-/// looks like this, so a few rows and a count are enough.
-const EXPORTED_TESTS_ONLY_SHOWN: usize = 12;
-
-/// `prefix` limits the candidates to one directory (`app/models/`), with a
-/// trailing slash; uses are counted over the whole corpus given.
-pub fn unused(
-    navigation: &NavigationIndex,
-    corpus: &[Chunk],
-    only: &[String],
-    prefix: &str,
-) -> Unused {
-    let only: HashSet<&str> = only.iter().map(|n| crate::floor::leaf_of(n)).collect();
-    // Candidates: definitions in non-test code with a name worth checking.
-    let candidates: Vec<(&str, &crate::navigation::Definition)> = navigation
-        .all_definitions()
-        .filter(|(path, d)| {
-            path.starts_with(prefix)
-                && !search::is_test_path(path)
-                && d.name.len() >= 3
-                && !ENTRY_POINTS.contains(&d.name.as_str())
-                && !d.name.starts_with("Test")
-                && !d.name.starts_with("test_")
-                && (only.is_empty() || only.contains(d.name.as_str()))
-        })
-        .collect();
-    let names: HashSet<&str> = candidates.iter().map(|(_, d)| d.name.as_str()).collect();
-    // One pass over the code: where each candidate name occurs, capped.
-    let mut occurrences: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
-    for chunk in corpus {
-        if is_docs_path(&chunk.path) {
-            continue;
-        }
-        let Some(lines) = search::chunk_lines(chunk) else {
-            continue;
-        };
-        for (number, line) in lines {
-            if is_comment(&chunk.path, line) {
-                continue;
-            }
-            for word in line
-                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .filter(|w| !w.is_empty() && !w.starts_with(|c: char| c.is_ascii_digit()))
-            {
-                if let Some(name) = names.get(word) {
-                    let seen = occurrences.entry(name).or_default();
-                    if seen.len() < USE_CAP {
-                        seen.push((chunk.path.as_str(), number));
-                    }
-                }
-            }
-        }
-    }
-    let mut result = Unused {
-        checked: candidates.len(),
-        ..Unused::default()
-    };
-    for (path, d) in candidates {
-        let Some(seen) = occurrences.get(d.name.as_str()) else {
-            continue;
-        };
-        if seen.len() >= USE_CAP {
-            continue;
-        }
-        let mut seen = seen.clone();
-        seen.sort_unstable();
-        seen.dedup();
-        let (mut code, mut tests) = (0, 0);
-        let mut test_locations = Vec::new();
-        for (at, line) in seen {
-            // The definition's own lines, including its doc comment, do not count.
-            if at == path && (d.start_line..=d.end_line).contains(&line) {
-                continue;
-            }
-            if search::is_test_path(at) {
-                tests += 1;
-                if test_locations.len() < 3 {
-                    test_locations.push((at.to_owned(), line));
-                }
-            } else {
-                code += 1;
-            }
-        }
-        if code > 0 {
-            continue;
-        }
-        let entry = UnusedDefinition {
-            name: d.name.clone(),
-            qualified: d.qualified.clone(),
-            path: path.to_owned(),
-            line: d.start_line,
-            kind: d.kind,
-            exported: d.exported(),
-            tests,
-            test_locations,
-        };
-        if tests > 0 {
-            result.tests_only.push(entry);
-        } else if d.exported() {
-            result.exported.push(entry);
-        } else {
-            result.private.push(entry);
-        }
-    }
-    for list in [&mut result.private, &mut result.exported] {
-        list.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
-    }
-    // A private name only tests use is dead in production; a public one is
-    // an API without internal callers, listed after.
-    result.tests_only.sort_by(|a, b| {
-        a.exported
-            .cmp(&b.exported)
-            .then(a.path.cmp(&b.path))
-            .then(a.line.cmp(&b.line))
-    });
-    result
-}
-
-fn kind_word(kind: DefinitionKind) -> &'static str {
-    match kind {
-        DefinitionKind::Function => "function",
-        DefinitionKind::Constant => "constant",
-        DefinitionKind::Type => "type",
-        DefinitionKind::Class => "class",
-        DefinitionKind::Method => "method",
-        DefinitionKind::Module => "module",
-    }
-}
-
-/// The unused answer, framed as a deletion candidate list: private names
-/// with no use anywhere, private names only tests use (dead in production,
-/// with the test locations as evidence), then exported names in the same
-/// two groups; each row `path:line<TAB>kind qualified — evidence`.
-pub fn render_unused(summary: &Unused, scope: &str, prefix: &str) -> String {
-    let (private_tests, exported_tests): (Vec<_>, Vec<_>) =
-        summary.tests_only.iter().partition(|d| !d.exported);
-    let private_total = summary.private.len() + private_tests.len();
-    let exported_total = summary.exported.len() + exported_tests.len();
-    let mut out = format!(
-        "Unused in production code under {scope} — {} of {} checked: {private_total} private, {exported_total} exported",
-        private_total + exported_total,
-        summary.checked
-    );
-    if !summary.tests_only.is_empty() {
-        out.push_str(&format!(
-            "; {} of them are used by tests only",
-            summary.tests_only.len()
-        ));
-    }
-    out.push_str(". A row is a deletion candidate with its evidence.\n");
-    let strip = |path: &str| path.strip_prefix(prefix).unwrap_or(path).to_owned();
-    let row = |out: &mut String, entry: &UnusedDefinition| {
-        out.push_str(&format!(
-            "  {}:{}\t{} {}",
-            strip(&entry.path),
-            entry.line,
-            kind_word(entry.kind),
-            entry.qualified
-        ));
-        if entry.tests > 0 {
-            let places: Vec<String> = entry
-                .test_locations
-                .iter()
-                .map(|(path, line)| format!("{}:{line}", strip(path)))
-                .collect();
-            out.push_str(&format!(" — tests only: {}", places.join(", ")));
-            if entry.tests > places.len() {
-                out.push_str(&format!(", +{} more", entry.tests - places.len()));
-            }
-        } else {
-            out.push_str(" — no reference anywhere in the workspace");
-        }
-        out.push('\n');
-    };
-    let mut shown = 0;
-    for (label, list, cap) in [
-        (
-            "private, no use anywhere",
-            summary.private.iter().collect::<Vec<_>>(),
-            UNUSED_SHOWN,
-        ),
-        ("private, used by tests only", private_tests, UNUSED_SHOWN),
-        (
-            "exported, no use in this repository (other repositories may use them)",
-            summary.exported.iter().collect::<Vec<_>>(),
-            UNUSED_SHOWN,
-        ),
-        (
-            "exported, used by tests only",
-            exported_tests,
-            EXPORTED_TESTS_ONLY_SHOWN,
-        ),
-    ] {
-        if list.is_empty() {
-            continue;
-        }
-        out.push_str(&format!("{label} ({}):\n", list.len()));
-        for (index, entry) in list.iter().enumerate() {
-            if shown >= UNUSED_SHOWN || index >= cap {
-                out.push_str(&format!("  … {} more\n", list.len() - index));
-                break;
-            }
-            shown += 1;
-            row(&mut out, entry);
-        }
-    }
-    out.push_str("Checked by name over the indexed code: a method that implements an interface, a name used through reflection, a route or a template, or a public API can look unused. Confirm before deleting.\n");
-    out
 }
