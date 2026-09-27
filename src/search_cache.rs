@@ -22,7 +22,7 @@ use std::{
 };
 
 // Bump whenever chunking, tokenization, symbol extraction, or ranking features change.
-const FORMAT_VERSION: u32 = 7;
+const FORMAT_VERSION: u32 = 8;
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -814,6 +814,65 @@ fn remove_stale_versions(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the parsers extract from one small file per language, pinned to
+    /// the cache format. A visitor or chunking change alters it: bump
+    /// `FORMAT_VERSION` so old caches are rebuilt, then update the digest.
+    #[test]
+    fn extracted_facts_are_pinned_to_the_cache_format() {
+        let samples = [
+            (
+                "a.py",
+                "class A:\n    def run(self):\n        return 1\n\nLIMIT = 3\n",
+            ),
+            (
+                "a.go",
+                "package a\n\nconst (\n\tX = 1\n\tY = 2\n)\n\nfunc (s *S) Run() {}\n",
+            ),
+            (
+                "a.rs",
+                "pub struct S;\nimpl S {\n    pub fn run(&self) {}\n}\npub const MAX: u8 = 1;\n",
+            ),
+            (
+                "a.rb",
+                "module M\n  class A\n    def run; end\n  end\nend\n",
+            ),
+            (
+                "A.java",
+                "public class A {\n  public static final int X = 1;\n  public void run() {}\n}\n",
+            ),
+            ("A.kt", "class A {\n    val x = 1\n    fun run() {}\n}\n"),
+            (
+                "a.ts",
+                "export function run(): number {\n  return 1;\n}\nexport class A {}\n",
+            ),
+        ];
+        let mut preparer = crate::navigation::NavigationPreparer::default();
+        let mut digest = Sha256::new();
+        for (path, text) in samples {
+            let facts = preparer.prepare(path, text);
+            digest.update(serde_json::to_vec(&facts.definitions).unwrap());
+            for chunk in crate::search::chunk_text(path, text) {
+                digest.update(format!(
+                    "{}:{}-{}\n",
+                    chunk.path, chunk.start_line, chunk.end_line
+                ));
+            }
+        }
+        let digest: String = digest
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            (FORMAT_VERSION, digest.as_str()),
+            (
+                8,
+                "260335f39ee130ca268fb5c79f9bb4e2ff271ad40efb6ac2778d0e7dfbf7329d"
+            ),
+            "extracted facts changed: bump FORMAT_VERSION, then update the pinned digest"
+        );
+    }
 
     fn fixture() -> (tempfile::TempDir, tempfile::TempDir, WorkspaceCache) {
         let root = tempfile::tempdir().unwrap();
