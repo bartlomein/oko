@@ -1046,10 +1046,11 @@ impl<'a> Collector<'a> {
             "property_identifier" | "private_property_identifier" | "identifier" => {
                 Some(self.text(name))
             }
-            "string" => string_value(self.text(name)).and_then(|value| {
-                let inner = &self.text(name)[1..1 + value.len()];
-                (inner == value).then_some(inner)
-            }),
+            // A plain quoted key: the text between the quotes, borrowed.
+            "string" => {
+                let text = self.text(name);
+                string_value(text).map(|_| &text[1..text.len() - 1])
+            }
             _ => None,
         }
     }
