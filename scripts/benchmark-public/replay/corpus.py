@@ -180,11 +180,7 @@ def run_repo(repo, workspace, rows, binary, live, timeout, progress, extra_env=N
     out = []
     cache_info = {}
     with tempfile.TemporaryDirectory(prefix='oko-corpus-cache-') as cache:
-        client = replay.profiler().Client(Path(binary), workspace, Path(cache), timeout, live=live,
-                                          api_key=replay.api_key() if live else None,
-                                          model=replay.JEV_MODEL if live else None, extra_env=extra_env)
-        try:
-            client.initialize()
+        with replay.oko_client(binary, workspace, cache, timeout, live, extra_env) as client:
             for index, call in enumerate(rows):
                 arguments = {'question': call['question']}
                 for key in ('intent', 'deep', 'directory'):
@@ -239,8 +235,6 @@ def run_repo(repo, workspace, rows, binary, live, timeout, progress, extra_env=N
                 row['wallMs'] = round(1000 * (time.monotonic() - started))
                 out.append(row)
                 progress(row)
-        finally:
-            client.close()
         cache_info['cacheBytes'] = du(cache)
     return out, cache_info
 
@@ -317,7 +311,7 @@ def main():
                 mark = row.get('error') or f"{row['firstLabel']} hits={len(row['identifierHits'])}/{len(row['identifiers'])} {row['textBytes']}B {row['okoMs']}ms"
                 print(f"  {row['idx']:>3} {mark}  {row['question'][:70]}", flush=True)
             repo_rows, cache = run_repo(repo, repos[repo], selected, args.binary, args.jev, args.timeout, progress,
-                                        extra_env=dict(item.split('=', 1) for item in args.env))
+                                        extra_env=replay.env_pairs(args.env))
             rows.extend(repo_rows)
             caches.append(cache)
     summary = {'label': args.label, 'jev': args.jev, 'binary': args.binary, 'skippedNoRepo': skipped,

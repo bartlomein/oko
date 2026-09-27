@@ -63,7 +63,6 @@ def main():
     parser.add_argument('--timeout', type=float, default=300)
     parser.add_argument('--env', action='append', default=[], help='KEY=VALUE passed to the Oko process')
     args = parser.parse_args()
-    module = replay.profiler()
     rows = []
     for directory in args.runs:
         for transcript in sorted(Path(directory).glob('run-*/transcript.json')):
@@ -73,20 +72,17 @@ def main():
             sizes, errors, seen_text = [], 0, ''
             started = time.monotonic()
             with tempfile.TemporaryDirectory(prefix='oko-transcripts-') as cache:
-                client = module.Client(Path(args.binary), corpus.DEFAULT_REPOS[args.repo], Path(cache), args.timeout,
-                                       live=False, api_key=None, model=None,
-                                       extra_env=dict(item.split('=', 1) for item in args.env))
-                client.initialize()
-                for arguments in calls:
-                    try:
-                        response = client.request('tools/call', {'name': 'search', 'arguments': arguments})
-                        text = ''.join(b.get('text', '') for b in response.get('content', []))
-                        errors += bool(response.get('isError'))
-                    except Exception as error:  # A failed call is a result, not a reason to stop.
-                        text, errors = f'ERROR {error}', errors + 1
-                    sizes.append(len(text))
-                    seen_text += text + '\n'
-                client.close()
+                with replay.oko_client(args.binary, corpus.DEFAULT_REPOS[args.repo], cache, args.timeout,
+                                       live=False, extra_env=replay.env_pairs(args.env)) as client:
+                    for arguments in calls:
+                        try:
+                            response = client.request('tools/call', {'name': 'search', 'arguments': arguments})
+                            text = ''.join(b.get('text', '') for b in response.get('content', []))
+                            errors += bool(response.get('isError'))
+                        except Exception as error:  # A failed call is a result, not a reason to stop.
+                            text, errors = f'ERROR {error}', errors + 1
+                        sizes.append(len(text))
+                        seen_text += text + '\n'
             row = {'transcript': str(transcript), 'calls': len(calls), 'bytes': sum(sizes), 'errors': errors,
                    'maxBytes': max(sizes), 'seconds': round(time.monotonic() - started, 1)}
             if args.gold:
@@ -94,7 +90,7 @@ def main():
             rows.append(row)
             print(f"  {transcript.parent.parent.parent.parent.name}/{transcript.parent.name}: {row['calls']} calls, "
                   f"{row['bytes'] // 1000} kB, max {row['maxBytes'] // 1000} kB, errors {errors}"
-                  + (f", gold {row['goldCited']}/19" if args.gold else ''), flush=True)
+                  + (f", gold {row['goldCited']}/{len(GOLD)}" if args.gold else ''), flush=True)
     total = sum(r['bytes'] for r in rows)
     summary = {'label': args.label, 'transcripts': len(rows), 'calls': sum(r['calls'] for r in rows),
                'kB': total // 1000, 'kBPerTranscript': round(total / max(1, len(rows)) / 1000, 1),

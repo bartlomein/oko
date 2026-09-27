@@ -207,18 +207,11 @@ def oko_regions(ranked, top_k, one_per_file=True):
 
 def run_oko(row, workspace, binary, live, timeout, intent, one_per_file):
     question = row['problem_statement'].encode()[:QUESTION_BYTES].decode(errors='ignore')
-    module = replay.profiler()
     with tempfile.TemporaryDirectory(prefix='oko-swex-cache-') as cache:
-        client = module.Client(Path(binary), workspace, Path(cache), timeout, live=live,
-                               api_key=replay.api_key() if live else None,
-                               model=replay.JEV_MODEL if live else None)
-        try:
-            client.initialize()
+        with replay.oko_client(binary, workspace, cache, timeout, live) as client:
             response = client.request('tools/call', {'name': 'search', 'arguments': {
                 'question': question, 'intent': intent}})
             packet = replay.packet_of(client, response)
-        finally:
-            client.close()
     ranked = oko_ranked(packet)
     return oko_regions(ranked, TOP_K, one_per_file), packet, ranked
 

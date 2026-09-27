@@ -20,7 +20,7 @@ import json
 import sys
 import tempfile
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -84,63 +84,58 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f'{args.label}-sessions-{"jev" if args.jev else "nojev"}-{time.strftime("%Y%m%d-%H%M%S")}.jsonl'
     rows = []
-    module = replay.profiler()
     by_repo = defaultdict(list)
     for repo, run in batches:
         by_repo[repo].append(run)
     with out.open('w') as handle:
         for repo in sorted(by_repo):
             with tempfile.TemporaryDirectory(prefix='oko-sessions-cache-') as cache:
-                client = module.Client(Path(args.binary), corpus.DEFAULT_REPOS[repo], Path(cache), args.timeout, live=args.jev,
-                                       api_key=replay.api_key() if args.jev else None,
-                                       model=replay.JEV_MODEL if args.jev else None,
-                                       extra_env=dict(item.split('=', 1) for item in args.env))
-                client.initialize()
-                client.request('tools/call', {'name': 'search', 'arguments': {'question': 'warm up'}})
-                for run in by_repo[repo]:
-                    questions = [c['question'] for c in run]
-                    arguments = {'questions': questions}
-                    if run[0].get('directory'):
-                        arguments['directory'] = run[0]['directory']
-                    if run[0].get('intent'):
-                        arguments['intent'] = run[0]['intent']
-                    sep_rows = [separate.get((c['session'], c['idx'])) for c in run]
-                    row = {'repo': repo, 'session': run[0]['session'], 'idxs': [c['idx'] for c in run], 'n': len(run)}
-                    started = time.monotonic()
-                    try:
-                        response = client.request('tools/call', {'name': 'search', 'arguments': arguments})
-                        packet = replay.packet_of(client, response)
-                        text = ''.join(b.get('text', '') for b in response.get('content', []))
-                        retrieval = packet.get('retrieval') or {}
-                        names = []
-                        for c in run:
-                            names.extend(n for n in corpus.identifiers(c['question']) if n not in names)
-                        hits = corpus.declaration_hits(packet, names)
-                        sep_hits = set()
-                        for r in sep_rows:
-                            if r and 'error' not in r:
-                                sep_hits.update(r.get('identifierHits') or [])
-                        row.update(
-                            error=bool(response.get('isError')),
-                            wallMs=round(1000 * (time.monotonic() - started)),
-                            okoMs=(packet.get('timings') or {}).get('totalMs'),
-                            textBytes=len(text),
-                            results=len(packet.get('results') or []),
-                            jevCalls=len(retrieval.get('jevCalls') or []),
-                            tags=sorted({r.get('tag') for r in packet.get('results') or [] if r.get('tag')}),
-                            emptyQuestions=sum(1 for q in retrieval.get('questions') or [] if q.get('results') == 0 and q.get('pins') == 0),
-                            batchHits=sorted(hits), separateHits=sorted(sep_hits),
-                            separateBytes=sum(r['textBytes'] for r in sep_rows if r and 'error' not in r),
-                            separateMs=sum((r.get('okoMs') or 0) for r in sep_rows if r and 'error' not in r),
-                            separateJevCalls=sum((r.get('jevCalls') or 0) for r in sep_rows if r and 'error' not in r),
-                            separateOk=sum(1 for r in sep_rows if r and 'error' not in r))
-                    except Exception as error:  # A failed batch is a result, not a reason to stop.
-                        row['error'] = f'{type(error).__name__}: {error}'[:300]
-                    rows.append(row)
-                    handle.write(json.dumps(row) + '\n')
-                    handle.flush()
-                    print(f"  {repo} n={row['n']} {row.get('error') or f'{row['textBytes']}B vs {row.get('separateBytes')}B, {row['okoMs']}ms vs {row.get('separateMs')}ms, jev {row['jevCalls']} vs {row.get('separateJevCalls')}, hits {len(row['batchHits'])}/{len(row['separateHits'])}'}", flush=True)
-                client.close()
+                with replay.oko_client(args.binary, corpus.DEFAULT_REPOS[repo], cache, args.timeout, args.jev,
+                                       replay.env_pairs(args.env)) as client:
+                    client.request('tools/call', {'name': 'search', 'arguments': {'question': 'warm up'}})
+                    for run in by_repo[repo]:
+                        questions = [c['question'] for c in run]
+                        arguments = {'questions': questions}
+                        if run[0].get('directory'):
+                            arguments['directory'] = run[0]['directory']
+                        if run[0].get('intent'):
+                            arguments['intent'] = run[0]['intent']
+                        sep_rows = [separate.get((c['session'], c['idx'])) for c in run]
+                        row = {'repo': repo, 'session': run[0]['session'], 'idxs': [c['idx'] for c in run], 'n': len(run)}
+                        started = time.monotonic()
+                        try:
+                            response = client.request('tools/call', {'name': 'search', 'arguments': arguments})
+                            packet = replay.packet_of(client, response)
+                            text = ''.join(b.get('text', '') for b in response.get('content', []))
+                            retrieval = packet.get('retrieval') or {}
+                            names = []
+                            for c in run:
+                                names.extend(n for n in corpus.identifiers(c['question']) if n not in names)
+                            hits = corpus.declaration_hits(packet, names)
+                            sep_hits = set()
+                            for r in sep_rows:
+                                if r and 'error' not in r:
+                                    sep_hits.update(r.get('identifierHits') or [])
+                            row.update(
+                                error=bool(response.get('isError')),
+                                wallMs=round(1000 * (time.monotonic() - started)),
+                                okoMs=(packet.get('timings') or {}).get('totalMs'),
+                                textBytes=len(text),
+                                results=len(packet.get('results') or []),
+                                jevCalls=len(retrieval.get('jevCalls') or []),
+                                tags=sorted({r.get('tag') for r in packet.get('results') or [] if r.get('tag')}),
+                                emptyQuestions=sum(1 for q in retrieval.get('questions') or [] if q.get('results') == 0 and q.get('pins') == 0),
+                                batchHits=sorted(hits), separateHits=sorted(sep_hits),
+                                separateBytes=sum(r['textBytes'] for r in sep_rows if r and 'error' not in r),
+                                separateMs=sum((r.get('okoMs') or 0) for r in sep_rows if r and 'error' not in r),
+                                separateJevCalls=sum((r.get('jevCalls') or 0) for r in sep_rows if r and 'error' not in r),
+                                separateOk=sum(1 for r in sep_rows if r and 'error' not in r))
+                        except Exception as error:  # A failed batch is a result, not a reason to stop.
+                            row['error'] = f'{type(error).__name__}: {error}'[:300]
+                        rows.append(row)
+                        handle.write(json.dumps(row) + '\n')
+                        handle.flush()
+                        print(f"  {repo} n={row['n']} {row.get('error') or f'{row['textBytes']}B vs {row.get('separateBytes')}B, {row['okoMs']}ms vs {row.get('separateMs')}ms, jev {row['jevCalls']} vs {row.get('separateJevCalls')}, hits {len(row['batchHits'])}/{len(row['separateHits'])}'}", flush=True)
     ok = [r for r in rows if not r.get('error') and r.get('separateOk') == r['n']]
     calls_saved = sum(r['n'] - 1 for r in rows if not r.get('error'))
     summary = {
@@ -154,7 +149,7 @@ def main():
         'separateHitsKept': sum(len(set(r['separateHits']) & set(r['batchHits'])) for r in ok),
         'batchOnlyHits': sum(len(set(r['batchHits']) - set(r['separateHits'])) for r in ok),
         'emptyQuestions': sum(r.get('emptyQuestions', 0) for r in ok),
-        'sizes': dict(sorted(__import__('collections').Counter(r['n'] for r in rows).items())),
+        'sizes': dict(sorted(Counter(r['n'] for r in rows).items())),
     }
     out.with_suffix('.summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print(json.dumps(summary, indent=2))

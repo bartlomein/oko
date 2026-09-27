@@ -157,7 +157,6 @@ def run(case, binary, live, timeout, extra_env=None):
     question = case['problem_statement'].encode()[:QUESTION_BYTES].decode(errors='ignore')
     row['questionTrimmed'] = len(question.encode()) < len(case['problem_statement'].encode())
     workspace = STATE / 'work' / case['instance_id']
-    module = replay.profiler()
     started = time.monotonic()
     try:
         checkout(case, workspace)
@@ -166,16 +165,10 @@ def run(case, binary, live, timeout, extra_env=None):
         row.update(targetFiles=len(files), targetFunctions=len(case['edit_functions']),
                    targetsResolved=len(targets))
         with tempfile.TemporaryDirectory(prefix='oko-locbench-cache-') as cache:
-            client = module.Client(Path(binary), workspace, Path(cache), timeout, live=live,
-                                   api_key=replay.api_key() if live else None,
-                                   model=replay.JEV_MODEL if live else None, extra_env=extra_env)
-            try:
-                client.initialize()
+            with replay.oko_client(binary, workspace, cache, timeout, live, extra_env) as client:
                 response = client.request('tools/call', {'name': 'search', 'arguments': {
                     'question': question, 'intent': 'implementation'}})
                 packet = replay.packet_of(client, response)
-            finally:
-                client.close()
         order, shown = ranked(packet)
         retrieval = packet.get('retrieval') or {}
         row.update(score(order, targets, files, len(case['edit_functions'])), ranking=packet.get('ranking'), shown=shown,
@@ -232,7 +225,7 @@ def main():
     rows = []
     with out.open('w') as handle:
         for index, case in enumerate(cases, 1):
-            row = run(case, args.binary, args.jev, args.timeout, extra_env=dict(item.split('=', 1) for item in args.env))
+            row = run(case, args.binary, args.jev, args.timeout, extra_env=replay.env_pairs(args.env))
             rows.append(row)
             handle.write(json.dumps(row) + '\n')
             handle.flush()
