@@ -2591,3 +2591,30 @@ fn searches_running_together_never_get_stubs() {
         assert!(text.contains("step_19"), "{id}: {text}");
     }
 }
+
+#[test]
+fn a_long_question_for_unused_code_and_callers_gets_both_listings() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("lib.rs"),
+        "pub fn parse_header(raw: &str) -> usize {\n    raw.len()\n}\n\nfn orphan_helper() -> u8 {\n    1\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("main.rs"),
+        "fn main() {\n    let n = parse_header(\"x\");\n    println!(\"{n}\");\n}\n",
+    )
+    .unwrap();
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    // Over 120 characters: both listings accompany the ranked code.
+    let question = "Before the cleanup PR I need two things from this crate: which helpers are never called anywhere, and every caller of parse_header with its line";
+    let response = client.search(json!({"question": question}));
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Unused in production code under the workspace"),
+        "{text}"
+    );
+    assert!(text.contains("orphan_helper"), "{text}");
+    assert!(text.contains("Callers of parse_header"), "{text}");
+}

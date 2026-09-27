@@ -527,7 +527,7 @@ impl OkoServer {
         // A usages listing answers the question by itself; no ranking runs.
         let mut direct: Option<String> = None;
         // A listing shown beside the ranked code, for mixed questions.
-        let mut accompanying: Option<String> = None;
+        let mut accompanying: Vec<String> = Vec::new();
         // A single question answered beside a many-file listing: the listing
         // rows carry the methods and lines, so one excerpt is enough.
         let mut slim_single = false;
@@ -673,7 +673,7 @@ impl OkoServer {
                 (None, String::new())
             };
             if let Some(summary) = unused_summary.as_ref().filter(|_| !unused_alone) {
-                accompanying = Some(oko::usages::render_unused(summary, &scope, &unused_prefix));
+                accompanying.push(oko::usages::render_unused(summary, &scope, &unused_prefix));
             }
             if let Some(summary) = unused_summary.filter(|_| unused_alone) {
                 direct = Some(oko::usages::render_unused(&summary, &scope, &unused_prefix));
@@ -775,12 +775,14 @@ impl OkoServer {
                     let (text, shape) = render(pin);
                     slim_single = shape.get("dependents").is_some()
                         && !oko::usages::names_more_than(question, &pin.name);
-                    accompanying = Some(text);
+                    // Asked for ("who calls X"): whole, and recorded as sent.
+                    pending.push(format!("listing:{}", pin.qualified));
+                    accompanying.push(text);
                 }
                 // An impact question ("what depends on Upload", "references to
                 // Upload") gets the dependents listing beside the ranked code.
                 // Or a central class named the Rails way ("use uploads").
-                let impact_target = if accompanying.is_none()
+                let impact_target = if accompanying.is_empty()
                     && target.is_none()
                     && !matches!(input.intent, Intent::Explanation)
                 {
@@ -799,7 +801,7 @@ impl OkoServer {
                     let all = oko::usages::dependents(&pin, snapshot.navigation(), corpus);
                     let text = oko::usages::render_dependents_within(&all, BATCH_LISTING_BYTES);
                     slim_single = !oko::usages::names_more_than(question, &pin.name);
-                    accompanying = Some(self.once(
+                    accompanying.push(self.once(
                         &flight,
                         format!("listing:{}", pin.qualified),
                         text,
@@ -963,7 +965,7 @@ impl OkoServer {
         // A widely used definition gets its dependents summarised in one line,
         // so "what depends on X" needs no second question.
         if direct.is_none()
-            && accompanying.is_none()
+            && accompanying.is_empty()
             && let Some(pin) = floor.as_ref().and_then(|found| found.pins.first())
             && matches!(
                 pin.kind,
@@ -990,7 +992,7 @@ impl OkoServer {
             };
             notes.push_str(&line);
         }
-        if let Some(text) = accompanying.as_ref().or(direct.as_ref()) {
+        for text in accompanying.iter().chain(direct.iter()) {
             notes.push('\n');
             notes.push_str(text);
         }
