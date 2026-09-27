@@ -204,19 +204,26 @@ impl Memory {
         (self.bytes, self.calls)
     }
     /// An automatic listing or line: the stub if it was sent recently, else
-    /// the text, remembered.
-    fn once(&mut self, key: String, text: String, stub: String) -> String {
+    /// the text, its key added to `pending` for when the answer is sent.
+    fn once(
+        &mut self,
+        key: String,
+        text: String,
+        stub: String,
+        pending: &mut Vec<String>,
+    ) -> String {
         self.expire();
         if self.recent(self.listings.get(&key)) {
             return stub;
         }
-        let now = self.now();
-        self.listings.insert(key, now);
+        pending.push(key);
         text
     }
-    fn remember(&mut self, key: String) {
-        let now = self.now();
-        self.listings.insert(key, now);
+    /// Record listings and lines as sent, once the answer carrying them is.
+    fn commit(&mut self, keys: Vec<String>, at: (usize, usize)) {
+        for key in keys {
+            self.listings.insert(key, at);
+        }
     }
 }
 
@@ -335,7 +342,7 @@ impl OkoServer {
 
     /// Whether the coverage line should be shown: the session's first, a
     /// changed index, one naming a skipped file, or after the memory window.
-    fn coverage_is_new(&self, line: &str) -> bool {
+    fn coverage_is_new(&self, line: &str, pending: &mut Vec<String>) -> bool {
         if line.contains(" · skipped:") {
             return true;
         }
@@ -347,25 +354,27 @@ impl OkoServer {
             return true;
         };
         memory.expire();
-        if memory.recent(memory.listings.get(&format!("coverage:{stable}"))) {
+        let key = format!("coverage:{stable}");
+        if memory.recent(memory.listings.get(&key)) {
             return false;
         }
-        memory.remember(format!("coverage:{stable}"));
+        pending.push(key);
         true
     }
 
     /// An automatic listing or line, once per recent stretch of the session;
     /// always in full while another search runs at the same time.
-    fn once(&self, key: String, text: String, stub: String) -> String {
+    /// Keys go to `pending` and are recorded only when the answer is sent.
+    fn once(&self, key: String, text: String, stub: String, pending: &mut Vec<String>) -> String {
         use std::sync::atomic::Ordering;
+        if self.in_flight.load(Ordering::SeqCst) > 1 {
+            pending.push(key);
+            return text;
+        }
         let Ok(mut memory) = self.memory.lock() else {
             return text;
         };
-        if self.in_flight.load(Ordering::SeqCst) > 1 {
-            memory.remember(key);
-            return text;
-        }
-        memory.once(key, text, stub)
+        memory.once(key, text, stub, pending)
     }
 
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
@@ -461,6 +470,9 @@ impl OkoServer {
         // rows carry the methods and lines, so one excerpt is enough.
         let mut slim_single = false;
         let mut symbols_missing: Vec<String> = Vec::new();
+        // Listings and lines shown in this answer, recorded as sent only when
+        // the answer is.
+        let mut pending: Vec<String> = Vec::new();
         // Several questions: which question each winning chunk answers, and
         // notes about the ones that found nothing.
         let mut tagged: Vec<(search::Chunk, String)> = Vec::new();
@@ -525,6 +537,7 @@ impl OkoServer {
             floor = Some(many.floor);
             tagged = many.tagged;
             extra_notes.extend(many.notes);
+            pending.extend(many.sent);
             // `symbols` beside several questions: those definitions too, whole.
             if !symbols.is_empty() {
                 let named = oko::floor::pins_for_names(&symbols, snapshot.navigation(), corpus);
@@ -757,12 +770,11 @@ impl OkoServer {
                         format!("listing:{}", pin.qualified),
                         text,
                         listing_stub(&pin.qualified, all.files),
+                        &mut pending,
                     ));
                 }
                 if let Some(pin) = target.as_ref().filter(|_| listing_only) {
-                    if let Ok(mut memory) = self.memory.lock() {
-                        memory.remember(format!("listing:{}", pin.qualified));
-                    }
+                    pending.push(format!("listing:{}", pin.qualified));
                     let (text, retrieval) = render(pin);
                     let retrieval = Some(retrieval);
                     direct = Some(text);
@@ -868,7 +880,7 @@ impl OkoServer {
         // names a skipped file the question mentions: the same line on every
         // answer is bytes the agent already has.
         let coverage = coverage_line(&snapshot, &workspace.timings, question);
-        let mut notes = if self.coverage_is_new(&coverage) {
+        let mut notes = if self.coverage_is_new(&coverage, &mut pending) {
             coverage + "\n"
         } else {
             String::new()
@@ -931,12 +943,15 @@ impl OkoServer {
         {
             // Asked for by name: the line is part of the answer, not a repeat.
             let line = if input.mode.is_some() || !symbols.is_empty() {
-                if let Ok(mut memory) = self.memory.lock() {
-                    memory.remember(format!("usedby:{}", pin.qualified));
-                }
+                pending.push(format!("usedby:{}", pin.qualified));
                 line
             } else {
-                self.once(format!("usedby:{}", pin.qualified), line, String::new())
+                self.once(
+                    format!("usedby:{}", pin.qualified),
+                    line,
+                    String::new(),
+                    &mut pending,
+                )
             };
             notes.push_str(&line);
         }
@@ -1001,6 +1016,7 @@ impl OkoServer {
             context_started,
             &self.memory,
             explicit,
+            pending,
         )
     }
 
@@ -1197,12 +1213,15 @@ impl OkoServer {
                 // "Who uses X" asks for the listing: always whole. An impact
                 // question only gets it attached, so a repeat is a stub.
                 let text = if callers {
-                    if let Ok(mut memory) = self.memory.lock() {
-                        memory.remember(key);
-                    }
+                    many.sent.push(key);
                     text
                 } else {
-                    self.once(key, text, listing_stub(&target.qualified, files))
+                    self.once(
+                        key,
+                        text,
+                        listing_stub(&target.qualified, files),
+                        &mut many.sent,
+                    )
                 };
                 many.notes.push(format!("{tag}: {text}"));
             }
@@ -1221,7 +1240,12 @@ impl OkoServer {
                 && let Some(line) = oko::usages::render_used_by(&oko::usages::used_by(pin, corpus))
             {
                 noted.insert(pin.name.clone());
-                let line = self.once(format!("usedby:{}", pin.qualified), line, String::new());
+                let line = self.once(
+                    format!("usedby:{}", pin.qualified),
+                    line,
+                    String::new(),
+                    &mut many.sent,
+                );
                 if !line.is_empty() {
                     many.notes.push(line.trim_end().to_owned());
                 }
@@ -1286,6 +1310,8 @@ struct Many {
     lexical_fallback: Option<&'static str>,
     /// Questions answered by a many-file listing, shown with one excerpt.
     slimmed: usize,
+    /// Listing and line keys shown in this answer, committed when it is sent.
+    sent: Vec<String>,
     retrieval: Value,
 }
 
@@ -1454,6 +1480,8 @@ fn packet_result(
     memory: &Mutex<Memory>,
     // Asked for by name or mode: never stubbed.
     explicit: bool,
+    // Listings and lines this answer carries, recorded once it is sent.
+    pending: Vec<String>,
 ) -> Result<CallToolResult> {
     let mut memory = memory
         .lock()
@@ -1497,6 +1525,7 @@ fn packet_result(
             for result in packet.results.iter().filter(|r| !r.seen) {
                 memory.excerpts.insert(Memory::key(&result.excerpt), at);
             }
+            memory.commit(pending, at);
             memory.bytes += size;
             memory.calls += 1;
             memory.last = Some(Instant::now());
@@ -1685,4 +1714,57 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             service.waiting().await?;
             Ok(())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_listing_counts_as_sent_only_once_its_answer_is() {
+        let mut memory = Memory::default();
+        let mut pending = Vec::new();
+        let first = memory.once(
+            "listing:Upload".into(),
+            "full".into(),
+            "stub".into(),
+            &mut pending,
+        );
+        assert_eq!(first, "full");
+        // The answer carrying it failed: nothing was committed, so the next
+        // answer sends the listing in full again.
+        let mut retry = Vec::new();
+        let again = memory.once(
+            "listing:Upload".into(),
+            "full".into(),
+            "stub".into(),
+            &mut retry,
+        );
+        assert_eq!(again, "full");
+        // Delivered: committed, and a repeat inside the window is a stub.
+        let at = memory.now();
+        memory.commit(retry, at);
+        let mut later = Vec::new();
+        let repeat = memory.once(
+            "listing:Upload".into(),
+            "full".into(),
+            "stub".into(),
+            &mut later,
+        );
+        assert_eq!(repeat, "stub");
+        assert!(later.is_empty());
+    }
+
+    #[test]
+    fn the_memory_window_expires_by_calls_and_bytes() {
+        let mut memory = Memory::default();
+        memory.commit(vec!["listing:X".into()], memory.now());
+        let sent = memory.listings.get("listing:X").copied();
+        assert!(memory.recent(sent.as_ref()));
+        memory.calls += SEEN_WINDOW_CALLS;
+        assert!(!memory.recent(sent.as_ref()));
+        memory.calls = 0;
+        memory.bytes += SEEN_WINDOW_BYTES + 1;
+        assert!(!memory.recent(sent.as_ref()));
+    }
 }
