@@ -176,6 +176,15 @@ const SEEN_IDLE: std::time::Duration = std::time::Duration::from_secs(600);
 /// Shorter excerpts are cheaper to repeat than to stub.
 const SEEN_MIN_LINES: usize = 12;
 
+/// The session memory, recovered if a panic poisoned its lock: it only
+/// decides whether to repeat text, so a stale view is never worse than
+/// failing the search.
+fn lock_memory(memory: &Mutex<Memory>) -> std::sync::MutexGuard<'_, Memory> {
+    memory
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl Memory {
     fn key(excerpt: &oko::context::SourceExcerpt) -> (String, usize, usize, u64) {
         use std::hash::{Hash, Hasher};
@@ -350,9 +359,7 @@ impl OkoServer {
             .replace(", watched", "")
             .replace(", rescanned", "")
             .replace(", built now", "");
-        let Ok(mut memory) = self.memory.lock() else {
-            return true;
-        };
+        let mut memory = lock_memory(&self.memory);
         memory.expire();
         let key = format!("coverage:{stable}");
         if memory.recent(memory.listings.get(&key)) {
@@ -371,10 +378,7 @@ impl OkoServer {
             pending.push(key);
             return text;
         }
-        let Ok(mut memory) = self.memory.lock() else {
-            return text;
-        };
-        memory.once(key, text, stub, pending)
+        lock_memory(&self.memory).once(key, text, stub, pending)
     }
 
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
@@ -1483,18 +1487,20 @@ fn packet_result(
     // Listings and lines this answer carries, recorded once it is sent.
     pending: Vec<String>,
 ) -> Result<CallToolResult> {
-    let mut memory = memory
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Search memory failed. Restart the server."))?;
-    memory.expire();
+    // The memory lock is held only to mark repeats and, below, to record
+    // what was sent; fitting, rendering and the metrics write run without it.
     let mut stubbed = 0;
-    if !explicit {
-        for result in &mut packet.results {
-            if result.excerpt.lines() >= SEEN_MIN_LINES
-                && memory.recent(memory.excerpts.get(&Memory::key(&result.excerpt)))
-            {
-                result.seen = true;
-                stubbed += 1;
+    {
+        let mut memory = lock_memory(memory);
+        memory.expire();
+        if !explicit {
+            for result in &mut packet.results {
+                if result.excerpt.lines() >= SEEN_MIN_LINES
+                    && memory.recent(memory.excerpts.get(&Memory::key(&result.excerpt)))
+                {
+                    result.seen = true;
+                    stubbed += 1;
+                }
             }
         }
     }
@@ -1520,15 +1526,18 @@ fn packet_result(
             metadata["timings"]["totalMs"] = json!(started.elapsed().as_millis() as u64);
             metadata["responseBytes"] = json!(size);
             metadata["responseLimitBytes"] = json!(limit);
-            metadata["seen"] = json!({"stubbed": stubbed, "sessionBytes": memory.bytes});
-            let at = memory.now();
-            for result in packet.results.iter().filter(|r| !r.seen) {
-                memory.excerpts.insert(Memory::key(&result.excerpt), at);
+            {
+                let mut memory = lock_memory(memory);
+                metadata["seen"] = json!({"stubbed": stubbed, "sessionBytes": memory.bytes});
+                let at = memory.now();
+                for result in packet.results.iter().filter(|r| !r.seen) {
+                    memory.excerpts.insert(Memory::key(&result.excerpt), at);
+                }
+                memory.commit(pending, at);
+                memory.bytes += size;
+                memory.calls += 1;
+                memory.last = Some(Instant::now());
             }
-            memory.commit(pending, at);
-            memory.bytes += size;
-            memory.calls += 1;
-            memory.last = Some(Instant::now());
             record_search(metadata, &packet);
             return Ok(result);
         }
@@ -1719,6 +1728,21 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_poisoned_memory_is_recovered_not_fatal() {
+        let memory = std::sync::Arc::new(Mutex::new(Memory::default()));
+        let clone = std::sync::Arc::clone(&memory);
+        let _ = std::thread::spawn(move || {
+            let _guard = clone.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(memory.is_poisoned());
+        let mut guard = lock_memory(&memory);
+        guard.calls += 1;
+        assert_eq!(guard.calls, 1);
+    }
 
     #[test]
     fn a_listing_counts_as_sent_only_once_its_answer_is() {
