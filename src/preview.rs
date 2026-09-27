@@ -52,12 +52,12 @@ fn contextual_previews(
     intent: RankingIntent,
     desired_bytes: usize,
 ) -> Result<Vec<RankItem>> {
-    for chunk in chunks.iter().take(ranking::max_items()) {
+    for chunk in chunks.iter().take(ranking::MAX_ITEMS) {
         validate_chunk(chunk)?;
     }
     let paths: HashSet<_> = chunks
         .iter()
-        .take(ranking::max_items())
+        .take(ranking::MAX_ITEMS)
         .map(|chunk| chunk.path.as_str())
         .collect();
     let mut by_path: HashMap<&str, Vec<&Chunk>> = HashMap::new();
@@ -68,7 +68,7 @@ fn contextual_previews(
     }
     let enriched: Vec<_> = chunks
         .iter()
-        .take(ranking::max_items())
+        .take(ranking::MAX_ITEMS)
         .map(|chunk| {
             let mut result = chunk.clone();
             if chunk.start_line <= 1
@@ -155,7 +155,7 @@ fn previews_with_budget(
     let mut stems = HashMap::new();
     let prepared = chunks
         .iter()
-        .take(ranking::max_items())
+        .take(ranking::MAX_ITEMS)
         .map(|chunk| PreparedPreview::new(chunk, &terms, &mut stems))
         .collect::<Result<Vec<_>>>()?;
     let items_at = |budget| {

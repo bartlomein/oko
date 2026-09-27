@@ -72,30 +72,15 @@ pub const CHUNK_OVERLAP: usize = 5;
 pub const FUNCTION_CHUNK_LINES: usize = 120;
 // 60 since 2026-09-25, with `ranking::MAX_ITEMS`; see the note there.
 pub const SHORTLIST_LIMIT: usize = 60;
-/// The shortlist size in effect: `SHORTLIST_LIMIT`, or `OKO_SHORTLIST_LIMIT`
-/// (30–120) for the request-budget experiment. Read once.
-pub fn shortlist_limit() -> usize {
-    static LIMIT: OnceLock<usize> = OnceLock::new();
-    *LIMIT.get_or_init(|| {
-        std::env::var("OKO_SHORTLIST_LIMIT")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .map_or(SHORTLIST_LIMIT, |n| n.clamp(SHORTLIST_LIMIT, 120))
-    })
-}
 pub const RESULT_LIMIT: usize = 5;
-// Retrieve broadly in memory, then keep the existing small Jev request.
-const RETRIEVAL_WINDOW: usize = 100;
-fn retrieval_window() -> usize {
-    RETRIEVAL_WINDOW.max(2 * shortlist_limit())
-}
+// Retrieve broadly in memory (twice the shortlist), then keep the bounded
+// Jev request.
+const RETRIEVAL_WINDOW: usize = 2 * SHORTLIST_LIMIT;
 const RRF_CONSTANT: f64 = 60.0;
 // Implementation searches protect half the bounded reranking request for
 // source matches. The other half remains available to the broad ranking so
 // prose and unsupported source formats can still supply useful evidence.
-fn implementation_source_slots() -> usize {
-    shortlist_limit() / 2
-}
+const IMPLEMENTATION_SOURCE_SLOTS: usize = SHORTLIST_LIMIT / 2;
 // A helper a few lines long has too few words to rank on its own, yet it is
 // often what a question about its larger neighbour also needs.
 const NEIGHBOR_SOURCES: usize = 5;
@@ -452,7 +437,7 @@ pub fn fuse_rankings(raw: Vec<Chunk>, focused: Vec<Chunk>) -> Vec<Chunk> {
     }
     let mut fused: Vec<(f64, usize, Chunk)> = score.into_values().collect();
     fused.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-    fused.truncate(shortlist_limit());
+    fused.truncate(SHORTLIST_LIMIT);
     fused.into_iter().map(|(_, _, chunk)| chunk).collect()
 }
 
@@ -756,7 +741,7 @@ fn lift_neighbors(selected: &mut Vec<Chunk>, candidates: &[Candidate<'_>]) {
     if neighbors.is_empty() {
         return;
     }
-    selected.truncate(shortlist_limit() - neighbors.len());
+    selected.truncate(SHORTLIST_LIMIT - neighbors.len());
     for (_, candidate) in neighbors {
         let mut chunk = candidate.chunk.clone();
         chunk.lexical_score = candidate.symbol_aware;
@@ -783,9 +768,9 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
                 .total_cmp(&score(&candidates[a]))
                 .then_with(|| compare_sources(candidates[a].chunk, candidates[b].chunk))
         };
-        if order.len() > retrieval_window() {
-            order.select_nth_unstable_by(retrieval_window(), compare);
-            order.truncate(retrieval_window());
+        if order.len() > RETRIEVAL_WINDOW {
+            order.select_nth_unstable_by(RETRIEVAL_WINDOW, compare);
+            order.truncate(RETRIEVAL_WINDOW);
         }
         order.sort_unstable_by(compare);
         for (rank, index) in order.into_iter().enumerate() {
@@ -798,7 +783,7 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
             .total_cmp(&a.fusion)
             .then_with(|| compare_sources(a.chunk, b.chunk))
     });
-    let mut ranked = Vec::with_capacity(shortlist_limit());
+    let mut ranked = Vec::with_capacity(SHORTLIST_LIMIT);
     for candidate in candidates {
         if ranked
             .iter()
@@ -812,7 +797,7 @@ fn fuse_candidates(mut candidates: Vec<Candidate<'_>>) -> Vec<Chunk> {
         // replacement for relevance values compared across filtered searches.
         selected.lexical_score = candidate.symbol_aware;
         ranked.push(selected);
-        if ranked.len() == shortlist_limit() {
+        if ranked.len() == SHORTLIST_LIMIT {
             break;
         }
     }
@@ -1204,7 +1189,7 @@ impl PreparedCorpus {
         let broad = fuse_candidates(candidates.clone());
         let mut selected: Vec<_> = source
             .into_iter()
-            .take(implementation_source_slots())
+            .take(IMPLEMENTATION_SOURCE_SLOTS)
             .collect();
         for candidate in broad {
             if !selected
@@ -1213,7 +1198,7 @@ impl PreparedCorpus {
             {
                 selected.push(candidate);
             }
-            if selected.len() == shortlist_limit() {
+            if selected.len() == SHORTLIST_LIMIT {
                 break;
             }
         }

@@ -854,7 +854,7 @@ pub fn pinned_shortlist(pins: &[Pin], shortlist: Vec<Chunk>) -> Vec<Chunk> {
             .into_iter()
             .filter(|chunk| !pins.iter().any(|pin| pin.is(chunk))),
     );
-    out.truncate(search::shortlist_limit().max(pins.len()));
+    out.truncate(search::SHORTLIST_LIMIT.max(pins.len()));
     out
 }
 

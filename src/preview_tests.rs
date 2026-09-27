@@ -331,12 +331,12 @@ fn small_sources_are_complete_and_limits_are_bounded() {
             .unwrap()
             .is_empty()
     );
-    let many = vec![source; crate::ranking::max_items() + 1];
+    let many = vec![source; crate::ranking::MAX_ITEMS + 1];
     assert_eq!(
         ranking_previews("", &many, RankingIntent::General)
             .unwrap()
             .len(),
-        crate::ranking::max_items()
+        crate::ranking::MAX_ITEMS
     );
 }
 
