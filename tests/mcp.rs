@@ -2296,6 +2296,86 @@ fn symbols_and_modes_answer_by_name_and_widely_used_names_get_a_dependents_line(
 }
 
 #[test]
+fn an_impact_listing_is_a_stub_when_repeated_and_whole_when_asked_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("app/models")).unwrap();
+    fs::write(
+        root.path().join("app/models/upload.rb"),
+        "class Upload < ActiveRecord::Base\n  def url\n    1\n  end\nend\n",
+    )
+    .unwrap();
+    for i in 0..6 {
+        fs::write(
+            root.path().join(format!("app/models/thing{i}.rb")),
+            format!("class Thing{i}\n  def pick; Upload.find(1); end\nend\n"),
+        )
+        .unwrap();
+    }
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let impact = json!({"question":"what depends on Upload"});
+    let first = client.search(impact.clone());
+    let first = first["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(first.contains("Files using Upload — 6 files"), "{first}");
+    // The same impact question again: one line naming the earlier answer.
+    let second = client.search(impact);
+    let second = second["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        second.contains("Files using Upload: listed in an earlier answer (6 files). Not repeated;"),
+        "{second}"
+    );
+    assert!(!second.contains("thing3.rb:2"), "{second}");
+    // Asked for by name, the listing is whole again.
+    let named = client.search(json!({"symbols":"Upload","mode":"enumerate"}));
+    let named = named["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(named.contains("app/models/thing3.rb:2\t"), "{named}");
+}
+
+#[test]
+fn more_than_eight_questions_with_symbols_and_mode_answer_the_first_eight() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("app/models")).unwrap();
+    fs::write(
+        root.path().join("app/models/upload.rb"),
+        "class Upload < ActiveRecord::Base\n  def url\n    1\n  end\nend\n",
+    )
+    .unwrap();
+    for i in 0..5 {
+        fs::write(
+            root.path().join(format!("app/models/thing{i}.rb")),
+            format!("class Thing{i}\n  def pick; Upload.find(1); end\nend\n"),
+        )
+        .unwrap();
+    }
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    let questions: Vec<String> = (1..=10)
+        .map(|i| format!("how does thing {i} pick an upload"))
+        .collect();
+    let response = client.search(json!({"questions":questions,"symbols":"Upload","mode":"usages"}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Answered the first 8 of 10 questions; send the rest in another call.\n"),
+        "{text}"
+    );
+    assert!(text.contains("Callers of Upload — "), "{text}");
+    assert_eq!(
+        response["metrics"]["retrieval"]["questions"]
+            .as_array()
+            .map(Vec::len),
+        Some(8),
+        "{response}"
+    );
+}
+
+#[test]
 fn several_questions_share_one_call_with_labelled_excerpts_and_one_set_of_side_requests() {
     let root = tempfile::tempdir().unwrap();
     for (name, body) in [

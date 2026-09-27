@@ -392,8 +392,6 @@ impl OkoServer {
         true
     }
 
-    /// An automatic listing or line, once per recent stretch of the session;
-    /// always in full while another search runs at the same time.
     /// Unused definitions under `directory`, their uses counted over the
     /// whole workspace, and the directory prefix for rendering paths.
     fn unused_in(
@@ -426,6 +424,7 @@ impl OkoServer {
         Ok((summary, prefix))
     }
 
+    /// An automatic listing or line, once per recent stretch of the session.
     /// Keys go to `pending` and are recorded only when the answer is sent.
     /// A search that overlapped another always gets the full text.
     fn once(
@@ -1750,6 +1749,81 @@ mod tests {
         let mut guard = lock_memory(&memory);
         guard.calls += 1;
         assert_eq!(guard.calls, 1);
+    }
+
+    fn input(value: serde_json::Value) -> SearchInput {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn question_shapes_become_the_call_they_meant() {
+        // `question` beside `questions` leads them; blanks are dropped.
+        let (merged, notes) = normalize(input(
+            json!({"question":" first ","questions":["second"," ","third"]}),
+        ));
+        assert_eq!(
+            merged.questions.as_deref(),
+            Some(&["first".to_owned(), "second".into(), "third".into()][..])
+        );
+        assert!(merged.question.is_none() && notes.is_empty());
+        // One question in `questions` is a plain question.
+        let (single, _) = normalize(input(json!({"questions":["only"]})));
+        assert_eq!(single.question.as_deref(), Some("only"));
+        assert!(single.questions.is_none());
+        // More than eight: the first eight, with a note; symbols and mode stay.
+        let many: Vec<String> = (1..=10).map(|i| format!("q{i}")).collect();
+        let (trimmed, notes) = normalize(input(
+            json!({"questions":many,"symbols":"Upload","mode":"usages"}),
+        ));
+        let kept = trimmed.questions.unwrap();
+        assert_eq!(kept.len(), MAX_QUESTIONS);
+        assert_eq!((kept[0].as_str(), kept[7].as_str()), ("q1", "q8"));
+        assert_eq!(
+            notes,
+            ["Answered the first 8 of 10 questions; send the rest in another call."]
+        );
+        assert_eq!(trimmed.symbols.as_deref(), Some("Upload"));
+        assert!(trimmed.mode.is_some());
+        // No `questions`: untouched.
+        let (plain, notes) = normalize(input(json!({"question":"where"})));
+        assert_eq!(plain.question.as_deref(), Some("where"));
+        assert!(plain.questions.is_none() && notes.is_empty());
+    }
+
+    #[test]
+    fn a_repeat_is_stubbed_only_inside_the_window() {
+        let sent_at = |memory: &mut Memory| {
+            let at = memory.now();
+            memory.commit(vec!["listing:Upload".into()], at);
+        };
+        let repeat = |memory: &mut Memory| {
+            memory.once(
+                "listing:Upload".into(),
+                "full".into(),
+                "stub".into(),
+                &mut Vec::new(),
+            )
+        };
+        // Calls: nine later answers still count as recent; the tenth does not.
+        let mut memory = Memory::default();
+        sent_at(&mut memory);
+        memory.calls += SEEN_WINDOW_CALLS - 1;
+        assert_eq!(repeat(&mut memory), "stub");
+        memory.calls += 1;
+        assert_eq!(repeat(&mut memory), "full");
+        // Bytes: up to the window's worth of later output, then the full text.
+        let mut memory = Memory::default();
+        sent_at(&mut memory);
+        memory.bytes += SEEN_WINDOW_BYTES;
+        assert_eq!(repeat(&mut memory), "stub");
+        memory.bytes += 1;
+        assert_eq!(repeat(&mut memory), "full");
+        // Idle: after a long pause everything is forgotten.
+        let mut memory = Memory::default();
+        sent_at(&mut memory);
+        memory.last = Instant::now().checked_sub(SEEN_IDLE + Duration::from_secs(1));
+        assert_eq!(repeat(&mut memory), "full");
+        assert!(memory.listings.is_empty());
     }
 
     #[test]

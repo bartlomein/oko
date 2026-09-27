@@ -1377,7 +1377,36 @@ mod tests {
         assert!(
             text.contains("  spec/models/upload_spec.rb:3\tRSpec.describe Upload do  (2 uses)\n"),
             "{text}"
+        ); // Past bare locations, whole areas are summarised in one line, and
+        // every file is either listed or counted there.
+        let tight = render_dependents_within(&summary, 1_800);
+        let summary_line = tight
+            .lines()
+            .find(|line| line.contains(" more files under "))
+            .unwrap_or_else(|| panic!("no summary line: {tight}"));
+        assert!(
+            summary_line.ends_with("; pass `directory` for one of them."),
+            "{tight}"
         );
+        let summarised: usize = summary_line
+            .trim_start_matches("… ")
+            .split(' ')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        let listed = (0..60)
+            .filter(|i| tight.contains(&format!("dependent_number_{i}.rb:3\n")))
+            .count();
+        assert!(summarised > 0 && listed > 0, "{tight}");
+        assert_eq!(summarised + listed, 60, "{tight}");
+        for area in 0..3 {
+            let area = format!("lib/area{area}");
+            assert!(
+                tight.contains(&format!("{area} (20 files)\n"))
+                    != summary_line.contains(&format!("{area} (20)")),
+                "{area} must be listed or summarised, not both: {tight}"
+            );
+        }
     }
 
     #[test]
