@@ -14,5 +14,17 @@
   "rmcp-macros-3.4.0": {
     "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/fd7811fdaa9fefa1c8034534b4d7a31c97204f89/LICENSE",
     "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a"
+  },
+  "tree-sitter-java-0.23.5": {
+    "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-java/94703d5a6bed02b98e438d7cad1136c01a60ba2c/LICENSE",
+    "sha256": "52ed137b039cd9c46409bc22e89938af911c95b157feae2d040b51e6084369a7"
+  },
+  "tree-sitter-kotlin-ng-1.1.0": {
+    "url": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-kotlin/77dd60ea0a9003ce062c9728a513ffe1aaff8c82/LICENSE",
+    "sha256": "0eea8dc45e89deeb03c7799bbbc7b4688f365fb274562f4540ecfebdea82e727"
+  },
+  "tree-sitter-ruby-0.23.1": {
+    "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/71bd32fb7607035768799732addba884a37a6210/LICENSE",
+    "sha256": "ee006f02a3d856df282e409be2a86e24a65bb573a98b9c28343771141351bb6b"
   }
 }

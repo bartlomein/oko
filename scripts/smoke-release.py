@@ -53,7 +53,10 @@ def mcp_search(binary, root, env):
                 "question": "where is archive checksum verification implemented?"}})
             assert not answer.get("isError"), answer
             assert "structuredContent" not in answer, answer
-            assert answer["content"][0]["text"].startswith("archive.rs:"), answer
+            text = answer["content"][0]["text"]
+            # A session's first answer opens with the index coverage line.
+            assert text.startswith("Index: "), answer
+            assert text.split("\n\n", 1)[1].startswith("archive.rs:"), answer
         finally:
             child.terminate()
             try:
