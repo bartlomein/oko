@@ -10,15 +10,14 @@ Oko helps Codex, Claude Code, and OpenCode spend less time searching and fewer
 tokens reading irrelevant code. It delivers relevant source snippets through
 MCP so your agent can get to the task sooner. Gains vary by task and coding tool.
 
-On [Agent Retrieval Bench](#retrieval-quality), a public benchmark of 345
-code-retrieval tasks in six languages, Oko puts a right file first more often
-than any published method (MRR 0.37 against 0.24) and finds as many of the
-needed files in its top 20 as the best embedding model, with no GPU and no
-index. On [Sense's own agent benchmark](#against-sense), run against Sense on
-the same day, Oko scored slightly higher at about 40% lower cost.
-In [our own agent benchmark](#agent-sessions), Codex, OpenCode, and Claude Code
-use 17–27% fewer tokens and 32–53% fewer tool calls with it; OpenCode and Claude
-Code also finish tasks 13–28% faster.
+| Benchmark | What it measures | Oko 0.6.0 |
+| --- | --- | --- |
+| [Sense's agent benchmark](#against-sense) | Claude Opus 4.7 on six multi-step tasks, run against Sense on the same day | Cited recall 0.91 against Sense's 0.88, at about 40% lower cost |
+| [Agent Retrieval Bench](#agent-retrieval-bench) | 345 code-retrieval tasks in six languages | Right file first more often than any published method (MRR 0.37 against 0.24); top-20 recall 0.70, level with the best embedding model |
+| [SWE-Explore](#swe-explore) | 848 real issues: the code that fixing agents needed | One search ranks the code about as well as agents that explore for many turns (nDCG 0.81, line precision 0.56) |
+| [Our agent sessions](#agent-sessions) | Codex, OpenCode and Claude Code on nine tasks, with and without Oko | 17–27% fewer tokens, 32–53% fewer tool calls; every task passed with Oko |
+
+Each benchmark's method and caveats are in [its section below](#benchmarks).
 
 Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
 source snippets. Use it through your coding agent or directly from your terminal.
@@ -170,7 +169,7 @@ To replace, check, or remove your saved key, use `oko auth login`,
 
 ## Benchmarks
 
-### Retrieval quality
+### Agent Retrieval Bench
 
 [Agent Retrieval Bench](https://arxiv.org/abs/2607.24882) has 345 tasks from 25
 repositories in six languages: given a repository and a signal from a coding
@@ -193,13 +192,33 @@ locally on the same tasks and reproduce the published figures.
 is a little lower than 0.5.0's, all of it on review-comment tasks, where the
 right file is still near the top but less often first.
 
-On [SWE-Explore](https://arxiv.org/abs/2606.07297), 848 real issues in ten
-languages, a single Oko call ranks the right code about as well as agents that
-explore for many turns (nDCG 0.81; line precision 0.56, between the published
-agents' 0.53 and 0.68), and finds a right file three to six times as often as
-the benchmark's TF-IDF and BM25. Per-task tables, the held-out split, what was
-tuned on what, and the limits are in
-[the details](docs/benchmark-results.md#agent-retrieval-bench).
+Per-task tables, the held-out split, what was tuned on what, and the limits
+are in [the details](docs/benchmark-results.md#agent-retrieval-bench).
+
+### SWE-Explore
+
+[SWE-Explore](https://arxiv.org/abs/2606.07297) has 848 real issues from
+SWE-bench Verified, Pro and Multilingual in ten languages. The answer is the
+code that successful agents read while fixing each issue; an explorer returns
+five ranked regions. The agent rows are the paper's published results; they
+explore for many turns with a frontier model, while Oko makes one search of
+about a second.
+
+| Method | Right file in top 5 | Line precision | Ranking (nDCG@500) |
+| --- | --- | --- | --- |
+| Claude Code (agent) | **0.67** | 0.60 | 0.94 |
+| Mini-SWE-Agent (agent) | 0.64 | 0.53 | 0.89 |
+| LocAgent (agent) | 0.54 | 0.64 | **0.95** |
+| CoSIL (agent) | 0.54 | 0.58 | 0.82 |
+| **Oko 0.6.0, one search** | 0.40 | 0.56 | 0.81 |
+| Oko 0.5.0, one search | 0.41 | 0.52 | 0.81 |
+| AutoCodeRover (agent) | 0.28 | **0.68** | 0.72 |
+| TF-IDF | 0.14 | 0.10 | 0.22 |
+| BM25 | 0.07 | 0.05 | 0.12 |
+
+On ranking and precision one Oko search sits among the agents; on finding every
+file an issue needs it does not, because five regions from one search cannot
+cover the 4.3 files an issue needs on average. [Details](docs/benchmark-results.md#swe-explore).
 
 ### Against Sense
 
