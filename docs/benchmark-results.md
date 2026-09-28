@@ -204,7 +204,10 @@ finished sessions only, 0.889 against 0.875; failed sessions as zero, 0.533
 against 0.525. It is a small lead. Sense states the relations between the
 found locations more exactly (1.00 against 0.93 on Discourse). One Sense
 session that failed cost $8.71 and lifts its total; without it Sense's cost is
-about $41. Oko was faster on all six tasks.
+about $41. Counting every session, Oko was faster on five of the six tasks;
+on Next.js one Oko session ran to the 720 s limit, making Oko's mean 275 s
+against Sense's 258 s. Sense was also slightly cheaper on Flask ($2.96
+against $3.05).
 
 In a paired run two days earlier, on an early development build of 0.6.0,
 Sense led cited recall 0.844 to 0.617; what closed the gap was the "who uses X" listing

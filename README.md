@@ -238,7 +238,8 @@ five runs per task each.
 The lead is small, and cited recall comes from one task (Discourse, 24
 locations) run five times; Sense states the relations between locations more
 exactly. Oko's lead holds however the failed sessions are counted, and Oko was
-faster on all six tasks. [Details](docs/benchmark-results.md#senses-agent-benchmark-against-sense).
+faster on five of the six tasks (not on Next.js, where one Oko session ran to
+the time limit). [Details](docs/benchmark-results.md#senses-agent-benchmark-against-sense).
 
 ### Agent sessions
 
