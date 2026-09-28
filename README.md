@@ -16,9 +16,9 @@ than any published method (MRR 0.37 against 0.24) and finds as many of the
 needed files in its top 20 as the best embedding model, with no GPU and no
 index. On [Sense's own agent benchmark](#against-sense), run against Sense on
 the same day, Oko scored slightly higher at about 40% lower cost.
-In [our own agent benchmark](#benchmarks), Codex, OpenCode, and Claude Code use
-13–44% fewer tokens and 33–61% fewer tool calls with it; OpenCode and Claude
-Code also finish tasks 21–23% faster.
+In [our own agent benchmark](#agent-sessions), Codex, OpenCode, and Claude Code
+use 17–27% fewer tokens and 32–53% fewer tool calls with it; OpenCode and Claude
+Code also finish tasks 13–28% faster.
 
 Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
 source snippets. Use it through your coding agent or directly from your terminal.
@@ -230,33 +230,35 @@ time, the agent's tokens, and tool calls. Nine tasks on pinned commits of
 and [ripgrep](https://github.com/BurntSushi/ripgrep): six ask for code spread over
 several places, three ask for a small edit checked by tests. The wording never
 names the file or function. Each task runs 3 times per setup with Codex, OpenCode,
-and Claude Code: **162 sessions**, measured on Oko 0.5.1.
+and Claude Code: **162 sessions**, measured on Oko 0.6.0.
 
 | Coding tool | | Without Oko | With Oko | Average | Best task |
 | --- | --- | --- | --- | --- | --- |
-| Codex | Time | 34.4 s | 34.6 s | **1% slower** | 45% faster |
-| | Tokens | 69,724 | 49,808 | **29% fewer** | 58% fewer |
-| | Tool calls | 3.1 | 2.1 | **33% fewer** | 73% fewer |
-| OpenCode | Time | 33.9 s | 26.8 s | **21% faster** | 46% faster |
-| | Tokens | 29,675 | 16,576 | **44% fewer** | 65% fewer |
-| | Tool calls | 5.9 | 2.3 | **61% fewer** | 79% fewer |
-| Claude Code | Time | 8.5 s | 6.5 s | **23% faster** | 48% faster |
-| | Tokens | 22,946 | 20,072 | **13% fewer** | 36% fewer |
-| | Tool calls | 3.4 | 1.7 | **49% fewer** | 73% fewer |
+| Codex | Time | 26.0 s | 26.1 s | **same** | 55% faster |
+| | Tokens | 74,800 | 54,413 | **27% fewer** | 74% fewer |
+| | Tool calls | 3.3 | 2.2 | **32% fewer** | 80% fewer |
+| OpenCode | Time | 27.0 s | 23.5 s | **13% faster** | 36% faster |
+| | Tokens | 29,732 | 22,623 | **24% fewer** | 62% fewer |
+| | Tool calls | 5.8 | 2.7 | **53% fewer** | 74% fewer |
+| Claude Code | Time | 9.8 s | 7.1 s | **28% faster** | 58% faster |
+| | Tokens | 33,698 | 28,067 | **17% fewer** | 56% fewer |
+| | Tool calls | 4.0 | 2.3 | **43% fewer** | 75% fewer |
 
-Tool calls fell on eight or nine of the nine tasks for every tool: one Oko search
-replaces several greps and reads. Time and tokens did not improve on every task,
-and those are in the average. Codex was no faster on average: one of its 27 Oko
-sessions waited about two minutes on the model provider while Oko's own search
-took half a second, and every attempt counts; without that session Codex was 9%
-faster. Claude Code gains less than the 38% faster and 39% fewer tokens we
-reported for 0.5.0, because that run's sessions without Oko were unusually
-heavy (about 60,000 tokens each, against 23,000 here and 24,000 in our 0.4.0
-run). It is a small benchmark with Codex CLI 0.155 and OpenCode 1.18
-(`gpt-5.6-sol`) and Claude Code 2.1 (`claude-sonnet-5`) at low reasoning effort;
-your results will vary. [Full results and methodology](docs/benchmark-results.md#agent-sessions),
-the [runner, tasks, and checks](scripts/benchmark-public/), and the
-[raw results](benchmarks/published/0.5.1/) are in this repository.
+With Oko, every tool passed 27 of 27; without it, Codex passed 26 and Claude
+Code 23. Tool calls fell on eight or nine of the nine tasks for every tool.
+Time and tokens did not improve on every task, and those are in the average.
+OpenCode saves less than on 0.5.1 (44% fewer tokens then): Codex and OpenCode
+now often send a second Oko search to re-check an answer they already had, using the new
+`questions` and `symbols` inputs, and that costs tokens without changing the
+result here; the next release addresses it. In this run Claude Code sometimes
+put a sentence before its JSON answer; the grader now scores the JSON either
+way, for every setup alike. The Claude Code hooks `oko setup` installs are not
+part of these sessions, which use no subagents. It is a small benchmark with
+Codex CLI 0.155 and OpenCode 1.18 (`gpt-5.6-sol`) and Claude Code 2.1
+(`claude-sonnet-5`) at low reasoning effort; your results will vary.
+[Full results and methodology](docs/benchmark-results.md#agent-sessions), the
+[runner, tasks, and checks](scripts/benchmark-public/), and the
+[raw results](benchmarks/published/0.6.0/) are in this repository.
 
 ## Privacy
 

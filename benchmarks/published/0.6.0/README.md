@@ -40,3 +40,12 @@ The BM25 and TF-IDF baselines are in [`../0.5.0/swe-explore/`](../0.5.0/swe-expl
 - `harness-commit.txt`: the Sense commit whose harness ran.
 
 Transcripts are not included.
+
+## agent-sessions/
+
+- `report.json`, `report.md`: the 243-session agent benchmark behind the
+  README's agent table (nine tasks, three clients, without Oko / Oko / Oko with
+  guidance, three repeats) on the release build `802ab8a`, every session with
+  its timing, token breakdown, tool calls, and grade. The home directory in
+  local paths is written as `~`. Raw client logs and source snapshots are not
+  included.

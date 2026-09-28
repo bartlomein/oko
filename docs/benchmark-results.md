@@ -214,9 +214,60 @@ that is not public.
 
 ## Agent sessions
 
-## Latest run: 243 sessions, Oko 0.5.1 (September 2026)
+## Latest run: 243 sessions, Oko 0.6.0 (September 2026)
 
-The README reports this run. Same tasks, clients, models, repeats, and three
+The README reports this run. Same tasks, clients, models, repeats and three
+setups as before: **without Oko**, **Oko**, and **Oko with the guidance `oko
+setup` installs** (the written guidance; the Claude Code hooks are not part of
+these sessions), with a warm disk index excluded from timing. Measured on the
+release build (commit `802ab8a`; the release commit after it changes only
+version numbers and docs), with Codex CLI 0.155.0, OpenCode 1.18.31 and Claude
+Code 2.1.282. Pass rates: Codex 26/27, 27/27, 27/27; OpenCode 27/27 in all
+three; Claude Code 23/27, 25/27, 27/27. The seven failures: three
+astro-forwarded-empty edits that also changed a duplicate definition in
+`validate-headers.ts` (Codex and Claude Code without Oko), one answer citing a
+line past the end of a file (Claude Code without Oko), and three Claude Code
+answers with text after the JSON (one without Oko, two with Oko).
+
+Grading changed once since 0.5.1: in late September Claude Code began putting a
+sentence before its JSON answer ("I have enough to answer."), with and without
+Oko and on older Oko builds alike. The grader now scores the JSON of a search
+answer even after such a sentence, for every client and setup, and marks it;
+one answer in this run needed that. Text after the JSON still fails.
+
+Mean seconds, agent tokens, and tool calls per session (27 sessions per cell):
+
+| Client | Without Oko | Oko | Oko + guidance |
+| --- | --- | --- | --- |
+| Codex — seconds | 26.0 | 29.4 | 26.1 |
+| Codex — agent tokens | 74,800 | 61,484 | 54,413 |
+| Codex — tool calls | 3.26 | 2.89 | 2.22 |
+| OpenCode — seconds | 27.0 | 28.9 | 23.5 |
+| OpenCode — agent tokens | 29,732 | 24,254 | 22,623 |
+| OpenCode — tool calls | 5.81 | 3.93 | 2.74 |
+| Claude Code — seconds | 9.8 | 7.3 | 7.1 |
+| Claude Code — agent tokens | 33,698 | 23,997 | 28,067 |
+| Claude Code — tool calls | 3.96 | 2.07 | 2.26 |
+
+What changed since 0.5.1:
+
+- **More Oko calls per session.** Over 27 sessions with guidance, Codex sent 44
+  Oko searches (0.5.1: 33) and OpenCode 54 (0.5.1: 29); Claude Code still sent
+  one per session (28 against 27). The first answer held every expected
+  location as often as before; the second search, usually a `questions` batch
+  re-asking part of the trace, rarely added anything on these tasks. That is
+  where OpenCode's token savings went (44% → 24% fewer with guidance). The same
+  inputs are what lifted Oko on [Sense's benchmark](#senses-agent-benchmark-against-sense),
+  whose tasks need every dependent of a class; the next release will steer
+  agents away from re-checking an answer they already have.
+- **Providers were faster** for Codex and OpenCode with and without Oko (Codex
+  without Oko 34.4 s → 26.0 s), so compare setups within a run, not across runs.
+- **Claude Code without Oko** used 33,698 tokens per session, against 22,946 in
+  the 0.5.1 run; with guidance Claude Code passed 27/27 and was 28% faster.
+
+## Previous run: 243 sessions, Oko 0.5.1 (September 2026)
+
+The 0.5.1 release reported this run. Same tasks, clients, models, repeats, and three
 setups as the 0.5.0 run below: **without Oko**, **Oko**, and **Oko with the
 guidance `oko setup` installs**, with a warm disk index excluded from timing.
 Measured on the 0.5.1 build (commit `48da7a9`; the release commit after it
