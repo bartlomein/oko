@@ -219,6 +219,8 @@ impl Events {
 
 pub(super) struct CapturedSources {
     pub sources: Vec<WorkspaceFile>,
+    /// Discovered files that are not indexed, with why and their size.
+    pub skipped: Vec<(String, search::SkipReason, u64)>,
     pub read_files: usize,
     pub reused_contents: usize,
     pub validation: &'static str,
@@ -375,15 +377,17 @@ impl WorkspaceWatch {
         // Paths from discovery dictate order, eligibility and deletions. Text
         // clones share Arc<str>, so retaining captures does not copy contents.
         let sources: Vec<_> = paths
-            .into_iter()
-            .filter_map(|path| captured.get(&path).cloned())
+            .iter()
+            .filter_map(|path| captured.get(path).cloned())
             .collect();
+        let skipped = skipped_files(&self.root, &paths, |path| captured.contains_key(path));
         self.sources = captured;
         if full {
             self.last_full = Some(Instant::now());
         }
         Ok(CapturedSources {
             sources,
+            skipped,
             read_files: read.len(),
             reused_contents,
             validation: if full { "full" } else { "incremental" },
@@ -393,14 +397,31 @@ impl WorkspaceWatch {
     }
 }
 
+/// Discovered paths that were not captured, classified from metadata.
+fn skipped_files(
+    root: &Path,
+    paths: &[String],
+    indexed: impl Fn(&str) -> bool,
+) -> Vec<(String, search::SkipReason, u64)> {
+    paths
+        .iter()
+        .filter(|path| !indexed(path))
+        .map(|path| {
+            let (reason, bytes) = search::skip_reason(root, path);
+            (path.clone(), reason, bytes)
+        })
+        .collect()
+}
+
 pub(super) fn capture_full(root: &Path) -> Result<CapturedSources> {
     let paths = search::workspace_paths(root)?;
+    let sources =
+        search::read_workspace_paths(root, &paths, super::preparation_workers(paths.len()))?;
+    let indexed: HashSet<&str> = sources.iter().map(|source| source.path.as_str()).collect();
+    let skipped = skipped_files(root, &paths, |path| indexed.contains(path));
     Ok(CapturedSources {
-        sources: search::read_workspace_paths(
-            root,
-            &paths,
-            super::preparation_workers(paths.len()),
-        )?,
+        sources,
+        skipped,
         read_files: paths.len(),
         reused_contents: 0,
         validation: "full",

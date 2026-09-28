@@ -46,6 +46,21 @@ class RunnerTests(unittest.TestCase):
             wrong=json.dumps({'results':[{'path':'a','startLine':1,'endLine':3},task['expected'][1]]})
             self.assertFalse(r.grade(task,Path('.'),wrong)['passed'])
 
+    def test_json_after_a_leading_sentence_is_graded_and_marked(self):
+        task={'kind':'search','expected':[{'path':'a','startLine':4,'endLine':6}]}
+        found=json.dumps({'results':task['expected']})
+        with patch.object(r,'original_grade',return_value={'correctFirst':True}) as graded:
+            plain=r.grade(task,Path('.'),found)
+            self.assertTrue(plain['passed']); self.assertFalse(plain['leadingText'])
+            fenced=r.grade(task,Path('.'),'I have enough to answer.\n\n```json\n'+found+'\n```')
+            self.assertTrue(fenced['passed']); self.assertTrue(fenced['leadingText'])
+            self.assertEqual(json.loads(graded.call_args.args[2]),json.loads(found))
+            bare=r.grade(task,Path('.'),'Found it: '+found)
+            self.assertTrue(bare['passed']); self.assertTrue(bare['leadingText'])
+        # No JSON with results: the answer reaches the grader unchanged and fails there.
+        self.assertEqual(r.answer_json('No idea.'),('No idea.',False))
+        self.assertEqual(r.answer_json('See {"other": 1}'),('See {"other": 1}',False))
+
     def test_repo_is_passed_to_the_mcp_launcher(self):
         with patch.object(r,'save'), patch.object(r,'original_args',return_value=(['client'],{})):
             _,env=r.args_for({'repositoryName':'astro'},'codex',True,Path('.'),Path('.'))

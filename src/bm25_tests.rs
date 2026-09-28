@@ -94,10 +94,10 @@ fn implementation_intent_keeps_source_only_and_fallback_corpora_unchanged() {
 
 #[test]
 fn implementation_source_quota_preserves_broad_evidence_and_filters() {
-    let mut chunks: Vec<_> = (0..50)
+    let mut chunks: Vec<_> = (0..70)
         .map(|i| document(&format!("notes/{i:02}.md"), "quartz amber"))
         .collect();
-    chunks.extend((0..25).map(|i| {
+    chunks.extend((0..40).map(|i| {
         document(
             &format!("src/{i:02}.rs"),
             &format!("quartz {}", "filler ".repeat(100)),
@@ -270,7 +270,7 @@ fn declaration_lane_recovers_long_implementations_across_languages() {
 
 #[test]
 fn single_file_corpora_keep_distinct_nonoverlapping_matches() {
-    let mut chunks: Vec<_> = (1..=40)
+    let mut chunks: Vec<_> = (1..=80)
         .map(|line| {
             let mut chunk = document("large.txt", "quartz");
             chunk.start_line = line;
@@ -338,4 +338,39 @@ fn prose_and_unknown_languages_keep_content_and_path_fallback() {
     let ranked = rank_lexically(&chunks, "parse ledger");
     assert_eq!(ranked.len(), 3);
     assert!(ranked.iter().all(|c| c.lexical_score.is_finite()));
+}
+
+#[test]
+fn declaration_symbols_cover_types_and_annotated_arrows() {
+    let cases = [
+        (
+            "app.tsx",
+            "export const renderToHTMLOrFlight: AppPageRender = (\n  req,\n) => {}",
+            "renderToHTMLOrFlight",
+        ),
+        (
+            "server.ts",
+            "export default class NextNodeServer extends BaseServer<Options> {",
+            "NextNodeServer",
+        ),
+        ("upload.rb", "class Upload < ActiveRecord::Base", "Upload"),
+        ("lib.rs", "pub struct Searcher<'a> {", "Searcher"),
+        ("lib.rs", "impl<'a> Iterator for Lines<'a> {", "Lines"),
+        ("lib.rs", "pub trait Matcher {", "Matcher"),
+        ("kinds.ts", "export type Cursor<T> = { id: T };", "Cursor"),
+        ("api.ts", "export interface Handler {", "Handler"),
+        ("main.go", "func (c *Context) Next() {", "Next"),
+        ("app.py", "class Flask(App):", "Flask"),
+        ("mod.rb", "module Discourse", "Discourse"),
+    ];
+    for (path, line, name) in cases {
+        let symbols = &PreparedCorpus::new(&[document(path, line)]).chunks[0].symbols;
+        assert!(
+            symbols.iter().any(|s| s.name == name),
+            "{path}: {line:?} should declare {name}, found {:?}",
+            symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()
+        );
+    }
+    let none = PreparedCorpus::new(&[document("app.ts", "  return renderToHTMLOrFlight(req);")]);
+    assert!(none.chunks[0].symbols.is_empty());
 }

@@ -163,28 +163,20 @@ def ranked(packet, workspace):
     return chunks, len(shown)
 
 
-def run(sample, binary, live, timeout, intent, baseline, extra_env=()):
+def run(sample, binary, live, timeout, intent, baseline, extra_env=None):
     row = {'id': sample['id'], 'task': sample['task_type'], 'repo': sample['repo']}
     question, row['questionTrimmed'] = question_of(sample)
     gold = baseline.target_gold_files(sample)
     started = time.monotonic()
-    module = replay.profiler()
     with tempfile.TemporaryDirectory(prefix='oko-arb-') as temp:
         workspace, cache = Path(temp) / 'workspace', Path(temp) / 'cache'
         try:
             row['files'] = build_workspace(sample, workspace)
-            # The client drops inherited OKO_ settings; experiment switches go in through `env`.
-            command = ['env', *extra_env, str(binary), 'mcp', *([] if live else ['--no-jev']), '--root', str(workspace)]
-            client = module.Client(Path(binary), workspace, cache, timeout, live=live,
-                                   api_key=replay.api_key() if live else None,
-                                   model=replay.JEV_MODEL if live else None, command=command if extra_env else None)
-            try:
-                client.initialize()
+            # The client drops inherited OKO_ settings; experiment switches go in as `extra_env`.
+            with replay.oko_client(binary, workspace, cache, timeout, live, extra_env) as client:
                 response = client.request('tools/call', {'name': 'search', 'arguments': {
                     'question': question, 'intent': intent}})
                 packet = replay.packet_of(client, response)
-            finally:
-                client.close()
             chunks, shown = ranked(packet, workspace)
             retrieval = packet.get('retrieval') or {}
             scores = baseline.sample_metrics(gold, chunks, BUDGET, baseline.hard_negative_files(sample))
@@ -254,7 +246,7 @@ def main():
     rows = []
     with out.open('w') as handle:
         for index, sample in enumerate(samples, 1):
-            row = run(sample, args.binary, args.jev, args.timeout, args.intent, baseline, tuple(args.env))
+            row = run(sample, args.binary, args.jev, args.timeout, args.intent, baseline, replay.env_pairs(args.env))
             rows.append(row)
             handle.write(json.dumps(row) + '\n')
             handle.flush()

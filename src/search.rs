@@ -16,13 +16,66 @@ use std::{
 };
 
 pub const MAX_FILE_BYTES: usize = 256 * 1024;
+/// A file over the lexical cap in a parsed language is indexed by its
+/// definitions only. Lines longer than this on average mean a minified or
+/// generated file, which has no definitions worth chunking.
+pub const MINIFIED_LINE_BYTES: usize = 200;
+/// The size a file may have and still be read: the lexical cap for every
+/// file, the parser's cap for the languages it understands.
+pub fn file_byte_limit(path: &str) -> usize {
+    if crate::navigation::supports(path) {
+        crate::navigation::PARSED_FILE_BYTES.max(MAX_FILE_BYTES)
+    } else {
+        MAX_FILE_BYTES
+    }
+}
+/// Over the lexical cap: chunk only its definitions, and only if it is not
+/// minified.
+pub fn is_big_source(path: &str, text: &str) -> bool {
+    text.len() > MAX_FILE_BYTES && text.len() <= file_byte_limit(path)
+}
+/// Why a discovered file is not in the index. Decided from metadata alone, so
+/// the coverage line costs no second read of the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    /// Larger than `file_byte_limit`.
+    OverSize,
+    /// Binary, not UTF-8, blank, minified or unreadable.
+    Unreadable,
+}
+/// Extensions that are never source, whatever their size.
+const BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "bmp", "svgz", "pdf", "zip", "gz", "tgz",
+    "bz2", "xz", "zst", "7z", "jar", "war", "class", "wasm", "so", "dylib", "dll", "exe", "bin",
+    "dat", "db", "sqlite", "woff", "woff2", "ttf", "otf", "eot", "mp3", "mp4", "mov", "webm",
+    "ogg", "wav", "flac", "psd", "ai", "heic", "icns", "pyc", "o", "a", "lock",
+];
+pub fn skip_reason(root: &Path, file: &str) -> (SkipReason, u64) {
+    let binary = file.rsplit('.').next().is_some_and(|extension| {
+        BINARY_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+    });
+    match fs::metadata(root.join(file)) {
+        Ok(metadata) if !binary && metadata.len() > file_byte_limit(file) as u64 => {
+            (SkipReason::OverSize, metadata.len())
+        }
+        Ok(metadata) => (SkipReason::Unreadable, metadata.len()),
+        Err(_) => (SkipReason::Unreadable, 0),
+    }
+}
+pub fn is_minified(text: &str) -> bool {
+    let lines = text.bytes().filter(|b| *b == b'\n').count().max(1);
+    text.len() / lines > MINIFIED_LINE_BYTES
+}
 pub const CHUNK_LINES: usize = 40;
 pub const CHUNK_OVERLAP: usize = 5;
 pub const FUNCTION_CHUNK_LINES: usize = 120;
-pub const SHORTLIST_LIMIT: usize = 30;
+// 60 since 2026-09-25, with `ranking::MAX_ITEMS`; see the note there.
+pub const SHORTLIST_LIMIT: usize = 60;
 pub const RESULT_LIMIT: usize = 5;
-// Retrieve broadly in memory, then keep the existing small Jev request.
-const RETRIEVAL_WINDOW: usize = 100;
+// Retrieve broadly in memory (twice the shortlist), then keep the bounded
+// Jev request.
+const RETRIEVAL_WINDOW: usize = 2 * SHORTLIST_LIMIT;
 const RRF_CONSTANT: f64 = 60.0;
 // Implementation searches protect half the bounded reranking request for
 // source matches. The other half remains available to the broad ranking so
@@ -75,8 +128,15 @@ fn patterns() -> &'static Patterns {
             symbol_extension: Regex::new(r"\.(?:rs|[cm]?js|jsx|ts|tsx|py|go|java|cs|c|h|cc|cpp|hpp|rb|php|swift|kt)$").unwrap(),
             // Conventional test locations and file names across ecosystems; a
             // naming hint, never a parse of the file.
-            test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$").unwrap(),
-            symbol: Regex::new(r"(?m)^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|const|export|default|public|private|protected|static|final|override|abstract|internal|open|suspend)\s+)*(?:(?:fn|function\*?|def|fun)\s+([A-Za-z_][A-Za-z0-9_]*)|func\s+(?:\([^\n)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)|(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s+)?(?:\([^\n)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>)").unwrap(),
+            // `test_x.py` is a test; `test_helpers.go` is code (Go tests are
+            // `_test.go`). The last alternative is the JVM and C# habit of
+            // `FooTest.java`, `FooTests.kt` or `TestFoo.scala` beside the
+            // code (case matters).
+            test_path: Regex::new(r"(?i)(?:^|/)(?:tests?|__tests__|spec|specs|testdata|fixtures)/|(?:^|/)test_[^/]*\.(?:py|pyi|rb|php|js|jsx|ts|tsx|mjs|cjs|rs|ex|exs)$|[._-](?:test|tests|spec)\.[a-z0-9]+$|_test\.[a-z0-9]+$|(?-i:(?:^|/)(?:Test[A-Z][^/]*|[^/]+Tests?)\.(?:java|kt|kts|scala|cs)$)").unwrap(),
+            // Functions, methods, arrow constants (with or without a type
+            // annotation) and the type-level declarations of every supported
+            // language: `class`, `struct`, `impl Trait for X`, `module`...
+            symbol: Regex::new(r"(?m)^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|const|export|default|public|private|protected|static|final|override|abstract|internal|open|suspend|sealed|data|declare|readonly)\s+)*(?:(?:fn|function\*?|def|fun)\s+([A-Za-z_][A-Za-z0-9_]*)|func\s+(?:\([^\n)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)|(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=\n]+)?=\s*(?:async\s+)?(?:\([^\n)]*\)\s*=>|[A-Za-z_][A-Za-z0-9_]*\s*=>|\([^\n)]*$)|(?:class|struct|enum|interface|trait|module|object|protocol|record|union)\s+([A-Za-z_][A-Za-z0-9_]*)|impl(?:<[^>\n]*>)?\s+(?:[A-Za-z_][A-Za-z0-9_:<>, ]*\s+for\s+)?([A-Za-z_][A-Za-z0-9_]*)|type\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>\n]*>)?\s*=)").unwrap(),
             acronym: Regex::new("([A-Z]+)([A-Z][a-z])").unwrap(),
             camel: Regex::new("([a-z0-9])([A-Z])").unwrap(),
             words: Regex::new("[a-z0-9]+").unwrap(),
@@ -88,6 +148,24 @@ fn patterns() -> &'static Patterns {
     })
 }
 /// A conventional test location or file name; a naming hint, not a parse.
+/// A chunk's lines with their file line numbers, or `None` when its text
+/// does not match its line range (a malformed or partial chunk).
+pub fn chunk_lines(chunk: &Chunk) -> Option<impl Iterator<Item = (usize, &str)>> {
+    if chunk.start_line == 0
+        || chunk.end_line < chunk.start_line
+        || chunk.text.split('\n').count() != chunk.end_line - chunk.start_line + 1
+    {
+        return None;
+    }
+    Some(
+        chunk
+            .text
+            .split('\n')
+            .enumerate()
+            .map(move |(offset, text)| (chunk.start_line + offset, text)),
+    )
+}
+
 pub fn is_test_path(path: &str) -> bool {
     patterns().test_path.is_match(path)
 }
@@ -162,6 +240,225 @@ pub fn chunk_text(path: &str, text: &str) -> Vec<Chunk> {
     }
     chunks
 }
+/// A chunk boundary this short would leave BM25 too few words to rank on:
+/// adjacent definitions are merged until a section reaches this many lines.
+pub const MIN_SECTION_LINES: usize = 20;
+
+/// Chunks that tile a parsed file along its definitions: every top-level or
+/// member definition starts a section (pulled up over the comments,
+/// decorators and attributes above it), sections shorter than
+/// `MIN_SECTION_LINES` are merged with the next, and long sections are split
+/// like `chunk_text` splits a function. Definitions nested inside a function
+/// body do not start sections. The result covers the file from its first line
+/// to its last, so the cache restores it like any other chunking.
+pub fn chunk_by_definitions(
+    path: &str,
+    text: &str,
+    definitions: &[crate::navigation::Definition],
+) -> Vec<Chunk> {
+    use crate::navigation::DefinitionKind;
+    let p = patterns();
+    let mut lines: Vec<&str> = p.lines.split(text).collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return vec![];
+    }
+    let bodies: Vec<(usize, usize)> = definitions
+        .iter()
+        .filter(|d| matches!(d.kind, DefinitionKind::Function | DefinitionKind::Method))
+        .map(|d| (d.start_line, d.end_line))
+        .collect();
+    let inside_a_body = |d: &crate::navigation::Definition| {
+        bodies
+            .iter()
+            .any(|(start, end)| *start < d.start_line && d.end_line <= *end)
+    };
+    let attached = |line: &str| {
+        let trimmed = line.trim_start();
+        p.comment.is_match(line) || trimmed.starts_with('@') || trimmed.starts_with("#[")
+    };
+    let mut starts: Vec<usize> = definitions
+        .iter()
+        .filter(|d| d.start_line > 0 && !inside_a_body(d))
+        .map(|d| {
+            let mut start = d.start_line - 1;
+            while start > 0 && attached(lines[start - 1]) {
+                start -= 1;
+            }
+            start
+        })
+        .collect();
+    starts.sort_unstable();
+    starts.dedup();
+    // Merge: a boundary stands only when the section before it is long enough.
+    let mut boundaries = vec![0];
+    for start in starts {
+        let previous = *boundaries.last().unwrap();
+        if start > previous && start - previous >= MIN_SECTION_LINES {
+            boundaries.push(start);
+        }
+    }
+    if *boundaries.last().unwrap() != lines.len() {
+        boundaries.push(lines.len());
+    }
+    let mut chunks = vec![];
+    for section in boundaries.windows(2) {
+        let (mut start, section_end) = (section[0], section[1]);
+        while start < section_end {
+            let end = section_end.min(start + FUNCTION_CHUNK_LINES);
+            chunks.push(Chunk {
+                path: path.into(),
+                start_line: start + 1,
+                end_line: end,
+                text: lines[start..end].join("\n"),
+                lexical_score: 0.0,
+            });
+            if end == section_end {
+                break;
+            }
+            start += FUNCTION_CHUNK_LINES - CHUNK_OVERLAP;
+        }
+    }
+    chunks
+}
+
+/// Chunks for a big parsed file: only its functions, methods and class
+/// headers, so a 300 KB source file costs the index its definitions rather
+/// than the whole text. Long definitions are split like ordinary sections.
+/// A file with nothing to chunk (one generated table) gets no chunks.
+pub fn chunk_definitions(
+    path: &str,
+    text: &str,
+    definitions: &[crate::navigation::Definition],
+) -> Vec<Chunk> {
+    use crate::navigation::DefinitionKind;
+    let p = patterns();
+    let mut lines: Vec<&str> = p.lines.split(text).collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let bounds = |definition: &crate::navigation::Definition| {
+        let start = definition.start_line.checked_sub(1)?;
+        let end = definition.end_line.min(lines.len());
+        (start < end).then_some((start, end))
+    };
+    // Functions and methods whole; a type alias or interface too when it is
+    // short (`AppPageRender` lives in a 300 KB file and is asked for by
+    // name). Constants stay out: a generated table is the reason the file is
+    // this big.
+    let mut spans = definitions
+        .iter()
+        .filter(|d| {
+            matches!(d.kind, DefinitionKind::Function | DefinitionKind::Method)
+                || (d.kind == DefinitionKind::Type && d.end_line - d.start_line < CHUNK_LINES)
+        })
+        .filter_map(bounds)
+        .collect::<Vec<_>>();
+    // The class header names the class; its members are their own chunks, so
+    // the header runs to the first member or a window, whichever is shorter.
+    for class in definitions
+        .iter()
+        .filter(|d| d.kind == DefinitionKind::Class)
+    {
+        let Some((start, end)) = bounds(class) else {
+            continue;
+        };
+        let first_member = spans
+            .iter()
+            .filter(|(s, _)| *s > start && *s < end)
+            .map(|(s, _)| *s)
+            .min()
+            .unwrap_or(end);
+        spans.push((start, end.min(first_member).min(start + CHUNK_LINES)));
+    }
+    spans.sort_unstable();
+    let mut chunks = vec![];
+    let mut covered = 0;
+    for (start, end) in spans {
+        // Members inside an already chunked span are covered by it.
+        let mut start = start.max(covered);
+        if start >= end {
+            continue;
+        }
+        while start < end {
+            let piece_end = end.min(start + FUNCTION_CHUNK_LINES);
+            chunks.push(Chunk {
+                path: path.into(),
+                start_line: start + 1,
+                end_line: piece_end,
+                text: lines[start..piece_end].join("\n"),
+                lexical_score: 0.0,
+            });
+            if piece_end == end {
+                break;
+            }
+            start += FUNCTION_CHUNK_LINES - CHUNK_OVERLAP;
+        }
+        covered = end;
+    }
+    chunks
+}
+/// Long prompts from Codex and OpenCode carry constraint clauses ("must
+/// remain unchanged", "do not touch") whose words crowd the shortlist. A
+/// second, focused query keeps the identifiers, quoted literals and the first
+/// sentence, and drops the constraint clauses; its ranking is fused with the
+/// raw question's, never used instead of it, and Jev still sees the raw text.
+pub fn focused_terms(question: &str) -> Option<String> {
+    static P: OnceLock<(Regex, Regex, Regex)> = OnceLock::new();
+    let (identifier, literal, constraint) = P.get_or_init(|| {
+        (
+            Regex::new(r"[A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.|#)[A-Za-z_][A-Za-z0-9_]*)+|[a-z0-9]+_[a-z0-9_]+|[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*").unwrap(),
+            Regex::new(r#"`([^`\n]{1,80})`|"([^"\n]{2,80})"|'([^'\n]{2,80})'"#).unwrap(),
+            Regex::new(r"(?i)\b(?:must|should|do not|don't|never|leave|keep|only|without|except)\b[^.;\n]*").unwrap(),
+        )
+    });
+    if question.split_whitespace().count() < 25 {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |text: &str| {
+        let text = text.trim();
+        if !text.is_empty() && !parts.iter().any(|p| p == text) {
+            parts.push(text.to_owned());
+        }
+    };
+    for m in identifier.find_iter(question) {
+        push(m.as_str());
+    }
+    for c in literal.captures_iter(question) {
+        if let Some(inner) = c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)) {
+            push(inner.as_str());
+        }
+    }
+    let first = question.split(['.', '\n']).next().unwrap_or(question);
+    let first = constraint.replace_all(first, "");
+    push(&first);
+    let focused = parts.join(" ");
+    let same = tokenize(&focused) == tokenize(question);
+    (!same && tokenize(&focused).len() >= 2).then_some(focused)
+}
+
+/// Reciprocal-rank fusion of two rankings of the same corpus, the first
+/// ranking's order breaking ties, cut to the shortlist size.
+pub fn fuse_rankings(raw: Vec<Chunk>, focused: Vec<Chunk>) -> Vec<Chunk> {
+    let key = |c: &Chunk| (c.path.clone(), c.start_line, c.end_line);
+    let mut score: HashMap<(String, usize, usize), (f64, usize, Chunk)> = HashMap::new();
+    for (list_index, list) in [raw, focused].into_iter().enumerate() {
+        for (rank, chunk) in list.into_iter().enumerate() {
+            let entry = score
+                .entry(key(&chunk))
+                .or_insert_with(|| (0.0, list_index * 1000 + rank, chunk));
+            entry.0 += 1.0 / (RRF_CONSTANT + rank as f64 + 1.0);
+        }
+    }
+    let mut fused: Vec<(f64, usize, Chunk)> = score.into_values().collect();
+    fused.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    fused.truncate(SHORTLIST_LIMIT);
+    fused.into_iter().map(|(_, _, chunk)| chunk).collect()
+}
+
 fn normalize(term: String, stems: &mut HashMap<String, String>) -> String {
     stems.entry(term).or_insert_with_key(|s| stemmer(s)).clone()
 }
@@ -198,6 +495,10 @@ pub(crate) struct PreparedFile {
     // All identifiers, including names with no declaration in the current corpus:
     // a new declaration can change reference weights in otherwise unchanged files.
     identifiers: HashSet<String>,
+    /// Chunks cover only the file's definitions, not every line (a big parsed
+    /// file); gaps between chunks are expected.
+    #[serde(default)]
+    parse_only: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct PreparedChunkFeatures {
@@ -220,21 +521,33 @@ impl PreparedFile {
         if lines.is_empty() {
             return (self.chunks.is_empty() && self.matches(&[])).then(Vec::new);
         }
-        if self.path != path || self.chunks.is_empty() {
+        if self.path != path {
             return None;
+        }
+        if self.chunks.is_empty() {
+            // A definition-chunked file with nothing to chunk is still cached.
+            return (self.parse_only && self.matches(&[])).then(Vec::new);
         }
         let mut previous_end: usize = 0;
         let mut chunks = Vec::with_capacity(self.chunks.len());
         for cached in &self.chunks {
             let start = cached.start_line.checked_sub(1)?;
+            // Definition-only chunks tile each definition, not the file: they
+            // may leave gaps, but they still ascend and never move backwards
+            // by more than the overlap.
+            let tiled = if self.parse_only {
+                start + CHUNK_OVERLAP >= previous_end
+            } else {
+                (chunks.is_empty() && start == 0)
+                    || (!chunks.is_empty()
+                        && (start == previous_end
+                            || previous_end.checked_sub(CHUNK_OVERLAP) == Some(start)))
+            };
             if cached.end_line <= start
                 || cached.end_line > lines.len()
                 || cached.end_line - start > FUNCTION_CHUNK_LINES
                 || cached.end_line <= previous_end
-                || (chunks.is_empty() && start != 0)
-                || (!chunks.is_empty()
-                    && start != previous_end
-                    && previous_end.checked_sub(CHUNK_OVERLAP) != Some(start))
+                || !tiled
             {
                 return None;
             }
@@ -247,7 +560,8 @@ impl PreparedFile {
             });
             previous_end = cached.end_line;
         }
-        (previous_end == lines.len() && self.matches(&chunks)).then_some(chunks)
+        ((self.parse_only || previous_end == lines.len()) && self.matches(&chunks))
+            .then_some(chunks)
     }
 
     /// Reject incompatible/corrupt records without repeating tokenization or stemming.
@@ -292,6 +606,14 @@ impl FilePreparer {
     pub(crate) fn prepare_file(&mut self, chunks: &[Chunk]) -> PreparedFile {
         prepare_file_with_stems(chunks, &mut self.stems)
     }
+    /// For chunks that cover only a file's definitions (see `chunk_definitions`).
+    pub(crate) fn prepare_definition_chunks(
+        &mut self,
+        path: &str,
+        chunks: &[Chunk],
+    ) -> PreparedFile {
+        prepare_chunks_with_stems(path, chunks, &mut self.stems, true)
+    }
 }
 
 #[cfg(test)]
@@ -301,6 +623,17 @@ fn prepare_file(chunks: &[Chunk]) -> PreparedFile {
 
 fn prepare_file_with_stems(chunks: &[Chunk], stems: &mut HashMap<String, String>) -> PreparedFile {
     let path = chunks.first().map_or("", |chunk| chunk.path.as_str());
+    prepare_chunks_with_stems(path, chunks, stems, false)
+}
+
+/// `path` is given, not taken from the chunks: a definition-chunked file may
+/// have no chunks at all, and two such files must not share an empty path.
+fn prepare_chunks_with_stems(
+    path: &str,
+    chunks: &[Chunk],
+    stems: &mut HashMap<String, String>,
+    parse_only: bool,
+) -> PreparedFile {
     debug_assert!(chunks.iter().all(|chunk| chunk.path == path));
     let supported = patterns().symbol_extension.is_match(path);
     let pattern = if patterns().typed_extension.is_match(path) {
@@ -353,6 +686,7 @@ fn prepare_file_with_stems(chunks: &[Chunk], stems: &mut HashMap<String, String>
         path_field: Arc::new(words(path, stems)),
         chunks: prepared,
         identifiers,
+        parse_only,
     }
 }
 #[derive(Clone, Copy)]
@@ -1074,7 +1408,7 @@ pub(crate) fn workspace_file_stamp(root: &Path, file: &str) -> Result<Option<Sou
         return Ok(None);
     }
     let metadata = fs::metadata(path)?;
-    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+    if !metadata.is_file() || metadata.len() > file_byte_limit(file) as u64 {
         return Ok(None);
     }
     Ok(SourceStamp::from_metadata(&metadata))
@@ -1092,13 +1426,14 @@ fn read_workspace_file(
     }
     let handle = fs::File::open(path).context("opening search file")?;
     let metadata = handle.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+    let limit = file_byte_limit(file);
+    if !metadata.is_file() || metadata.len() > limit as u64 {
         return Ok(None);
     }
     // A file growing after the metadata check cannot cause an unbounded read.
     let mut bytes = Vec::with_capacity(metadata.len() as usize + 1);
     (&handle)
-        .take(MAX_FILE_BYTES as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .context("reading search file")?;
     let stamp = if capture_stamp {
@@ -1117,7 +1452,11 @@ fn read_workspace_file(
     } else {
         None
     };
-    if bytes.len() > MAX_FILE_BYTES || bytes.contains(&0) {
+    if bytes.len() > limit || bytes.contains(&0) {
+        return Ok(None);
+    }
+    // A big file is worth its definitions; a minified one has none to offer.
+    if bytes.len() > MAX_FILE_BYTES && is_minified(&String::from_utf8_lossy(&bytes)) {
         return Ok(None);
     }
     let raw_digest = Sha256::digest(&bytes);
@@ -1210,6 +1549,47 @@ fn read_workspace_paths_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_lines_rejects_chunks_whose_text_does_not_match_their_range() {
+        let chunk = |start, end, text: &str| Chunk {
+            path: "a.rs".into(),
+            start_line: start,
+            end_line: end,
+            text: text.into(),
+            lexical_score: 0.0,
+        };
+        let good = chunk(3, 4, "a\nb");
+        let lines: Vec<_> = chunk_lines(&good).unwrap().collect();
+        assert_eq!(lines, [(3, "a"), (4, "b")]);
+        assert!(chunk_lines(&chunk(0, 1, "a\nb")).is_none());
+        assert!(chunk_lines(&chunk(5, 2, "a")).is_none());
+        assert!(chunk_lines(&chunk(1, 3, "a\nb")).is_none());
+    }
+
+    #[test]
+    fn jvm_test_files_are_test_paths_by_stem() {
+        for path in [
+            "src/test/java/io/javalin/RoutingTest.java",
+            "io/javalin/RoutingTest.java",
+            "io/javalin/RoutingTests.kt",
+            "io/javalin/TestRouting.scala",
+            "Api/UsersTests.cs",
+            "tests/test_app.py",
+            "src/app.test.ts",
+        ] {
+            assert!(is_test_path(path), "{path}");
+        }
+        for path in [
+            "io/javalin/Javalin.java",
+            "io/javalin/Contest.java",
+            "test_helpers.go",
+            "io/javalin/testing/Latest.java",
+            "src/attest.rs",
+        ] {
+            assert!(!is_test_path(path), "{path}");
+        }
+    }
 
     #[test]
     fn parallel_file_reads_preserve_order_bytes_and_eligibility() {
@@ -1391,14 +1771,14 @@ mod tests {
     #[test]
     fn deterministic_utf16_ties_and_limit() {
         assert_eq!(compare_text("\u{10000}", "\u{e000}"), Ordering::Less);
-        let chunks: Vec<_> = (0..40)
+        let chunks: Vec<_> = (0..80)
             .rev()
             .flat_map(|i| chunk_text(&format!("{i:02}.txt"), "needle"))
             .collect();
         let ranked = rank_lexically(&chunks, "needle");
-        assert_eq!(ranked.len(), 30);
+        assert_eq!(ranked.len(), SHORTLIST_LIMIT);
         assert_eq!(ranked[0].path, "00.txt");
-        assert_eq!(ranked[29].path, "29.txt");
+        assert_eq!(ranked[SHORTLIST_LIMIT - 1].path, "59.txt");
         assert!(rank_lexically(&chunks, "where is it").is_empty());
     }
     #[test]
@@ -1428,6 +1808,153 @@ mod tests {
             ["bom.txt", "good.ts"]
         );
         assert_eq!(result[0].text, "needle");
+    }
+
+    #[test]
+    fn big_parsed_files_are_read_and_minified_or_unparsed_ones_are_not() {
+        let temp = std::env::temp_dir().join(format!("oko-big-{}", std::process::id()));
+        fs::create_dir_all(&temp).unwrap();
+        let temp = temp.canonicalize().unwrap();
+        let body = "export function needle() {\n  return 1;\n}\n".repeat(MAX_FILE_BYTES / 40 + 1);
+        assert!(body.len() > MAX_FILE_BYTES && body.len() < file_byte_limit("a.ts"));
+        fs::write(temp.join("big.ts"), &body).unwrap();
+        fs::write(temp.join("big.txt"), &body).unwrap();
+        fs::write(
+            temp.join("min.js"),
+            format!("var needle={};", "x".repeat(MAX_FILE_BYTES + 1)),
+        )
+        .unwrap();
+        fs::write(
+            temp.join("huge.ts"),
+            "export function needle() {}\n".repeat(file_byte_limit("a.ts") / 28 + 1),
+        )
+        .unwrap();
+        let files: Vec<String> = ["big.ts", "big.txt", "min.js", "huge.ts"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let read = read_workspace_paths(&temp, &files, 1).unwrap();
+        fs::remove_dir_all(&temp).unwrap();
+        assert_eq!(
+            read.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["big.ts"]
+        );
+    }
+
+    #[test]
+    fn focused_terms_keep_identifiers_and_literals_and_drop_constraint_clauses() {
+        let short = "where is the session cookie signed";
+        assert!(focused_terms(short).is_none());
+        let long = "Locate the code that selects the response decoder from the Content-Encoding header in `_decoders.py` and returns a MultiDecoder for several encodings. The existing DecodingError behaviour must remain unchanged and the public API should not change; only the selection logic may be touched. Do not modify tests.";
+        let focused = focused_terms(long).unwrap();
+        for word in [
+            "_decoders.py",
+            "MultiDecoder",
+            "DecodingError",
+            "Content-Encoding",
+        ] {
+            assert!(focused.contains(word), "{focused}");
+        }
+        assert!(
+            !focused.contains("must remain unchanged") && !focused.contains("modify tests"),
+            "{focused}"
+        );
+        let raw = chunk_text(
+            "a.py",
+            "def select_decoder(header):\n    return MultiDecoder([])\n",
+        );
+        let other = chunk_text("b.py", "class DecodingError(Exception):\n    pass\n");
+        let fused = fuse_rankings(raw.clone(), other.clone());
+        assert_eq!(fused.len(), 2);
+        assert_eq!(fused[0].path, "a.py", "the raw ranking's order breaks ties");
+    }
+
+    #[test]
+    fn definition_aligned_chunks_start_at_decorators_merge_short_ones_and_restore() {
+        let mut source = String::from("import os\n\nX = 1\n\n");
+        for i in 0..6 {
+            source.push_str(&format!("@decorator\ndef tiny{i}():\n    return {i}\n\n"));
+        }
+        source.push_str("class Big:\n    \"\"\"Doc.\"\"\"\n");
+        for m in 0..3 {
+            source.push_str(&format!("    @property\n    def method{m}(self):\n"));
+            for j in 0..30 {
+                source.push_str(&format!("        step{j}()\n"));
+            }
+            source.push_str(&format!(
+                "        def inner{m}():\n            pass\n        return {m}\n"
+            ));
+        }
+        let facts = crate::navigation::NavigationPreparer::default().prepare("app.py", &source);
+        let chunks = chunk_by_definitions("app.py", &source, &facts.definitions);
+        let ranges: Vec<_> = chunks.iter().map(|c| (c.start_line, c.end_line)).collect();
+        // Six 4-line functions merge into 20-line sections; every chunk starts
+        // at a decorator or the file/class start, never inside a body.
+        let starts: Vec<&str> = chunks
+            .iter()
+            .map(|c| c.text.lines().next().unwrap().trim())
+            .collect();
+        assert!(
+            starts
+                .iter()
+                .all(|s| s.starts_with('@') || s.starts_with("import") || s.starts_with("class")),
+            "{starts:?}"
+        );
+        assert!(
+            chunks
+                .iter()
+                .all(|c| c.end_line - c.start_line < FUNCTION_CHUNK_LINES)
+        );
+        assert!(chunks.len() >= 4 && chunks.len() <= 8, "{ranges:?}");
+        assert!(
+            !starts.iter().any(|s| s.starts_with("def inner")),
+            "{starts:?}"
+        );
+        // Full coverage, restorable from the persisted ranges.
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(
+            chunks.last().unwrap().end_line,
+            source.trim_end().lines().count()
+        );
+        let prepared = prepare_file(&chunks);
+        assert_eq!(
+            prepared.restore_chunks("app.py", &source).unwrap().len(),
+            chunks.len()
+        );
+    }
+
+    #[test]
+    fn definition_chunks_cover_functions_methods_and_class_headers_only() {
+        let text = "import x from 'y';\nconst TABLE = {\n  a: 1,\n  b: 2,\n};\nexport class Server {\n  private field = 1;\n  handle() {\n    return 1;\n  }\n}\nexport function run() {\n  return 2;\n}\n";
+        let facts = crate::navigation::NavigationPreparer::default().prepare("server.ts", text);
+        let chunks = chunk_definitions("server.ts", text, &facts.definitions);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| (c.start_line, c.end_line))
+                .collect::<Vec<_>>(),
+            [(6, 7), (8, 10), (12, 14)]
+        );
+        assert!(chunks[0].text.starts_with("export class Server"));
+        assert!(chunks.iter().all(|c| !c.text.contains("TABLE")));
+        let prepared = FilePreparer::default().prepare_definition_chunks("server.ts", &chunks);
+        assert_eq!(prepared.restore_chunks("server.ts", text).unwrap().len(), 3);
+        assert!(
+            prepare_file(&chunks)
+                .restore_chunks("server.ts", text)
+                .is_none()
+        );
+        // A file with only a table has nothing to chunk and restores as empty.
+        let table = "export const TABLE = {\n  a: 1,\n};\n";
+        let facts = crate::navigation::NavigationPreparer::default().prepare("table.ts", table);
+        let none = chunk_definitions("table.ts", table, &facts.definitions);
+        assert!(none.is_empty());
+        let empty = FilePreparer::default().prepare_definition_chunks("table.ts", &none);
+        assert_eq!(empty.path, "table.ts");
+        assert_eq!(empty.restore_chunks("table.ts", table), Some(vec![]));
+        // Two chunkless files must coexist in one corpus.
+        let other = FilePreparer::default().prepare_definition_chunks("other.ts", &none);
+        assert!(PreparedCorpus::from_files(&[], [&empty, &other]).is_ok());
     }
 }
 

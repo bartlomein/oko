@@ -539,3 +539,128 @@ fn a_claude_md_linked_outside_the_project_is_refused() {
             .success()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    // A space in the install path must survive shell quoting.
+    let install = temp.path().join("my bin");
+    fs::create_dir_all(root.join(".claude")).unwrap();
+    let theirs = serde_json::json!({
+        "model": "sonnet",
+        "hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "./lint.sh"}]}]},
+        "permissions": {"allow": ["Bash(npm test)"]}
+    });
+    fs::write(
+        root.join(".claude/settings.local.json"),
+        serde_json::to_string_pretty(&theirs).unwrap(),
+    )
+    .unwrap();
+    let claude = fake_claude(temp.path(), None);
+    for _ in 0..2 {
+        assert_ok(&setup_claude(&root, &install, &claude));
+    }
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".claude/settings.local.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["model"], "sonnet");
+    assert_eq!(
+        settings["permissions"]["allow"],
+        serde_json::json!(["Bash(npm test)", "mcp__oko__search"])
+    );
+    let commands = |event: &str| -> Vec<String> {
+        settings["hooks"][event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+            .map(|handler| handler["command"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // Repeated setup replaces its own handlers and keeps the user's.
+    let pre = commands("PreToolUse");
+    assert_eq!(pre.len(), 2, "{pre:?}");
+    assert!(pre.contains(&"./lint.sh".to_owned()));
+    for event in ["SessionStart", "SubagentStart"] {
+        assert_eq!(commands(event).len(), 1, "{event}");
+    }
+    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(
+        ignore
+            .lines()
+            .any(|line| line == "/.claude/settings.local.json")
+    );
+    // The installed command runs through a shell and answers in the documented shape.
+    let start = &commands("SubagentStart")[0];
+    let output = Command::new("sh")
+        .args(["-c", start])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let answer: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        answer["hookSpecificOutput"]["hookEventName"],
+        "SubagentStart"
+    );
+    let grep = commands("PreToolUse")
+        .into_iter()
+        .find(|command| command.contains("pre-tool-use"))
+        .unwrap();
+    let mut child = Command::new("sh")
+        .args(["-c", &grep])
+        .env("OKO_HOOK_STATE", temp.path().join("hook-state"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(
+        &mut child.stdin.take().unwrap(),br#"{"session_id":"s","tool_name":"Bash","tool_input":{"command":"grep -rn dispatch_request ."}}"#,
+    )
+    .unwrap();
+    let answer: serde_json::Value =
+        serde_json::from_slice(&child.wait_with_output().unwrap().stdout).unwrap();
+    assert!(
+        answer["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("mcp__oko__search")
+    );
+}
+#[cfg(unix)]
+#[test]
+fn claude_hooks_can_be_skipped_and_a_malformed_settings_file_is_left_alone() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let claude = fake_claude(temp.path(), None);
+    let output = Command::new(executable())
+        .args([
+            "setup",
+            "--no-jev",
+            "--no-hooks",
+            "--client",
+            "claude",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--install-dir")
+        .arg(temp.path().join("bin"))
+        .env("OKO_CLAUDE", &claude)
+        .output()
+        .unwrap();
+    assert_ok(&output);
+    assert!(!root.join(".claude/settings.local.json").exists());
+
+    fs::create_dir(root.join(".claude")).unwrap();
+    fs::write(root.join(".claude/settings.local.json"), "{ not json").unwrap();
+    let output = setup_claude(&root, &temp.path().join("bin"), &claude);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("settings.local.json"));
+    assert_eq!(
+        fs::read_to_string(root.join(".claude/settings.local.json")).unwrap(),
+        "{ not json"
+    );
+}

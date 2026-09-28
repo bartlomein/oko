@@ -63,4 +63,9 @@ def render(data, clients, conditions):
                 seconds=statistics.median(b['seconds']-a['seconds'] for a,b in guided)
                 percent=statistics.median(100*(b['seconds']/a['seconds']-1) for a,b in guided)
                 lines.append(f'| {c} | current -> guided | {len(guided)} | {seconds:+.2f} | {percent:+.1f}% |')
+    leading=sum(bool(r.get('grade',{}).get('leadingText')) for r in runs)
+    if leading or data.get('regraded'):
+        lines.append('')
+        lines.append(f'Search answers with text before their JSON, graded on the JSON: {leading}.'
+                     +(f" Regraded {data['regraded']['at']}: {data['regraded']['changedRows']} grades changed; the grade as run is kept per session." if data.get('regraded') else ''))
     return '\n'.join(lines)+'\n'

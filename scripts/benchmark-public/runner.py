@@ -343,9 +343,34 @@ def within_edit_scope(baseline, actual, allowed):
     return all(tag == 'equal' or any(start - 1 <= a <= b <= end for start, end in ranges) for tag, a, b, _, _ in changes)
 
 
+def answer_json(final):
+    """The JSON a search answer gives, and whether text came before it.
+
+    The prompt asks for JSON only, and the locations are what a search task
+    grades. Some sessions open with a sentence ("I have enough to answer.")
+    before a fenced block; that is accepted for every client and condition
+    alike, and reported. An answer with no JSON object holding `results` is
+    returned as it is, so it fails as before."""
+    import re
+    text = final.strip()
+    if text.startswith(('{', '```')):
+        return text, False
+    candidates = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.S)[::-1]
+    if '{' in text:
+        candidates.append(text[text.find('{'):text.rfind('}') + 1])
+    for candidate in candidates:
+        try:
+            if isinstance(json.loads(candidate).get('results'), list):
+                return candidate, True
+        except (ValueError, AttributeError):
+            continue
+    return text, False
+
+
 def grade(task, work, final):
     if task['kind'] == 'search':
-        result = original_grade(task, work, final)
+        final, leading = answer_json(final)
+        result = {**original_grade(task, work, final), 'leadingText': leading}
         if result.get('gradingError'):
             return {**result, 'passed': False}
         import re
@@ -491,6 +516,53 @@ def execute(args, schedule):
     print(output)
 
 
+def regrade(results):
+    """Grade the saved search answers of a finished run again with the current
+    grader, against a clean checkout of the pinned commit (the grader reads
+    file lengths). Edit tasks, sessions that edited a read-only checkout and
+    infrastructure errors keep their grades. The grade as run stays beside
+    the new one."""
+    output = results.resolve()
+    if output.parent != STATE.resolve() or not output.name.startswith('results-'):
+        raise ValueError('Regrade must identify a results directory of this suite')
+    data = json.loads((output / 'report.json').read_text())
+    tasks = {(item['name'], t['id']): t for item in REPOSITORIES for t in item['tasks']}
+    changed = 0
+    with tempfile.TemporaryDirectory(prefix='oko-regrade-') as tmp:
+        checkouts = {}
+        for row in data['runs']:
+            old = row.get('grade') or {}
+            if (row.get('taskKind') != 'search' or (row.get('error') and row.get('errorType') != 'answer')
+                    or old.get('unexpectedEdits') or old.get('gradingError') == 'Read-only task modified the checkout'):
+                continue
+            name = row['repository']
+            if name not in checkouts:
+                work = Path(tmp) / name
+                work.mkdir()
+                subprocess.run(['tar', '-xf', str(STATE / name / 'baseline.tar')], cwd=work, check=True)
+                env = dict(os.environ, GIT_AUTHOR_NAME='regrade', GIT_AUTHOR_EMAIL='regrade@localhost',
+                           GIT_COMMITTER_NAME='regrade', GIT_COMMITTER_EMAIL='regrade@localhost')
+                # -f: the archive holds files the repository's own ignore rules skip.
+                for command in (['init', '-q'], ['add', '-A', '-f'], ['commit', '-qm', 'baseline']):
+                    subprocess.run(['git', *command], cwd=work, env=env, check=True)
+                checkouts[name] = work
+            new = grade(tasks[(name, row['id'])], checkouts[name], str(row.get('final') or ''))
+            row['grade'] = new
+            if {k: v for k, v in new.items() if k != 'leadingText'} == old:
+                continue
+            row.setdefault('gradeAsRun', old)
+            if new.get('gradingError'):
+                row['error'], row['errorType'] = new['gradingError'], 'answer'
+            elif row.get('errorType') == 'answer':
+                row.pop('error', None)
+                row.pop('errorType', None)
+            changed += 1
+    data['regraded'] = {'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'changedRows': changed,
+                        'rule': 'search answers: JSON after leading text is graded (answer_json)'}
+    report(output, data)
+    print(f'Regraded {output.name}: {changed} search grades changed')
+
+
 def main():
     global SUITE, STATE, FIXTURE, REPOSITORIES, CONDITIONS, ENGINE_CONDITIONS, CACHE_POLICY
     p=argparse.ArgumentParser(description=__doc__)
@@ -498,6 +570,7 @@ def main():
     action.add_argument('--prepare',action='store_true',help='Freeze clones/binary/models and verify edit graders; no paid calls')
     action.add_argument('--execute',action='store_true',help='Start paid model/Jev sessions')
     action.add_argument('--check',action='store_true',help='Verify all frozen artifacts without model calls')
+    action.add_argument('--regrade',type=Path,help='Grade the saved search answers of a results directory again; no model calls')
     p.add_argument('--repositories',type=Path,default=Path.home()/'dev')
     p.add_argument('--clients',help='Comma-separated; default all three, or claude alone for the smoke suite')
     p.add_argument('--resume',type=Path)
@@ -559,6 +632,9 @@ def main():
     if args.resume and not args.execute:p.error('--resume requires --execute')
     if args.prepare:
         with suite_lock():prepare(args)
+        return
+    if args.regrade:
+        regrade(args.regrade)
         return
     schedule=plan(REPOSITORIES,args.clients,args.repeats)
     if args.check:

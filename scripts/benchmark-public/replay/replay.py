@@ -12,6 +12,8 @@ or branch suite for that. Jev is not deterministic, so each build's numbers carr
 some noise; compare means over many questions, not single rows.
 """
 import argparse
+import contextlib
+import functools
 import importlib.util
 import json
 import os
@@ -151,11 +153,36 @@ def score(packet, expected, directory=None):
     return result
 
 
+@functools.cache
 def profiler():
     spec = importlib.util.spec_from_file_location('cache_profiler', ROOT.parent / 'profile-cache.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def env_pairs(items):
+    """`--env KEY=VALUE` arguments as a dict; a malformed one stops the run."""
+    pairs = {}
+    for item in items:
+        key, sep, value = item.partition('=')
+        if not key or not sep:
+            raise SystemExit(f'--env expects KEY=VALUE, got {item!r}')
+        pairs[key] = value
+    return pairs
+
+
+@contextlib.contextmanager
+def oko_client(binary, workspace, cache, timeout, live, extra_env=None):
+    """An initialised Oko MCP process for one workspace, closed on exit."""
+    client = profiler().Client(Path(binary), Path(workspace), Path(cache), timeout, live=live,
+                               api_key=api_key() if live else None,
+                               model=JEV_MODEL if live else None, extra_env=extra_env)
+    try:
+        client.initialize()
+        yield client
+    finally:
+        client.close()
 
 
 def api_key():
@@ -186,7 +213,6 @@ def packet_of(client, response):
 
 
 def replay_build(label, binary, workspaces, questions, tasks, live, timeout, progress, extra_env=None):
-    module = profiler()
     rows = []
     for repo, workspace in workspaces.items():
         selected = [(task, query) for task, queries in questions.items()
@@ -194,11 +220,7 @@ def replay_build(label, binary, workspaces, questions, tasks, live, timeout, pro
         if not selected:
             continue
         with tempfile.TemporaryDirectory(prefix='oko-replay-cache-') as cache:
-            client = module.Client(Path(binary), workspace, Path(cache), timeout, live=live,
-                                   api_key=api_key() if live else None,
-                                   model=JEV_MODEL if live else None, extra_env=extra_env)
-            try:
-                client.initialize()
+            with oko_client(binary, workspace, cache, timeout, live, extra_env) as client:
                 for index, (task, query) in enumerate(selected):
                     row = {'build': label, 'repository': repo, 'task': task,
                            'kind': tasks[task][1]['kind'], **query}
@@ -233,8 +255,6 @@ def replay_build(label, binary, workspaces, questions, tasks, live, timeout, pro
                         row['error'] = f'{type(error).__name__}: {error}'[:300]
                     rows.append(row)
                     progress(row)
-            finally:
-                client.close()
     return rows
 
 

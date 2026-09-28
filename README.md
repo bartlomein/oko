@@ -10,12 +10,14 @@ Oko helps Codex, Claude Code, and OpenCode spend less time searching and fewer
 tokens reading irrelevant code. It delivers relevant source snippets through
 MCP so your agent can get to the task sooner. Gains vary by task and coding tool.
 
-On [Agent Retrieval Bench](#retrieval-quality), a public benchmark of 345
-code-retrieval tasks in six languages, Oko puts a right file first more often
-than any published method (MRR 0.39 against 0.24), with no GPU and no index.
-In [our own agent benchmark](#benchmarks), Codex, OpenCode, and Claude Code use
-13–44% fewer tokens and 33–61% fewer tool calls with it; OpenCode and Claude
-Code also finish tasks 21–23% faster.
+| Benchmark | What it measures | Oko 0.6.0 |
+| --- | --- | --- |
+| [Sense's agent benchmark](#against-sense) | Claude Opus 4.7 on six multi-step tasks, run against Sense on the same day | Cited recall 0.91 against Sense's 0.88, at about 40% lower cost |
+| [Agent Retrieval Bench](#agent-retrieval-bench) | 345 code-retrieval tasks in six languages | Right file first more often than any published method (MRR 0.37 against 0.24); top-20 recall 0.70, level with the best embedding model |
+| [SWE-Explore](#swe-explore) | 848 real issues: the code that fixing agents needed | One search ranks the code about as well as agents that explore for many turns (nDCG 0.81, line precision 0.56) |
+| [Our agent sessions](#agent-sessions) | Codex, OpenCode and Claude Code on nine tasks, with and without Oko | 17–27% fewer tokens, 32–53% fewer tool calls; every task passed with Oko |
+
+Each benchmark's method and caveats are in [its section below](#benchmarks).
 
 Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
 source snippets. Use it through your coding agent or directly from your terminal.
@@ -144,7 +146,8 @@ Ask your agent:
 
 Your coding tool starts Oko automatically. You do not need to run a server yourself.
 Connecting Oko makes it available; it does not force the agent to use it for every
-search. Exact names and literal text can still be searched with native grep.
+search. A function, class or method named in the question is always found;
+literal text can still be searched with native grep.
 
 ## Use in your terminal
 
@@ -166,7 +169,7 @@ To replace, check, or remove your saved key, use `oko auth login`,
 
 ## Benchmarks
 
-### Retrieval quality
+### Agent Retrieval Bench
 
 [Agent Retrieval Bench](https://arxiv.org/abs/2607.24882) has 345 tasks from 25
 repositories in six languages: given a repository and a signal from a coding
@@ -177,18 +180,66 @@ locally on the same tasks and reproduce the published figures.
 
 | Method | Right file in top 20 | First right file ranks high (MRR) | Needed code within 8k tokens |
 | --- | --- | --- | --- |
-| **Oko 0.5.0** | 0.64 | **0.39** | **0.48** |
+| **Oko 0.6.0** | **0.70** | **0.37** | **0.50** |
+| Oko 0.5.0 | 0.64 | 0.39 | 0.48 |
 | Qwen3-Embedding-8B (GPU, index) | **0.70** | 0.23 | 0.37 |
 | RepoMap | 0.64 | 0.22 | 0.38 |
 | Qwen3-Embedding-4B (GPU, index) | 0.63 | 0.24 | 0.34 |
 | Lexical | 0.49 | 0.16 | 0.27 |
 | BM25 | 0.45 | 0.15 | 0.21 |
 
-On [SWE-Explore](https://arxiv.org/abs/2606.07297), 848 real issues in ten
-languages, a single Oko call ranks the right code about as well as agents that
-explore for many turns, and three times better than BM25 or TF-IDF. Per-task
-tables, the held-out split, what was tuned on what, and the limits are in
-[the details](docs/benchmark-results.md#agent-retrieval-bench).
+0.6.0 ranks a longer shortlist, so more needed files reach the top 20; its MRR
+is a little lower than 0.5.0's, all of it on review-comment tasks, where the
+right file is still near the top but less often first.
+
+Per-task tables, the held-out split, what was tuned on what, and the limits
+are in [the details](docs/benchmark-results.md#agent-retrieval-bench).
+
+### SWE-Explore
+
+[SWE-Explore](https://arxiv.org/abs/2606.07297) has 848 real issues from
+SWE-bench Verified, Pro and Multilingual in ten languages. The answer is the
+code that successful agents read while fixing each issue; an explorer returns
+five ranked regions. The agent rows are the paper's published results; they
+explore for many turns with a frontier model, while Oko makes one search of
+about a second.
+
+| Method | Right file in top 5 | Line precision | Ranking (nDCG@500) |
+| --- | --- | --- | --- |
+| Claude Code (agent) | **0.67** | 0.60 | 0.94 |
+| Mini-SWE-Agent (agent) | 0.64 | 0.53 | 0.89 |
+| LocAgent (agent) | 0.54 | 0.64 | **0.95** |
+| CoSIL (agent) | 0.54 | 0.58 | 0.82 |
+| **Oko 0.6.0, one search** | 0.40 | 0.56 | 0.81 |
+| Oko 0.5.0, one search | 0.41 | 0.52 | 0.81 |
+| AutoCodeRover (agent) | 0.28 | **0.68** | 0.72 |
+| TF-IDF | 0.14 | 0.10 | 0.22 |
+| BM25 | 0.07 | 0.05 | 0.12 |
+
+On ranking and precision one Oko search sits among the agents; on finding every
+file an issue needs it does not, because five regions from one search cannot
+cover the 4.3 files an issue needs on average. [Details](docs/benchmark-results.md#swe-explore).
+
+### Against Sense
+
+[Sense](https://github.com/luuuc/sense) publishes an agent benchmark: six
+multi-step tasks on real repositories answered by Claude Opus 4.7, scored and
+judged by its own harness. We ran it with Oko and with Sense on the same day,
+five runs per task each.
+
+| | Oko 0.6.0 | Sense |
+| --- | --- | --- |
+| Cited recall (the harness's headline) | **0.908** | 0.875 |
+| Blended score | **0.933** | 0.931 |
+| Relations stated correctly | 0.933 | **1.000** |
+| Cost, 30 sessions | **$31** | $50 |
+| Mean time per session | **210 s** | 242 s |
+
+The lead is small, and cited recall comes from one task (Discourse, 24
+locations) run five times; Sense states the relations between locations more
+exactly. Oko's lead holds however the failed sessions are counted, and Oko was
+faster on five of the six tasks (not on Next.js, where one Oko session ran to
+the time limit). [Details](docs/benchmark-results.md#senses-agent-benchmark-against-sense).
 
 ### Agent sessions
 
@@ -199,33 +250,35 @@ time, the agent's tokens, and tool calls. Nine tasks on pinned commits of
 and [ripgrep](https://github.com/BurntSushi/ripgrep): six ask for code spread over
 several places, three ask for a small edit checked by tests. The wording never
 names the file or function. Each task runs 3 times per setup with Codex, OpenCode,
-and Claude Code: **162 sessions**, measured on Oko 0.5.1.
+and Claude Code: **162 sessions**, measured on Oko 0.6.0.
 
 | Coding tool | | Without Oko | With Oko | Average | Best task |
 | --- | --- | --- | --- | --- | --- |
-| Codex | Time | 34.4 s | 34.6 s | **1% slower** | 45% faster |
-| | Tokens | 69,724 | 49,808 | **29% fewer** | 58% fewer |
-| | Tool calls | 3.1 | 2.1 | **33% fewer** | 73% fewer |
-| OpenCode | Time | 33.9 s | 26.8 s | **21% faster** | 46% faster |
-| | Tokens | 29,675 | 16,576 | **44% fewer** | 65% fewer |
-| | Tool calls | 5.9 | 2.3 | **61% fewer** | 79% fewer |
-| Claude Code | Time | 8.5 s | 6.5 s | **23% faster** | 48% faster |
-| | Tokens | 22,946 | 20,072 | **13% fewer** | 36% fewer |
-| | Tool calls | 3.4 | 1.7 | **49% fewer** | 73% fewer |
+| Codex | Time | 26.0 s | 26.1 s | **same** | 55% faster |
+| | Tokens | 74,800 | 54,413 | **27% fewer** | 74% fewer |
+| | Tool calls | 3.3 | 2.2 | **32% fewer** | 80% fewer |
+| OpenCode | Time | 27.0 s | 23.5 s | **13% faster** | 36% faster |
+| | Tokens | 29,732 | 22,623 | **24% fewer** | 62% fewer |
+| | Tool calls | 5.8 | 2.7 | **53% fewer** | 74% fewer |
+| Claude Code | Time | 9.8 s | 7.1 s | **28% faster** | 58% faster |
+| | Tokens | 33,698 | 28,067 | **17% fewer** | 56% fewer |
+| | Tool calls | 4.0 | 2.3 | **43% fewer** | 75% fewer |
 
-Tool calls fell on eight or nine of the nine tasks for every tool: one Oko search
-replaces several greps and reads. Time and tokens did not improve on every task,
-and those are in the average. Codex was no faster on average: one of its 27 Oko
-sessions waited about two minutes on the model provider while Oko's own search
-took half a second, and every attempt counts; without that session Codex was 9%
-faster. Claude Code gains less than the 38% faster and 39% fewer tokens we
-reported for 0.5.0, because that run's sessions without Oko were unusually
-heavy (about 60,000 tokens each, against 23,000 here and 24,000 in our 0.4.0
-run). It is a small benchmark with Codex CLI 0.155 and OpenCode 1.18
-(`gpt-5.6-sol`) and Claude Code 2.1 (`claude-sonnet-5`) at low reasoning effort;
-your results will vary. [Full results and methodology](docs/benchmark-results.md#agent-sessions),
-the [runner, tasks, and checks](scripts/benchmark-public/), and the
-[raw results](benchmarks/published/0.5.1/) are in this repository.
+With Oko, every tool passed 27 of 27; without it, Codex passed 26 and Claude
+Code 23. Tool calls fell on eight or nine of the nine tasks for every tool.
+Time and tokens did not improve on every task, and those are in the average.
+OpenCode saves less than on 0.5.1 (44% fewer tokens then): Codex and OpenCode
+now often send a second Oko search to re-check an answer they already had, using the new
+`questions` and `symbols` inputs, and that costs tokens without changing the
+result here; the next release addresses it. In this run Claude Code sometimes
+put a sentence before its JSON answer; the grader now scores the JSON either
+way, for every setup alike. The Claude Code hooks `oko setup` installs are not
+part of these sessions, which use no subagents. It is a small benchmark with
+Codex CLI 0.155 and OpenCode 1.18 (`gpt-5.6-sol`) and Claude Code 2.1
+(`claude-sonnet-5`) at low reasoning effort; your results will vary.
+[Full results and methodology](docs/benchmark-results.md#agent-sessions), the
+[runner, tasks, and checks](scripts/benchmark-public/), and the
+[raw results](benchmarks/published/0.6.0/) are in this repository.
 
 ## Privacy
 

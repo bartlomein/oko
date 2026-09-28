@@ -3,8 +3,8 @@
 //! Declaration detection is deliberately lexical. Related definitions require
 //! compatible source evidence; unknown qualification or ambiguity is omitted.
 mod related;
-use crate::navigation::{DefinitionKind, NavigationIndex, Relation};
-use crate::search::{Chunk, tokenize};
+use crate::navigation::{NavigationIndex, Relation};
+use crate::search::{Chunk, FUNCTION_CHUNK_LINES, tokenize};
 use regex::Regex;
 use serde::Serialize;
 use std::{
@@ -13,10 +13,12 @@ use std::{
 };
 
 pub const PACKET_MAX_BYTES: usize = 16_000;
-// Five was measured on 169 replayed agent questions: Jev rarely accepts more
-// than three candidates, so coverage did not move, while keyword-ranked
-// responses grew by half. Further candidates are named by path instead.
-const RESULT_LIMIT: usize = 3;
+/// Excerpts one question may show; a several-question call gets more.
+/// Three, not five: on 169 replayed agent questions five did not move
+/// coverage (Jev rarely accepts more than three candidates) while
+/// keyword-ranked responses grew by half. Further candidates are named by
+/// path instead.
+pub const RESULT_LIMIT: usize = 3;
 const RELATED_LIMIT: usize = 2;
 const EXCERPT_LINES: usize = 60;
 // Return a proven implementation whole: a window that stops short of the
@@ -65,10 +67,22 @@ pub struct ContextMatch {
     /// Rated below the relevance cutoff; shown because the response had room.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub lower_confidence: bool,
+    /// The definition of a name the question used, shown although the ranker
+    /// did not accept it: a name match, not a relevance claim.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub exact_name: bool,
+    /// Which of several questions this answers (`Q2`), when a call asked more
+    /// than one. Set after building, from the winner that produced it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
     /// The focused window that replaces a lower-ranked complete definition
     /// before any match is dropped to fit the budget.
     #[serde(skip)]
     compact: Option<SourceExcerpt>,
+    /// Sent whole in an earlier answer of this session: rendered as a
+    /// citable one-line stub instead of the source.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub seen: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,6 +124,15 @@ pub struct SourceExcerpt {
     /// Proven complete definitions in the excerpt: the matched one and any short
     /// definitions that directly follow it. Zero unless `definition_complete`.
     pub definitions: usize,
+    /// Line ranges inside `start_line..=end_line` that are not in `text`: a
+    /// long definition shows its head and tail, a class its header and member
+    /// signatures. Empty for an ordinary excerpt.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<(usize, usize)>,
+    /// The abridged form is a member outline (class header plus one line per
+    /// member) rather than the head and tail of one body.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub outline: bool,
     #[serde(skip)]
     focus_line: usize,
 }
@@ -476,10 +499,10 @@ impl<'a> Snapshot<'a> {
     ) -> Self {
         let mut snapshot = Self::new(path, chunks);
         if let Some(index) = navigation.filter(|_| crate::navigation::supports(path)) {
-            // Parser-proven boundaries replace lexical guesses only for parsed
-            // definitions. Unsupported or malformed syntax keeps the fallback.
+            // Parser-proven boundaries replace lexical guesses for every kind
+            // of parsed definition. Malformed syntax keeps the fallback.
             for definition in index.definitions(path) {
-                if definition.kind != DefinitionKind::Function || !definition.complete {
+                if !definition.complete {
                     continue;
                 }
                 if !(definition.start_line..=definition.end_line)
@@ -534,6 +557,16 @@ impl<'a> Snapshot<'a> {
             declarations,
             code,
         }
+    }
+    /// The last line of the gapless run of known lines that contains `start`.
+    /// A big parsed file is chunked by definition, so its lines have gaps; an
+    /// excerpt never reads across one.
+    fn contiguous_end(&self, start: usize) -> usize {
+        let mut end = start;
+        while self.lines.contains_key(&(end + 1)) {
+            end += 1;
+        }
+        end
     }
     /// Chunks tile a file from line 1, so a gapless range ending at the last
     /// known line is the entire file.
@@ -700,13 +733,19 @@ fn excerpt(
     let symbol = parent.map(|d| symbol_header(snapshot, d));
     // Without a proven declaration boundary, source context must not
     // advertise a complete implementation (even when it reaches EOF).
-    let unproven = start > low
+    let mut unproven = start > low
         || end < high
         || (bounded_parent.is_none() && language(path) != Language::Other)
         || symbol.as_ref().is_some_and(|s| s.truncated);
     // A definition begins with what is attached to it, not with its keyword.
     if parent.is_some_and(|d| d.line == start) {
         start = snapshot.attached_header_start(start);
+    }
+    // Lexical bounds can reach past a gap in a definition-chunked file.
+    let contiguous = snapshot.contiguous_end(start);
+    if end > contiguous {
+        end = contiguous;
+        unproven = true;
     }
     let mut definitions = usize::from(!unproven && bounded_parent.is_some());
     if definitions == 1 {
@@ -739,6 +778,8 @@ fn excerpt(
         definition_complete: definitions > 0,
         definitions,
         focus_line: focus,
+        omitted: vec![],
+        outline: false,
     })
 }
 fn query_terms(question: &str) -> HashSet<String> {
@@ -764,6 +805,130 @@ fn query_terms(question: &str) -> HashSet<String> {
         .take(32)
         .collect()
 }
+/// Lines of a long definition's body shown before the omission marker.
+const ABRIDGED_HEAD_LINES: usize = 120;
+const ABRIDGED_HEAD_LINES_SECONDARY: usize = 60;
+/// Head lines when the ranked evidence sits deeper in the body and is shown too.
+const ABRIDGED_HEAD_LINES_WITH_WINDOW: usize = 30;
+/// Lines shown after the marker, so the end of the body is visible.
+const ABRIDGED_TAIL_LINES: usize = 10;
+/// A class outline keeps this many header lines before its first member.
+const OUTLINE_HEADER_LINES: usize = 12;
+/// Members listed in an outline; a 2,000-line class with 100 methods would
+/// otherwise take most of the response.
+const OUTLINE_MEMBERS: usize = 60;
+
+/// A complete definition longer than the whole-return limit, shown as its
+/// signature, the start of its body and its end, or as a member outline when
+/// the parser knows its members. `None` when a needed line is not in the
+/// snapshot.
+fn abridged_excerpt(
+    path: &str,
+    snapshot: &Snapshot<'_>,
+    declaration: &Declaration,
+    navigation: Option<&NavigationIndex>,
+    primary: bool,
+    // The ranked chunk inside the definition: the evidence stays visible.
+    focus: (usize, usize),
+) -> Option<SourceExcerpt> {
+    let (start, end) = (declaration.line, declaration.end);
+    let definitions = navigation.map_or(&[][..], |index| index.definitions(path));
+    let owner = definitions
+        .iter()
+        .position(|d| d.start_line == start && d.end_line == end);
+    let mut members: Vec<usize> = owner
+        .map(|owner| {
+            definitions
+                .iter()
+                .filter(|d| d.container == Some(owner))
+                .map(|d| d.start_line)
+                .filter(|line| *line > start && *line < end)
+                .collect()
+        })
+        .unwrap_or_default();
+    members.sort_unstable();
+    members.dedup();
+    let mut kept: Vec<usize> = Vec::new();
+    let outline = !members.is_empty();
+    if outline {
+        let first_member = members[0];
+        kept.extend(start..first_member.min(start + OUTLINE_HEADER_LINES));
+        kept.extend(members.iter().copied().take(OUTLINE_MEMBERS));
+        kept.push(end);
+    } else {
+        let mut head = if primary {
+            ABRIDGED_HEAD_LINES
+        } else {
+            ABRIDGED_HEAD_LINES_SECONDARY
+        };
+        // Evidence deep in the body keeps its window; the head then shrinks
+        // to the signature and what follows it.
+        let window = (focus.0.max(start), focus.1.min(end));
+        let separate = window.0 < window.1 && window.1 >= start + head;
+        if separate {
+            head = ABRIDGED_HEAD_LINES_WITH_WINDOW;
+        }
+        kept.extend(start..(start + head).min(end + 1));
+        if separate {
+            kept.extend(window.0..=window.1.min(window.0 + FUNCTION_CHUNK_LINES - 1));
+        }
+        kept.extend(
+            (end + 1)
+                .saturating_sub(ABRIDGED_TAIL_LINES)
+                .max(start + head)..=end,
+        );
+    }
+    kept.sort_unstable();
+    kept.dedup();
+    // Header and end must be present; a member whose line is missing is left out.
+    let header_end = kept
+        .iter()
+        .take_while(|line| **line < start + OUTLINE_HEADER_LINES.max(1))
+        .count()
+        .max(1);
+    for line in &kept[..header_end] {
+        snapshot.lines.get(line)?;
+    }
+    if !outline {
+        for line in &kept {
+            snapshot.lines.get(line)?;
+        }
+    }
+    snapshot.lines.get(&end)?;
+    kept.retain(|line| snapshot.lines.contains_key(line));
+    if kept.len() < 2 {
+        return None;
+    }
+    let mut omitted = Vec::new();
+    for pair in kept.windows(2) {
+        if pair[1] > pair[0] + 1 {
+            omitted.push((pair[0] + 1, pair[1] - 1));
+        }
+    }
+    if omitted.is_empty() {
+        return None;
+    }
+    let text = kept
+        .iter()
+        .map(|line| snapshot.lines[line])
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(SourceExcerpt {
+        path: path.into(),
+        start_line: start,
+        end_line: end,
+        text,
+        symbol: Some(symbol_header(snapshot, declaration)),
+        truncated: false,
+        whole_file: false,
+        definition_complete: true,
+        definitions: 1,
+        focus_line: start,
+        omitted,
+        outline,
+    })
+}
+
 fn focus_line(chunk: &Chunk, terms: &HashSet<String>, snapshot: &Snapshot<'_>) -> usize {
     chunk
         .text
@@ -795,6 +960,21 @@ impl SourceExcerpt {
         if self.text.len() <= MIN_TEXT_BYTES {
             return false;
         }
+        if let Some(&(from, to)) = self.omitted.first() {
+            // An abridged definition gives up the end of its head, one line at
+            // a time, and stops at its signature plus twenty lines.
+            const KEPT_HEAD: usize = 21;
+            let head = from - self.start_line;
+            if head <= KEPT_HEAD {
+                return false;
+            }
+            let lines: Vec<&str> = self.text.split('\n').collect();
+            let mut kept: Vec<&str> = lines[..head - 1].to_vec();
+            kept.extend_from_slice(&lines[head..]);
+            self.text = kept.join("\n");
+            self.omitted[0] = (from - 1, to);
+            return true;
+        }
         if self.start_line < self.end_line {
             // Preserve the useful line as the excerpt shrinks.
             if self.focus_line - self.start_line > self.end_line - self.focus_line {
@@ -818,11 +998,58 @@ impl SourceExcerpt {
     }
 }
 impl SourceExcerpt {
+    /// Lines the excerpt spans.
+    pub fn lines(&self) -> usize {
+        self.end_line + 1 - self.start_line
+    }
+
+    /// An excerpt already sent whole in this session: its location, its first
+    /// line (so it stays citable without the earlier answer) and how to get
+    /// it again.
+    fn render_seen(&self, tag: Option<&str>, out: &mut String) {
+        let mut label = "shown in an earlier answer".to_owned();
+        if let Some(tag) = tag {
+            label.push_str(", ");
+            label.push_str(tag);
+        }
+        out.push_str(&format!(
+            "{}:{}-{} ({label})\n",
+            self.path, self.start_line, self.end_line
+        ));
+        let (line, text) = match &self.symbol {
+            Some(symbol) => (symbol.line, symbol.text.as_str()),
+            None => (self.start_line, self.text.split('\n').next().unwrap_or("")),
+        };
+        let mut head = text.trim_end().to_owned();
+        if head.len() > 160 {
+            let mut end = 160;
+            while !head.is_char_boundary(end) {
+                end -= 1;
+            }
+            head.truncate(end);
+            head.push('…');
+        }
+        out.push_str(&format!("{line}\t{head}\n"));
+        match &self.symbol {
+            Some(symbol) => out.push_str(&format!(
+                "Not repeated. To see it again, search with symbols: \"{}\".\n",
+                symbol.name
+            )),
+            None => out.push_str("Not repeated. To see it again, read that range.\n"),
+        }
+    }
+
     /// `path:start-end (label)` followed by the exact source in a fence that
     /// the source itself cannot close. Every line carries its file line number
     /// and a tab: models count lines unreliably, so an agent asked for a
     /// location would otherwise cite a line or two off.
-    fn render(&self, lower_confidence: bool, out: &mut String) {
+    fn render(
+        &self,
+        lower_confidence: bool,
+        exact_name: bool,
+        tag: Option<&str>,
+        out: &mut String,
+    ) {
         let mut label = if self.whole_file {
             "whole file".to_owned()
         } else if self.definitions > 1 {
@@ -835,6 +1062,18 @@ impl SourceExcerpt {
         if lower_confidence {
             label.push_str(", possible match");
         }
+        if exact_name {
+            label.push_str(", exact name match");
+        }
+        if let Some(tag) = tag {
+            label.push_str(", ");
+            label.push_str(tag);
+        }
+        if self.outline {
+            label.push_str(", outline");
+        } else if !self.omitted.is_empty() {
+            label.push_str(", body abridged");
+        }
         let longest_run = self
             .text
             .split(|c| c != '`')
@@ -846,14 +1085,37 @@ impl SourceExcerpt {
             "{}:{}-{} ({label})\n{fence}\n",
             self.path, self.start_line, self.end_line
         ));
-        for (offset, line) in self.text.split('\n').enumerate() {
-            out.push_str(&format!("{}\t{line}\n", self.start_line + offset));
+        let mut number = self.start_line;
+        let mut omitted = self.omitted.iter().peekable();
+        for line in self.text.split('\n') {
+            while let Some((from, to)) = omitted.next_if(|(from, _)| *from <= number) {
+                out.push_str(&format!(
+                    "… {} lines omitted ({}:{from}-{to}) …\n",
+                    to - from + 1,
+                    self.path
+                ));
+                number = to + 1;
+            }
+            out.push_str(&format!("{number}\t{line}\n"));
+            number += 1;
         }
         out.push_str(&fence);
         out.push('\n');
     }
 }
 impl ContextPacket {
+    /// Label each result with the questions it answers, from `tags_of` the
+    /// excerpt (several when two questions led to the same code).
+    pub fn tag_results(&mut self, tags_of: impl Fn(&SourceExcerpt) -> Vec<String>) {
+        for result in &mut self.results {
+            let mut tags = tags_of(&result.excerpt);
+            tags.sort();
+            tags.dedup();
+            if !tags.is_empty() {
+                result.tag = Some(tags.join("+"));
+            }
+        }
+    }
     /// Compact agent-facing rendering: exact source without JSON escaping,
     /// scores, or serving metadata. Matches are in ranked order.
     pub fn render_text(&self) -> String {
@@ -862,7 +1124,16 @@ impl ContextPacket {
             if !out.is_empty() {
                 out.push('\n');
             }
-            result.excerpt.render(result.lower_confidence, &mut out);
+            if result.seen {
+                result.excerpt.render_seen(result.tag.as_deref(), &mut out);
+                continue;
+            }
+            result.excerpt.render(
+                result.lower_confidence,
+                result.exact_name,
+                result.tag.as_deref(),
+                &mut out,
+            );
         }
         for related in &self.related {
             let relation = match related.relation {
@@ -887,7 +1158,7 @@ impl ContextPacket {
                 "referenced from"
             };
             out.push_str(&format!("\n{relation} {verb} {anchor}:\n"));
-            related.excerpt.render(false, &mut out);
+            related.excerpt.render(false, false, None, &mut out);
         }
         if self.omitted {
             out.push_str("\nLower-ranked evidence was omitted to fit the response limit.\n");
@@ -969,7 +1240,7 @@ impl ContextPacket {
 /// Expand up to three ranked winners and attach at most two lexical definition
 /// candidates. All evidence comes from `corpus`; no reads or model calls occur.
 pub fn build_packet(corpus: &[Chunk], winners: &[(Chunk, f64)], question: &str) -> ContextPacket {
-    build_packet_inner(corpus, winners, &[], question, None)
+    build_packet_inner(corpus, winners, &[], &[], question, None)
 }
 
 /// Use syntax facts from the same captured workspace snapshot as `corpus`.
@@ -980,12 +1251,55 @@ pub fn build_packet_with_navigation(
     question: &str,
     navigation: &NavigationIndex,
 ) -> ContextPacket {
-    build_packet_inner(corpus, winners, &[], question, Some(navigation))
+    build_packet_inner(corpus, winners, &[], &[], question, Some(navigation))
+}
+
+/// As `build_packet_with_runners_up`, also showing `pins`: definitions of
+/// names the question used, labelled `exact name match` unless the ranker
+/// accepted them itself. A pin alone is an answer.
+pub fn build_packet_for_questions(
+    corpus: &[Chunk],
+    winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
+    question: &str,
+    navigation: &NavigationIndex,
+    max_results: usize,
+) -> ContextPacket {
+    build_packet_limited(
+        corpus,
+        winners,
+        pins,
+        runners_up,
+        question,
+        Some(navigation),
+        max_results,
+    )
+}
+
+#[cfg(test)]
+pub fn build_packet_with_pins(
+    corpus: &[Chunk],
+    winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
+    question: &str,
+    navigation: &NavigationIndex,
+) -> ContextPacket {
+    build_packet_inner(
+        corpus,
+        winners,
+        pins,
+        runners_up,
+        question,
+        Some(navigation),
+    )
 }
 
 /// As `build_packet_with_navigation`, offering candidates rated just below the
 /// relevance cutoff for slots the accepted winners leave free. They appear only
 /// while the packet is small, and are labelled as possible matches.
+#[cfg(test)]
 pub fn build_packet_with_runners_up(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
@@ -993,15 +1307,39 @@ pub fn build_packet_with_runners_up(
     question: &str,
     navigation: &NavigationIndex,
 ) -> ContextPacket {
-    build_packet_inner(corpus, winners, runners_up, question, Some(navigation))
+    build_packet_inner(corpus, winners, &[], runners_up, question, Some(navigation))
 }
 
 fn build_packet_inner(
     corpus: &[Chunk],
     winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
     runners_up: &[(Chunk, f64)],
     question: &str,
     navigation: Option<&NavigationIndex>,
+) -> ContextPacket {
+    build_packet_limited(
+        corpus,
+        winners,
+        pins,
+        runners_up,
+        question,
+        navigation,
+        RESULT_LIMIT,
+    )
+}
+
+/// As `build_packet_inner`, with the number of excerpts a call may show: a
+/// call that asked several questions gets room for each of them.
+#[allow(clippy::too_many_arguments)]
+fn build_packet_limited(
+    corpus: &[Chunk],
+    winners: &[(Chunk, f64)],
+    pins: &[(Chunk, f64)],
+    runners_up: &[(Chunk, f64)],
+    question: &str,
+    navigation: Option<&NavigationIndex>,
+    max_results: usize,
 ) -> ContextPacket {
     let mut packet = ContextPacket {
         results: vec![],
@@ -1009,8 +1347,9 @@ fn build_packet_inner(
         truncated: false,
         omitted: false,
     };
-    // Nothing accepted is an answer in itself; runners-up only accompany a match.
-    if winners.is_empty() {
+    // Nothing accepted is an answer in itself; runners-up only accompany a
+    // match. A pinned definition of a name the question used stands alone.
+    if winners.is_empty() && pins.is_empty() {
         return packet;
     }
     let mut by_path: BTreeMap<&str, Vec<&Chunk>> = BTreeMap::new();
@@ -1019,12 +1358,24 @@ fn build_packet_inner(
     }
     let terms = query_terms(question);
     let mut snapshots = HashMap::new();
+    // The ranker's first choice leads; the pins come before its second and
+    // third, so the budget drops those first; runners-up come last.
+    let pins = pins.iter().filter(|(pin, _)| {
+        !winners.iter().any(|(winner, _)| {
+            winner.path == pin.path
+                && winner.start_line <= pin.end_line
+                && pin.start_line <= winner.end_line
+        })
+    });
     let ranked = winners
         .iter()
-        .map(|winner| (winner, false))
-        .chain(runners_up.iter().map(|runner_up| (runner_up, true)));
-    for ((chunk, score), lower_confidence) in ranked {
-        if packet.results.len() == RESULT_LIMIT {
+        .take(1)
+        .map(|winner| (winner, false, false))
+        .chain(pins.map(|pin| (pin, false, true)))
+        .chain(winners.iter().skip(1).map(|winner| (winner, false, false)))
+        .chain(runners_up.iter().map(|runner_up| (runner_up, true, false)));
+    for ((chunk, score), lower_confidence, exact_name) in ranked {
+        if packet.results.len() == max_results {
             // Further accepted matches are named by path after the excerpts;
             // nothing was cut for size.
             packet.truncated |= !lower_confidence;
@@ -1072,13 +1423,71 @@ fn build_packet_inner(
         let proven = snapshot.containing(focus).is_some_and(|declaration| {
             declaration.complete && declaration.end - declaration.line < whole
         });
+        // A complete definition too long to show whole is abridged rather than
+        // windowed: its signature, the start of its body and its end; for a
+        // class, its header and one line per member. A pin is its own span.
+        let long_definition = (primary || exact_name)
+            .then(|| {
+                if exact_name {
+                    snapshot
+                        .declarations
+                        .iter()
+                        .find(|d| d.line == chunk.start_line && d.end == chunk.end_line)
+                } else {
+                    snapshot.containing(focus)
+                }
+            })
+            .flatten()
+            .filter(|d| d.complete && d.end - d.line >= whole);
+        if let Some(declaration) = long_definition
+            && let Some(context) = abridged_excerpt(
+                &chunk.path,
+                snapshot,
+                declaration,
+                navigation,
+                primary,
+                (chunk.start_line, chunk.end_line),
+            )
+        {
+            if packet
+                .results
+                .iter()
+                .any(|r| overlaps(&r.excerpt, &context))
+            {
+                continue;
+            }
+            let compact = (!primary)
+                .then(|| {
+                    excerpt(
+                        &chunk.path,
+                        snapshot,
+                        focus,
+                        (chunk.start_line, chunk.end_line),
+                        EXCERPT_LINES,
+                        false,
+                        &terms,
+                    )
+                })
+                .flatten();
+            packet.results.push(ContextMatch {
+                excerpt: context,
+                score: if score.is_finite() { *score } else { 0.0 },
+                lower_confidence,
+                exact_name,
+                tag: None,
+                compact,
+                seen: false,
+            });
+            continue;
+        }
         let (limit, preserve_range) = if proven {
             (whole, false)
-        } else if primary
+        } else if (primary || exact_name)
             && !lower_confidence
             && language(&chunk.path) != Language::Other
             && chunk.end_line - chunk.start_line < PRIMARY_IMPLEMENTATION_LINES
         {
+            // A pinned chunk is the definition's own span: keep all of it.
             (
                 EXCERPT_LINES.max(chunk.end_line - chunk.start_line + 1),
                 true,
@@ -1124,7 +1533,10 @@ fn build_packet_inner(
             excerpt: context,
             score: if score.is_finite() { *score } else { 0.0 },
             lower_confidence,
+            exact_name,
+            tag: None,
             compact,
+            seen: false,
         });
     }
     if let Some(navigation) = navigation {
@@ -1324,6 +1736,10 @@ fn attach_navigation(
                 candidate.start_line
             };
             let end = candidate.end_line.min(start + RELATED_LINES - 1);
+            // A definition-chunked file holds only its definitions' lines.
+            if !(start..=end).all(|line| snapshot.lines.contains_key(&line)) {
+                continue;
+            }
             let complete = start == candidate.start_line
                 && end == candidate.end_line
                 && navigation
@@ -1345,6 +1761,8 @@ fn attach_navigation(
                 definition_complete: complete,
                 definitions: usize::from(complete),
                 focus_line: focus,
+                omitted: vec![],
+                outline: false,
             };
             if packet
                 .results
@@ -1515,8 +1933,14 @@ mod tests {
         assert!(!text.contains("score"));
         let long = format!("fn transform() {{\n{}\n}}", ["    step();"; 400].join("\n"));
         let packet = packet("worker.rs", &long, "transform");
-        assert!(packet.results[0].excerpt.truncated);
-        assert!(packet.render_text().contains("(partial excerpt)\n"));
+        // Too long to show whole, but complete: abridged rather than windowed.
+        assert!(!packet.results[0].excerpt.truncated);
+        assert_eq!(packet.results[0].excerpt.omitted, [(121, 392)]);
+        assert!(
+            packet
+                .render_text()
+                .contains("(complete definition, body abridged)\n")
+        );
     }
     #[test]
     fn lower_ranked_definitions_are_whole_and_narrow_before_any_match_is_dropped() {
@@ -1691,6 +2115,204 @@ mod tests {
             3
         );
     }
+    #[test]
+    fn long_definitions_are_abridged_and_long_classes_are_outlined() {
+        // A 300-line function: head, marker, tail.
+        let mut function = String::from("export function big(a: number) {\n");
+        for i in 0..297 {
+            function.push_str(&format!("  step{i}();\n"));
+        }
+        function.push_str("  return a;\n}\n");
+        // A class whose 4 methods span 400 lines.
+        let mut class = String::from(
+            "/** Serves requests. */\nexport default class NextNodeServer extends BaseServer {\n  private field = 1;\n",
+        );
+        for m in 0..4 {
+            class.push_str(&format!("  method{m}() {{\n"));
+            for i in 0..97 {
+                class.push_str(&format!("    line{i}();\n"));
+            }
+            class.push_str("  }\n");
+        }
+        class.push_str("}\n");
+        let mut corpus = chunk_text("big.ts", &function);
+        corpus.extend(chunk_text("server.ts", &class));
+        let mut preparer = crate::navigation::NavigationPreparer::default();
+        let navigation = NavigationIndex::new_shared([
+            (
+                "big.ts",
+                std::sync::Arc::new(preparer.prepare("big.ts", &function)),
+            ),
+            (
+                "server.ts",
+                std::sync::Arc::new(preparer.prepare("server.ts", &class)),
+            ),
+        ]);
+        let first = |path: &str| corpus.iter().find(|c| c.path == path).unwrap().clone();
+
+        let packet = build_packet_with_navigation(
+            &corpus,
+            &[(first("big.ts"), 0.9)],
+            "big step",
+            &navigation,
+        );
+        let excerpt = &packet.results[0].excerpt;
+        assert_eq!((excerpt.start_line, excerpt.end_line), (1, 300));
+        assert!(excerpt.definition_complete && !excerpt.outline);
+        assert_eq!(excerpt.omitted, [(121, 290)]);
+        let text = packet.render_text();
+        assert!(
+            text.starts_with("big.ts:1-300 (complete definition, body abridged)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "120\t  step118();\n… 170 lines omitted (big.ts:121-290) …\n291\t  step289();\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("300\t}\n"), "{text}");
+
+        let class_lines = class.trim_end().to_owned();
+        let pinned = (
+            Chunk {
+                path: "server.ts".into(),
+                start_line: 2,
+                end_line: 400,
+                text: class_lines
+                    .split('\n')
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                lexical_score: 0.0,
+            },
+            0.0,
+        );
+        let packet =
+            build_packet_with_pins(&corpus, &[], &[pinned], &[], "NextNodeServer", &navigation);
+        let excerpt = &packet.results[0].excerpt;
+        assert!(excerpt.outline, "{}", packet.render_text());
+        assert_eq!((excerpt.start_line, excerpt.end_line), (2, 400));
+        let text = packet.render_text();
+        assert!(
+            text.starts_with("server.ts:2-400 (complete definition, exact name match, outline)\n"),
+            "{text}"
+        );
+        for (line, signature) in [
+            (4, "  method0() {"),
+            (103, "  method1() {"),
+            (202, "  method2() {"),
+            (301, "  method3() {"),
+            (400, "}"),
+        ] {
+            assert!(
+                text.contains(&format!("{line}\t{signature}\n")),
+                "{line}: {text}"
+            );
+        }
+        assert!(
+            text.contains("… 98 lines omitted (server.ts:5-102) …\n"),
+            "{text}"
+        );
+
+        // Shrinking gives up head lines but never the signature plus twenty.
+        let mut abridged = build_packet_with_navigation(
+            &corpus,
+            &[(first("big.ts"), 0.9)],
+            "big step",
+            &navigation,
+        )
+        .results
+        .remove(0)
+        .excerpt;
+        let mut steps = 0;
+        while abridged.shrink() {
+            steps += 1;
+        }
+        assert_eq!(abridged.omitted, [(22, 290)]);
+        assert_eq!(steps, 99);
+        assert!(abridged.definition_complete);
+    }
+
+    #[test]
+    fn pins_stand_alone_follow_the_first_winner_and_are_labelled() {
+        let source = "export class Server {\n  handle() {\n    return 1;\n  }\n}\n";
+        let mut corpus = chunk_text("server.ts", source);
+        corpus.extend(chunk_text(
+            "other.ts",
+            "export function handle() {\n  return 2;\n}\n",
+        ));
+        corpus.extend(chunk_text(
+            "third.ts",
+            "export function route() {\n  return 3;\n}\n",
+        ));
+        let chunk = |path: &str| corpus.iter().find(|c| c.path == path).unwrap().clone();
+        let mut preparer = crate::navigation::NavigationPreparer::default();
+        let navigation = NavigationIndex::new_shared([(
+            "server.ts",
+            std::sync::Arc::new(preparer.prepare("server.ts", source)),
+        )]);
+        let pin = (
+            Chunk {
+                path: "server.ts".into(),
+                start_line: 1,
+                end_line: 5,
+                text: source.trim_end().into(),
+                lexical_score: 0.0,
+            },
+            0.0,
+        );
+        // A rejected ranking plus one pin: the pin alone is the answer.
+        let packet = build_packet_with_pins(
+            &corpus,
+            &[],
+            std::slice::from_ref(&pin),
+            &[],
+            "Server class",
+            &navigation,
+        );
+        assert_eq!(packet.results.len(), 1);
+        assert!(packet.results[0].exact_name);
+        let text = packet.render_text();
+        assert!(
+            text.starts_with("server.ts:1-5 (whole file, exact name match)\n"),
+            "{text}"
+        );
+        // The ranker's first choice leads; the pin precedes its second choice.
+        let packet = build_packet_with_pins(
+            &corpus,
+            &[(chunk("other.ts"), 0.9), (chunk("third.ts"), 0.8)],
+            std::slice::from_ref(&pin),
+            &[],
+            "handle Server",
+            &navigation,
+        );
+        let shown: Vec<_> = packet
+            .results
+            .iter()
+            .map(|r| (r.excerpt.path.as_str(), r.exact_name))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("other.ts", false),
+                ("server.ts", true),
+                ("third.ts", false)
+            ]
+        );
+        // A pin the ranker accepted itself is shown once, without the label.
+        let packet = build_packet_with_pins(
+            &corpus,
+            &[(chunk("server.ts"), 0.9)],
+            &[pin],
+            &[],
+            "Server",
+            &navigation,
+        );
+        assert_eq!(packet.results.len(), 1);
+        assert!(!packet.results[0].exact_name);
+    }
+
     #[test]
     fn runners_up_fill_spare_slots_of_a_small_packet_and_are_labelled() {
         let mut corpus = chunk_text(

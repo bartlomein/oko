@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 use tree_sitter::{Node, ParseOptions, Parser};
 
 const MAX_FACTS: usize = 32_768;
+/// Files of a supported language are parsed up to this size. Bigger than the
+/// lexical cap because a generated or bundled source file can hold the
+/// definitions agents ask for most; see `search::file_byte_limit`.
+pub const PARSED_FILE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,11 +22,18 @@ pub enum DefinitionKind {
     Constant,
     Type,
     Class,
+    Method,
+    Module,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Definition {
     pub name: String,
+    /// The name with its containers: `Server.handle`, `routes.list`. Equal to
+    /// `name` for a top-level definition.
+    pub qualified: String,
+    /// Index of the enclosing class or object definition in the same file.
+    pub container: Option<usize>,
     pub start_line: usize,
     pub end_line: usize,
     pub complete: bool,
@@ -31,6 +42,12 @@ pub struct Definition {
     start_byte: usize,
     end_byte: usize,
     namespace: Namespace,
+}
+
+impl Definition {
+    pub fn exported(&self) -> bool {
+        !self.exports.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,9 +105,18 @@ pub struct FileFacts {
     lines: usize,
     bytes: usize,
     valid: bool,
+    /// The file had syntax errors: definitions were kept, relationships were not.
+    partial: bool,
+    /// The language's visitor records definitions only (no bindings, imports
+    /// or references): relationships come from the lexical fallback.
+    definitions_only: bool,
 }
 
 impl FileFacts {
+    /// Parsed, with definitions worth aligning chunks to.
+    pub fn has_definitions(&self) -> bool {
+        self.valid && !self.definitions.is_empty()
+    }
     pub fn matches_source(&self, path: &str, text: &str) -> bool {
         self.matches_captured_source(path, text.len(), &Sha256::digest(text.as_bytes()).into())
             && self.lines == text.bytes().filter(|b| *b == b'\n').count() + 1
@@ -118,12 +144,16 @@ impl FileFacts {
                 || (self.definitions.is_empty()
                     && self.references.is_empty()
                     && self.imports.is_empty()))
+            && (!(self.partial || self.definitions_only) || self.references.is_empty())
             && self.definitions.iter().all(|d| {
                 d.start_line > 0
                     && d.start_line <= d.end_line
                     && d.end_line <= self.lines
                     && d.start_byte <= d.end_byte
                     && d.end_byte <= self.bytes
+                    && !d.name.is_empty()
+                    && d.qualified.ends_with(d.name.as_str())
+                    && d.container.is_none_or(|i| i < self.definitions.len())
             })
             && self.references.iter().all(|r| {
                 r.line > 0
@@ -138,18 +168,61 @@ impl FileFacts {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Language {
+    JavaScript,
+    TypeScript,
+    Tsx,
+    Python,
+    Go,
+    Rust,
+    Ruby,
+    Java,
+    Kotlin,
+}
+impl Language {
+    fn of(path: &str) -> Option<Self> {
+        Some(match path.rsplit('.').next()? {
+            "js" | "jsx" | "mjs" | "cjs" => Self::JavaScript,
+            "ts" | "mts" | "cts" => Self::TypeScript,
+            "tsx" => Self::Tsx,
+            "py" | "pyi" => Self::Python,
+            "go" => Self::Go,
+            "rs" => Self::Rust,
+            "rb" | "rake" | "gemspec" => Self::Ruby,
+            "java" => Self::Java,
+            "kt" | "kts" => Self::Kotlin,
+            _ => return None,
+        })
+    }
+    /// The JavaScript family has scopes, imports and references; the others
+    /// record definitions only.
+    fn relationships(self) -> bool {
+        matches!(self, Self::JavaScript | Self::TypeScript | Self::Tsx)
+    }
+    fn grammar(self) -> tree_sitter::Language {
+        match self {
+            Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Self::Python => tree_sitter_python::LANGUAGE.into(),
+            Self::Go => tree_sitter_go::LANGUAGE.into(),
+            Self::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Self::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+            Self::Java => tree_sitter_java::LANGUAGE.into(),
+            Self::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+        }
+    }
+}
+
+/// A language whose definitions are parsed.
 pub fn supports(path: &str) -> bool {
-    matches!(
-        path.rsplit('.').next(),
-        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts")
-    )
+    Language::of(path).is_some()
 }
 
 #[derive(Default)]
 pub struct NavigationPreparer {
-    js: Option<Parser>,
-    ts: Option<Parser>,
-    tsx: Option<Parser>,
+    parsers: HashMap<Language, Parser>,
 }
 impl NavigationPreparer {
     pub fn prepare(&mut self, path: &str, text: &str) -> FileFacts {
@@ -165,25 +238,21 @@ impl NavigationPreparer {
             facts.valid = facts.config.is_some();
             return facts;
         }
-        if !supports(path) || text.len() > 256 * 1024 {
+        let Some(language) = Language::of(path).filter(|_| text.len() <= PARSED_FILE_BYTES) else {
             return facts;
-        }
-        let (slot, language) = match path.rsplit('.').next() {
-            Some("tsx") => (&mut self.tsx, tree_sitter_typescript::LANGUAGE_TSX.into()),
-            Some("ts" | "mts" | "cts") => (
-                &mut self.ts,
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            ),
-            _ => (&mut self.js, tree_sitter_javascript::LANGUAGE.into()),
         };
-        let parser = slot.get_or_insert_with(|| {
+        let parser = self.parsers.entry(language).or_insert_with(|| {
             let mut parser = Parser::new();
-            parser.set_language(&language).expect("bundled parser ABI");
+            parser
+                .set_language(&language.grammar())
+                .expect("bundled parser ABI");
             parser
         });
         let started = Instant::now();
-        let mut cancel =
-            |_: &tree_sitter::ParseState| started.elapsed() > Duration::from_millis(250);
+        // 250 ms per 256 KiB: a big file gets proportionally longer before the
+        // parse is abandoned, so a slow machine does not silently lose it.
+        let budget = Duration::from_millis(250 * text.len().div_ceil(256 * 1024).max(1) as u64);
+        let mut cancel = |_: &tree_sitter::ParseState| started.elapsed() > budget;
         let mut read = |offset: usize, _: tree_sitter::Point| &text.as_bytes()[offset..];
         let Some(tree) = parser.parse_with_options(
             &mut read,
@@ -193,14 +262,539 @@ impl NavigationPreparer {
             parser.reset();
             return facts;
         };
-        // A partial syntax tree can misidentify scopes. Keep the existing lexical
-        // fallback for the whole file rather than claiming precise relationships.
-        if tree.root_node().has_error() {
-            return facts;
+        // A partial syntax tree can misidentify scopes. Keep the lexical fallback
+        // for relationships in that case, but keep the definitions: a name and
+        // its lines are still right wherever the definition's own span parsed.
+        facts.partial = tree.root_node().has_error();
+        if !language.relationships() {
+            facts.definitions_only = true;
+            let mut visitor = Definitions {
+                text,
+                language,
+                facts,
+                depth: 0,
+            };
+            visitor.visit(tree.root_node(), None);
+            visitor.facts.valid = true;
+            return visitor.facts;
         }
         let mut collector = Collector::new(text, facts);
         collector.visit(tree.root_node(), 0);
         collector.finish()
+    }
+}
+
+/// Definitions of a language without the JavaScript scope machinery: one
+/// walk that records functions, methods, classes, types, modules and
+/// constants with their containers and qualified names.
+struct Definitions<'a> {
+    text: &'a str,
+    language: Language,
+    facts: FileFacts,
+    depth: usize,
+}
+impl<'a> Definitions<'a> {
+    fn text(&self, node: Node<'_>) -> &'a str {
+        &self.text[node.byte_range()]
+    }
+    fn push(
+        &mut self,
+        name: &str,
+        qualified: Option<String>,
+        kind: DefinitionKind,
+        container: Option<usize>,
+        span: Node<'_>,
+        exported: bool,
+    ) -> usize {
+        let qualified = qualified.unwrap_or_else(|| {
+            match container.and_then(|i| self.facts.definitions.get(i)) {
+                Some(owner) => format!("{}.{name}", owner.qualified),
+                None => name.to_owned(),
+            }
+        });
+        let id = self.facts.definitions.len();
+        self.facts.definitions.push(Definition {
+            name: name.to_owned(),
+            qualified,
+            container,
+            start_line: span.start_position().row + 1,
+            end_line: end_line(span),
+            complete: !span.has_error(),
+            kind,
+            exports: if exported {
+                vec![name.to_owned()]
+            } else {
+                vec![]
+            },
+            start_byte: span.start_byte(),
+            end_byte: span.end_byte(),
+            namespace: Namespace::Both,
+        });
+        id
+    }
+    fn children(&mut self, node: Node<'_>, container: Option<usize>) {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            self.visit(child, container);
+        }
+    }
+    fn visit(&mut self, node: Node<'_>, container: Option<usize>) {
+        if self.depth >= 256 || self.facts.definitions.len() > MAX_FACTS {
+            return;
+        }
+        self.depth += 1;
+        match self.language {
+            Language::Python => self.python(node, container),
+            Language::Go => self.go(node, container),
+            Language::Rust => self.rust(node, container),
+            Language::Ruby => self.ruby(node, container),
+            Language::Java => self.java(node, container),
+            Language::Kotlin => self.kotlin(node, container),
+            _ => {}
+        }
+        self.depth -= 1;
+    }
+    fn name_of(&self, node: Node<'_>) -> Option<&'a str> {
+        node.child_by_field_name("name").map(|name| self.text(name))
+    }
+    fn python(&mut self, node: Node<'_>, container: Option<usize>) {
+        match node.kind() {
+            "function_definition" | "class_definition" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                // Decorators belong to the definition.
+                let span = node
+                    .parent()
+                    .filter(|p| p.kind() == "decorated_definition")
+                    .unwrap_or(node);
+                let is_class = node.kind() == "class_definition";
+                let kind = if is_class {
+                    DefinitionKind::Class
+                } else {
+                    callable(container)
+                };
+                let id = self.push(name, None, kind, container, span, !name.starts_with('_'));
+                if let Some(body) = node.child_by_field_name("body") {
+                    // Methods belong to their class; a nested function to no one.
+                    self.children(body, is_class.then_some(id));
+                }
+            }
+            _ => self.children(node, container),
+        }
+    }
+    fn go(&mut self, node: Node<'_>, container: Option<usize>) {
+        let exported = |name: &str| name.starts_with(|c: char| c.is_uppercase());
+        match node.kind() {
+            "function_declaration" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(
+                        name,
+                        None,
+                        DefinitionKind::Function,
+                        None,
+                        node,
+                        exported(name),
+                    );
+                }
+            }
+            "method_declaration" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                // The receiver type qualifies the method: `Context.Next`.
+                let receiver = node
+                    .child_by_field_name("receiver")
+                    .and_then(|list| list.named_child(0))
+                    .and_then(|parameter| parameter.child_by_field_name("type"))
+                    .map(|ty| {
+                        self.text(innermost_type(ty))
+                            .trim_start_matches('*')
+                            .to_owned()
+                    });
+                let qualified = receiver.map(|receiver| format!("{receiver}.{name}"));
+                self.push(
+                    name,
+                    qualified,
+                    DefinitionKind::Method,
+                    None,
+                    node,
+                    exported(name),
+                );
+            }
+            "type_declaration" => {
+                let specs: Vec<Node<'_>> = {
+                    let mut cursor = node.walk();
+                    node.named_children(&mut cursor)
+                        .filter(|c| matches!(c.kind(), "type_spec" | "type_alias"))
+                        .collect()
+                };
+                for spec in &specs {
+                    let Some(name) = self.name_of(*spec) else {
+                        continue;
+                    };
+                    let kind = match spec.child_by_field_name("type").map(|t| t.kind()) {
+                        Some("struct_type") => DefinitionKind::Class,
+                        _ => DefinitionKind::Type,
+                    };
+                    let span = if specs.len() == 1 { node } else { *spec };
+                    self.push(name, None, kind, None, span, exported(name));
+                }
+            }
+            // `const a, b = 1, 2`, `const ( … )` and `var ( … )` (whose specs
+            // sit in a `var_spec_list`): every name is a definition, spanning
+            // its own spec when the declaration groups several.
+            "const_declaration" | "var_declaration" => {
+                let mut cursor = node.walk();
+                let mut specs = Vec::new();
+                for child in node.named_children(&mut cursor) {
+                    if child.kind() == "var_spec_list" {
+                        let mut inner = child.walk();
+                        specs.extend(
+                            child
+                                .named_children(&mut inner)
+                                .filter(|c| c.kind() == "var_spec"),
+                        );
+                    } else if matches!(child.kind(), "const_spec" | "var_spec") {
+                        specs.push(child);
+                    }
+                }
+                let grouped = specs.len() > 1;
+                for spec in specs {
+                    let span = if grouped { spec } else { node };
+                    let mut names = spec.walk();
+                    let names: Vec<&'a str> = spec
+                        .children_by_field_name("name", &mut names)
+                        .filter(|n| n.kind() == "identifier")
+                        .map(|n| self.text(n))
+                        .collect();
+                    for name in names {
+                        self.push(
+                            name,
+                            None,
+                            DefinitionKind::Constant,
+                            None,
+                            span,
+                            exported(name),
+                        );
+                    }
+                }
+            }
+            "source_file" => self.children(node, container),
+            _ => {}
+        }
+    }
+    fn rust(&mut self, node: Node<'_>, container: Option<usize>) {
+        let public = |node: Node<'_>| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .any(|c| c.kind() == "visibility_modifier")
+        };
+        match node.kind() {
+            "function_item" | "function_signature_item" => {
+                if let Some(name) = self.name_of(node) {
+                    let kind = callable(container);
+                    self.push(name, None, kind, container, node, public(node));
+                }
+            }
+            "struct_item" | "enum_item" | "union_item" | "type_item" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Type, None, node, public(node));
+                }
+            }
+            "trait_item" => {
+                if let Some(name) = self.name_of(node) {
+                    let id = self.push(name, None, DefinitionKind::Type, None, node, public(node));
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.children(body, Some(id));
+                    }
+                }
+            }
+            "impl_item" => {
+                // `impl<'a> Searcher<'a>` and `impl Matcher for Searcher` both
+                // define members of `Searcher`.
+                let name = node
+                    .child_by_field_name("type")
+                    .map(|ty| self.text(innermost_type(ty)).to_owned());
+                if let Some(name) = name {
+                    let id = self.push(&name, None, DefinitionKind::Class, None, node, true);
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.children(body, Some(id));
+                    }
+                }
+            }
+            "mod_item" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Module, None, node, public(node));
+                    if let Some(body) = node.child_by_field_name("body") {
+                        self.children(body, None);
+                    }
+                }
+            }
+            "const_item" | "static_item" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(
+                        name,
+                        None,
+                        DefinitionKind::Constant,
+                        None,
+                        node,
+                        public(node),
+                    );
+                }
+            }
+            "macro_definition" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Function, None, node, true);
+                }
+            }
+            "source_file" => self.children(node, container),
+            _ => {}
+        }
+    }
+    fn ruby(&mut self, node: Node<'_>, container: Option<usize>) {
+        match node.kind() {
+            "class" | "module" => {
+                let Some(name) = node.child_by_field_name("name") else {
+                    return;
+                };
+                // `class Foo::Bar` defines `Bar` inside `Foo`.
+                let full = self.text(name).replace("::", ".");
+                let leaf = full.rsplit('.').next().unwrap_or(&full).to_owned();
+                let qualified = match container.and_then(|i| self.facts.definitions.get(i)) {
+                    Some(owner) => format!("{}.{full}", owner.qualified),
+                    None => full,
+                };
+                let kind = if node.kind() == "class" {
+                    DefinitionKind::Class
+                } else {
+                    DefinitionKind::Module
+                };
+                let id = self.push(&leaf, Some(qualified), kind, container, node, true);
+                if let Some(body) = node.child_by_field_name("body") {
+                    self.children(body, Some(id));
+                }
+            }
+            "method" | "singleton_method" => {
+                if let Some(name) = self.name_of(node) {
+                    let kind = callable(container);
+                    self.push(name, None, kind, container, node, true);
+                }
+            }
+            _ => self.children(node, container),
+        }
+    }
+    fn kotlin(&mut self, node: Node<'_>, container: Option<usize>) {
+        // Keywords and modifiers are unnamed children; annotations live in
+        // `modifiers`, which the declaration's span already covers.
+        let words = |node: Node<'_>| -> Vec<&'a str> {
+            let mut cursor = node.walk();
+            let mut words: Vec<&'a str> = node
+                .children(&mut cursor)
+                .filter(|c| !c.is_named())
+                .map(|c| self.text(c))
+                .collect();
+            let mut cursor = node.walk();
+            if let Some(m) = node.children(&mut cursor).find(|c| c.kind() == "modifiers") {
+                let mut cursor = m.walk();
+                words.extend(m.children(&mut cursor).map(|c| self.text(c)));
+            }
+            words
+        };
+        // Kotlin is public unless it says otherwise.
+        let exported = |words: &[&str]| {
+            !words
+                .iter()
+                .any(|w| matches!(*w, "private" | "internal" | "protected"))
+        };
+        let first_identifier = |node: Node<'_>| -> Option<&'a str> {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|c| c.kind() == "identifier")
+                .map(|c| self.text(c))
+        };
+        match node.kind() {
+            "class_declaration" | "object_declaration" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                let words = words(node);
+                let kind = if words.contains(&"interface") {
+                    DefinitionKind::Type
+                } else {
+                    DefinitionKind::Class
+                };
+                let id = self.push(name, None, kind, container, node, exported(&words));
+                let mut cursor = node.walk();
+                let bodies: Vec<Node<'_>> = node
+                    .children(&mut cursor)
+                    .filter(|c| matches!(c.kind(), "class_body" | "enum_class_body"))
+                    .collect();
+                for body in bodies {
+                    self.children(body, Some(id));
+                }
+            }
+            // `companion object` members are addressed through the class.
+            "companion_object" => {
+                let mut cursor = node.walk();
+                let bodies: Vec<Node<'_>> = node
+                    .children(&mut cursor)
+                    .filter(|c| c.kind() == "class_body")
+                    .collect();
+                for body in bodies {
+                    self.children(body, container);
+                }
+            }
+            "function_declaration" => {
+                if let Some(name) = self.name_of(node) {
+                    let kind = callable(container);
+                    let exported = exported(&words(node));
+                    self.push(name, None, kind, container, node, exported);
+                }
+            }
+            "secondary_constructor" => {
+                if let Some(owner) = container.and_then(|i| self.facts.definitions.get(i)) {
+                    let name = owner.name.clone();
+                    let exported = exported(&words(node));
+                    self.push(
+                        &name,
+                        None,
+                        DefinitionKind::Method,
+                        container,
+                        node,
+                        exported,
+                    );
+                }
+            }
+            // Properties are the named values agents ask for
+            // (`JavalinConfig.routes`, `const val DEFAULT_PORT`, the `var`
+            // settings of a config class); locals are never reached.
+            "property_declaration" => {
+                let words = words(node);
+                if !words.contains(&"val") && !words.contains(&"var") {
+                    return;
+                }
+                let mut cursor = node.walk();
+                let names: Vec<&'a str> = node
+                    .children(&mut cursor)
+                    .filter(|c| c.kind() == "variable_declaration")
+                    .filter_map(first_identifier)
+                    .collect();
+                for name in names {
+                    self.push(
+                        name,
+                        None,
+                        DefinitionKind::Constant,
+                        container,
+                        node,
+                        exported(&words),
+                    );
+                }
+            }
+            "enum_entry" => {
+                if let Some(name) = first_identifier(node) {
+                    self.push(name, None, DefinitionKind::Constant, container, node, true);
+                }
+            }
+            "type_alias" => {
+                if let Some(name) = node.child_by_field_name("type").map(|n| self.text(n)) {
+                    let exported = exported(&words(node));
+                    self.push(name, None, DefinitionKind::Type, container, node, exported);
+                }
+            }
+            // Function bodies are not visited; statement and member wrappers
+            // pass through.
+            "function_body" | "block" => {}
+            _ => self.children(node, container),
+        }
+    }
+    fn java(&mut self, node: Node<'_>, container: Option<usize>) {
+        // Annotations sit inside the declaration's `modifiers` child, so a
+        // declaration's own span already covers them.
+        let modifiers = |node: Node<'_>| -> Vec<&'a str> {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|c| c.kind() == "modifiers")
+                .map(|m| {
+                    let mut cursor = m.walk();
+                    m.children(&mut cursor)
+                        .filter(|c| !c.is_named())
+                        .map(|c| self.text(c))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        // Interface members are public without saying so.
+        let in_interface = |node: Node<'_>| {
+            node.parent()
+                .is_some_and(|p| matches!(p.kind(), "interface_body" | "annotation_type_body"))
+        };
+        match node.kind() {
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration"
+            | "annotation_type_declaration" => {
+                let Some(name) = self.name_of(node) else {
+                    return;
+                };
+                let kind = if node.kind() == "interface_declaration" {
+                    DefinitionKind::Type
+                } else {
+                    DefinitionKind::Class
+                };
+                let exported = modifiers(node).contains(&"public") || in_interface(node);
+                let id = self.push(name, None, kind, container, node, exported);
+                if let Some(body) = node.child_by_field_name("body") {
+                    self.children(body, Some(id));
+                }
+            }
+            "method_declaration"
+            | "constructor_declaration"
+            | "compact_constructor_declaration" => {
+                if let Some(name) = self.name_of(node) {
+                    let exported = modifiers(node).contains(&"public") || in_interface(node);
+                    let kind = callable(container);
+                    self.push(name, None, kind, container, node, exported);
+                }
+            }
+            // `static final` fields and interface constants are the named
+            // values agents ask for; instance fields are not definitions.
+            "field_declaration" | "constant_declaration" => {
+                let mods = modifiers(node);
+                let constant = node.kind() == "constant_declaration"
+                    || (mods.contains(&"static") && mods.contains(&"final"));
+                if !constant {
+                    return;
+                }
+                let exported = mods.contains(&"public") || in_interface(node);
+                let mut cursor = node.walk();
+                let declarators: Vec<Node<'_>> = node
+                    .children_by_field_name("declarator", &mut cursor)
+                    .collect();
+                for declarator in declarators {
+                    if let Some(name) = self.name_of(declarator) {
+                        self.push(
+                            name,
+                            None,
+                            DefinitionKind::Constant,
+                            container,
+                            node,
+                            exported,
+                        );
+                    }
+                }
+            }
+            "enum_constant" => {
+                if let Some(name) = self.name_of(node) {
+                    self.push(name, None, DefinitionKind::Constant, container, node, true);
+                }
+            }
+            // Method bodies are not visited, so local and anonymous classes
+            // stay out of the index; wrappers such as `enum_body_declarations`
+            // pass through.
+            _ => self.children(node, container),
+        }
     }
 }
 
@@ -232,6 +826,8 @@ struct Collector<'a> {
     depth: usize,
     overflow: bool,
     current_caller: Option<usize>,
+    /// The class or object definition whose body is being visited.
+    current_container: Option<usize>,
 }
 impl<'a> Collector<'a> {
     fn new(text: &'a str, facts: FileFacts) -> Self {
@@ -247,6 +843,7 @@ impl<'a> Collector<'a> {
             depth: 0,
             overflow: false,
             current_caller: None,
+            current_container: None,
         }
     }
     fn text(&self, node: Node<'_>) -> &'a str {
@@ -341,6 +938,20 @@ impl<'a> Collector<'a> {
         scope: usize,
         namespace: Namespace,
     ) -> usize {
+        self.definition_named(self.text(name), node, kind, scope, namespace, true)
+    }
+    /// Record a definition. `bind` makes the name a scope binding, which is
+    /// right for declarations and wrong for members (a method is a property of
+    /// its class, not a name in scope).
+    fn definition_named(
+        &mut self,
+        name: &str,
+        node: Node<'_>,
+        kind: DefinitionKind,
+        scope: usize,
+        namespace: Namespace,
+        bind: bool,
+    ) -> usize {
         let mut span = node;
         if let Some(parent) = node.parent()
             && matches!(
@@ -356,7 +967,7 @@ impl<'a> Collector<'a> {
             exports.push(if prefix.split_whitespace().any(|w| w == "default") {
                 "default".into()
             } else {
-                self.text(name).into()
+                name.into()
             });
             span = parent;
         }
@@ -377,12 +988,19 @@ impl<'a> Collector<'a> {
                     .all(char::is_whitespace)
         });
         if export_prefix.is_some() {
-            exports.push(self.text(name).into());
+            exports.push(name.into());
         }
         let start = export_prefix.unwrap_or(span);
         let id = self.facts.definitions.len();
+        let container = self.current_container;
+        let qualified = match container.and_then(|i| self.facts.definitions.get(i)) {
+            Some(owner) => format!("{}.{name}", owner.qualified),
+            None => name.into(),
+        };
         self.facts.definitions.push(Definition {
-            name: self.text(name).into(),
+            name: name.into(),
+            qualified,
+            container,
             start_line: start.start_position().row + 1,
             end_line: end_line(span),
             complete: !span.has_error(),
@@ -392,13 +1010,38 @@ impl<'a> Collector<'a> {
             end_byte: span.end_byte(),
             namespace,
         });
-        self.bind(
-            self.text(name),
-            scope,
-            namespace,
-            BindingTarget::Definition(id),
-        );
+        if bind {
+            self.bind(name, scope, namespace, BindingTarget::Definition(id));
+        }
         id
+    }
+    /// The name of a class member or object property, when it is a plain name.
+    fn member_name(&self, node: Node<'_>) -> Option<&'a str> {
+        let name = node
+            .child_by_field_name("name")
+            .or_else(|| node.child_by_field_name("key"))?;
+        match name.kind() {
+            "property_identifier" | "private_property_identifier" | "identifier" => {
+                Some(self.text(name))
+            }
+            // A plain quoted key: the text between the quotes, borrowed.
+            "string" => {
+                let text = self.text(name);
+                string_value(text).map(|_| &text[1..text.len() - 1])
+            }
+            _ => None,
+        }
+    }
+    /// Visit a class body or object literal with `owner` as the container of
+    /// the members defined directly inside it.
+    fn visit_members(&mut self, node: Node<'_>, scope: usize, owner: Option<usize>) {
+        let previous = self.current_container;
+        self.current_container = owner;
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            self.visit(child, scope);
+        }
+        self.current_container = previous;
     }
     fn visit(&mut self, node: Node<'_>, scope: usize) {
         if self.depth >= 256 {
@@ -428,23 +1071,65 @@ impl<'a> Collector<'a> {
             | "generator_function"
             | "arrow_function"
             | "method_definition" => {
+                let parent = node.parent();
+                let is_value_of = |kind: &str| {
+                    parent.is_some_and(|parent| {
+                        parent.kind() == kind && parent.child_by_field_name("value") == Some(node)
+                    })
+                };
                 let owner = if matches!(
                     node.kind(),
                     "function_declaration" | "generator_function_declaration"
                 ) {
-                    node.child_by_field_name("name").map(|name| {
-                        self.definition(
+                    match node.child_by_field_name("name") {
+                        Some(name) => Some(self.definition(
                             name,
                             node,
                             DefinitionKind::Function,
                             scope,
                             Namespace::Value,
-                        )
+                        )),
+                        // `export default function () {}` has no name of its own.
+                        None if parent.is_some_and(|p| p.kind() == "export_statement") => {
+                            Some(self.definition_named(
+                                "default",
+                                node,
+                                DefinitionKind::Function,
+                                scope,
+                                Namespace::Value,
+                                false,
+                            ))
+                        }
+                        None => None,
+                    }
+                } else if matches!(node.kind(), "function_expression" | "arrow_function")
+                    && parent.is_some_and(|p| {
+                        p.kind() == "export_statement"
+                            && p.child_by_field_name("value") == Some(node)
                     })
-                } else if node.parent().is_some_and(|parent| {
-                    parent.kind() == "variable_declarator"
-                        && parent.child_by_field_name("value") == Some(node)
-                }) {
+                {
+                    // `export default function () {}` / `export default () => {}`.
+                    Some(self.definition_named(
+                        "default",
+                        node,
+                        DefinitionKind::Function,
+                        scope,
+                        Namespace::Value,
+                        false,
+                    ))
+                } else if node.kind() == "method_definition"
+                    && parent.is_some_and(|p| matches!(p.kind(), "class_body" | "object"))
+                {
+                    // Members are properties of their container, not names in scope.
+                    let kind = if parent.is_some_and(|p| p.kind() == "class_body") {
+                        DefinitionKind::Method
+                    } else {
+                        DefinitionKind::Function
+                    };
+                    self.member_name(node).map(|name| {
+                        self.definition_named(name, node, kind, scope, Namespace::Value, false)
+                    })
+                } else if is_value_of("variable_declarator") {
                     self.facts
                         .definitions
                         .last()
@@ -454,11 +1139,41 @@ impl<'a> Collector<'a> {
                                 && d.end_byte >= node.end_byte()
                         })
                         .map(|_| self.facts.definitions.len() - 1)
+                } else if is_value_of("pair") {
+                    // `{ list: () => {} }` inside an object literal.
+                    let pair = parent.unwrap();
+                    self.member_name(pair).map(|name| {
+                        self.definition_named(
+                            name,
+                            pair,
+                            DefinitionKind::Function,
+                            scope,
+                            Namespace::Value,
+                            false,
+                        )
+                    })
+                } else if is_value_of("public_field_definition") || is_value_of("field_definition")
+                {
+                    // `handle = () => {}` as a class property.
+                    let field = parent.unwrap();
+                    self.member_name(field).map(|name| {
+                        self.definition_named(
+                            name,
+                            field,
+                            DefinitionKind::Method,
+                            scope,
+                            Namespace::Value,
+                            false,
+                        )
+                    })
                 } else {
                     None
                 };
                 let previous_caller = self.current_caller;
                 self.current_caller = owner;
+                // Names defined inside a body belong to the function, not to the
+                // class or object around it.
+                let previous_container = self.current_container.take();
                 let inner = self.scope(scope, true);
                 if !matches!(
                     node.kind(),
@@ -489,6 +1204,7 @@ impl<'a> Collector<'a> {
                     self.visit(return_type, inner);
                 }
                 self.current_caller = previous_caller;
+                self.current_container = previous_container;
                 return;
             }
             "statement_block" | "class_body" | "catch_clause" | "for_statement"
@@ -518,6 +1234,7 @@ impl<'a> Collector<'a> {
                         binding_scope = self.scopes[binding_scope].parent.unwrap_or(0);
                     }
                 }
+                let mut owner = None;
                 if name.kind() == "identifier" && is_const {
                     let kind = if node.child_by_field_name("value").is_some_and(|n| {
                         matches!(
@@ -529,12 +1246,18 @@ impl<'a> Collector<'a> {
                     } else {
                         DefinitionKind::Constant
                     };
-                    self.definition(name, node, kind, binding_scope, Namespace::Value);
+                    owner =
+                        Some(self.definition(name, node, kind, binding_scope, Namespace::Value));
                 } else {
                     self.pattern(name, binding_scope);
                 }
                 if let Some(value) = node.child_by_field_name("value") {
-                    self.visit(value, scope);
+                    if value.kind() == "object" && owner.is_some() {
+                        // `const routes = { list() {} }`: members qualify as `routes.list`.
+                        self.visit_members(value, scope, owner);
+                    } else {
+                        self.visit(value, scope);
+                    }
                 }
                 if let Some(annotation) = node.child_by_field_name("type") {
                     self.visit(annotation, scope);
@@ -562,13 +1285,15 @@ impl<'a> Collector<'a> {
                 } else {
                     Namespace::Both
                 };
-                if let Some(name) = node.child_by_field_name("name") {
-                    self.definition(name, node, kind, scope, namespace);
-                }
+                let owner = node
+                    .child_by_field_name("name")
+                    .map(|name| self.definition(name, node, kind, scope, namespace));
                 let inner = self.scope(scope, false);
                 if let Some(parameters) = node.child_by_field_name("type_parameters") {
                     self.pattern(parameters, inner);
                 }
+                let previous_container = self.current_container;
+                self.current_container = owner.filter(|_| kind == DefinitionKind::Class);
                 let mut cursor = node.walk();
                 for child in node.named_children(&mut cursor) {
                     if Some(child) != node.child_by_field_name("name")
@@ -577,6 +1302,7 @@ impl<'a> Collector<'a> {
                         self.visit(child, inner);
                     }
                 }
+                self.current_container = previous_container;
                 return;
             }
             "identifier" | "type_identifier" | "shorthand_property_identifier" => {
@@ -709,6 +1435,13 @@ impl<'a> Collector<'a> {
             self.facts.imports.clear();
             return self.facts;
         }
+        if self.facts.partial {
+            // Scopes in a tree with errors are not trustworthy; keep only the
+            // definitions, whose own spans say whether they parsed.
+            self.facts.imports.clear();
+            self.facts.valid = true;
+            return self.facts;
+        }
         let mut bindings: HashMap<(usize, &str), Vec<&Binding>> = HashMap::new();
         for binding in &self.bindings {
             bindings
@@ -812,10 +1545,34 @@ struct Edge {
     target_file: usize,
     definition: usize,
 }
+/// A definition found by name: the file and its position in that file's facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DefinitionRef {
+    pub file: usize,
+    pub definition: usize,
+}
+
+/// What the index holds, for the coverage line of an answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexCoverage {
+    /// Parsed files by extension, in extension order.
+    pub extensions: std::collections::BTreeMap<String, usize>,
+    /// Files of a supported language that parsed (fully or with errors).
+    pub parsed_files: usize,
+    /// Parsed files whose tree had errors: definitions only, no relationships.
+    pub partial_files: usize,
+    pub definitions: usize,
+}
+
 pub struct NavigationIndex {
     files: Vec<(String, Arc<FileFacts>)>,
     paths: HashMap<String, usize>,
     incoming: HashMap<String, Vec<(usize, usize)>>,
+    /// Definitions by leaf name, in path order.
+    by_name: HashMap<String, Vec<DefinitionRef>>,
+    /// Leaf names by their ASCII-lowercased form, for a case-insensitive fallback.
+    by_lower: HashMap<String, Vec<String>>,
+    coverage: IndexCoverage,
 }
 impl NavigationIndex {
     pub fn new<'a>(files: impl IntoIterator<Item = (&'a str, &'a FileFacts)>) -> Self {
@@ -840,12 +1597,44 @@ impl NavigationIndex {
             incoming: HashMap::new(),
             files,
             paths,
+            by_name: HashMap::new(),
+            by_lower: HashMap::new(),
+            coverage: IndexCoverage::default(),
         };
         // Postings only: cross-file resolution happens for the selected evidence,
         // not for every reference whenever a CLI process starts.
-        for (file, (_, facts)) in index.files.iter().enumerate() {
+        for (file, (path, facts)) in index.files.iter().enumerate() {
             if !facts.valid {
                 continue;
+            }
+            if supports(path) {
+                index.coverage.parsed_files += 1;
+                index.coverage.partial_files += usize::from(facts.partial);
+                if let Some(extension) = path.rsplit('.').next() {
+                    *index
+                        .coverage
+                        .extensions
+                        .entry(extension.to_owned())
+                        .or_default() += 1;
+                }
+            }
+            for (definition, item) in facts.definitions.iter().enumerate() {
+                index.coverage.definitions += 1;
+                let entry = DefinitionRef { file, definition };
+                match index.by_name.get_mut(&item.name) {
+                    Some(refs) => refs.push(entry),
+                    None => {
+                        let lower = item.name.to_ascii_lowercase();
+                        if lower != item.name {
+                            index
+                                .by_lower
+                                .entry(lower)
+                                .or_default()
+                                .push(item.name.clone());
+                        }
+                        index.by_name.insert(item.name.clone(), vec![entry]);
+                    }
+                }
             }
             for (reference, item) in facts.references.iter().enumerate() {
                 if !item.is_call || item.caller.is_none() {
@@ -871,17 +1660,76 @@ impl NavigationIndex {
         }
         index
     }
+    /// Every definition of every parsed file, with its path.
+    pub fn all_definitions(&self) -> impl Iterator<Item = (&str, &Definition)> {
+        self.files.iter().flat_map(|(path, facts)| {
+            facts
+                .definitions
+                .iter()
+                .map(move |definition| (path.as_str(), definition))
+        })
+    }
     pub fn definitions(&self, path: &str) -> &[Definition] {
         self.paths
             .get(path)
             .map_or(&[], |file| self.files[*file].1.definitions.as_slice())
     }
+    /// Fully parsed: relationships in this file are precise. A file with syntax
+    /// errors has definitions but keeps the lexical fallback for relationships.
     pub fn is_parsed(&self, path: &str) -> bool {
         supports(path)
-            && self
-                .paths
-                .get(path)
-                .is_some_and(|file| self.files[*file].1.valid)
+            && self.paths.get(path).is_some_and(|file| {
+                let facts = &self.files[*file].1;
+                facts.valid && !facts.partial && !facts.definitions_only
+            })
+    }
+    pub fn coverage(&self) -> &IndexCoverage {
+        &self.coverage
+    }
+    pub fn path(&self, reference: DefinitionRef) -> &str {
+        &self.files[reference.file].0
+    }
+    pub fn get(&self, reference: DefinitionRef) -> &Definition {
+        &self.files[reference.file].1.definitions[reference.definition]
+    }
+    /// Every definition with this exact leaf name, in path order.
+    pub fn lookup(&self, name: &str) -> &[DefinitionRef] {
+        self.by_name.get(name).map_or(&[], Vec::as_slice)
+    }
+    /// Definitions whose qualified name is `qualified` or ends with `.qualified`:
+    /// `Server.handle` finds `NextNodeServer.handle`, never `handle` alone.
+    pub fn lookup_qualified(&self, qualified: &str) -> Vec<DefinitionRef> {
+        let (_, leaf) = qualified.rsplit_once('.').unwrap_or(("", qualified));
+        if leaf == qualified {
+            return self.lookup(leaf).to_vec();
+        }
+        self.lookup(leaf)
+            .iter()
+            .copied()
+            .filter(|reference| {
+                let full = &self.get(*reference).qualified;
+                full == qualified
+                    || full
+                        .strip_suffix(qualified)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            })
+            .collect()
+    }
+    /// Definitions whose leaf name matches ignoring ASCII case, when no exact
+    /// match exists. Names that differ only by case are all returned.
+    pub fn lookup_insensitive(&self, name: &str) -> Vec<DefinitionRef> {
+        let lower = name.to_ascii_lowercase();
+        let mut names = vec![];
+        if self.by_name.contains_key(&lower) {
+            names.push(lower.clone());
+        }
+        if let Some(others) = self.by_lower.get(&lower) {
+            names.extend(others.iter().cloned());
+        }
+        names
+            .iter()
+            .flat_map(|name| self.lookup(name).iter().copied())
+            .collect()
     }
     pub fn definition(&self, path: &str, line: usize) -> Option<&Definition> {
         let file = *self.paths.get(path)?;
@@ -1337,6 +2185,24 @@ fn parse_config(text: &str) -> Option<ModuleConfig> {
     Some(config)
 }
 
+/// A function inside a type is its method; anywhere else it stands alone.
+fn callable(container: Option<usize>) -> DefinitionKind {
+    if container.is_some() {
+        DefinitionKind::Method
+    } else {
+        DefinitionKind::Function
+    }
+}
+
+/// The named type under wrappers: `*Context` in a Go receiver, the
+/// `Searcher` of `impl<'a> Searcher<'a>`.
+fn innermost_type(mut ty: Node<'_>) -> Node<'_> {
+    while let Some(inner) = ty.child_by_field_name("type") {
+        ty = inner;
+    }
+    ty
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1348,6 +2214,560 @@ mod tests {
         assert!(facts.valid);
         assert_eq!(facts.definitions[0].start_line, 1);
         assert_eq!(facts.definitions[0].end_line, 5);
+    }
+
+    #[test]
+    fn class_members_object_members_and_default_exports_are_definitions() {
+        let source = "export default class NextNodeServer extends BaseServer<Options> {\n  private handle(req: Request) {\n    const inner = () => 1;\n    return inner();\n  }\n  static create() { return new NextNodeServer(); }\n  onError = (error: Error) => { log(error); };\n}\nexport const routes = {\n  list() { return []; },\n  get: async (id: string) => id,\n  'quoted-key': () => 2,\n};\nexport default function () { return routes; }\n";
+        let facts = NavigationPreparer::default().prepare("server.ts", source);
+        assert!(facts.valid && !facts.partial);
+        let summary = facts
+            .definitions
+            .iter()
+            .map(|d| {
+                (
+                    d.qualified.as_str(),
+                    d.kind,
+                    d.start_line,
+                    d.end_line,
+                    d.container,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            vec![
+                ("NextNodeServer", DefinitionKind::Class, 1, 8, None),
+                (
+                    "NextNodeServer.handle",
+                    DefinitionKind::Method,
+                    2,
+                    5,
+                    Some(0)
+                ),
+                // A const arrow inside a body is a definition of its own (as
+                // before), but it belongs to no container.
+                ("inner", DefinitionKind::Function, 3, 3, None),
+                (
+                    "NextNodeServer.create",
+                    DefinitionKind::Method,
+                    6,
+                    6,
+                    Some(0)
+                ),
+                (
+                    "NextNodeServer.onError",
+                    DefinitionKind::Method,
+                    7,
+                    7,
+                    Some(0)
+                ),
+                ("routes", DefinitionKind::Constant, 9, 13, None),
+                ("routes.list", DefinitionKind::Function, 10, 10, Some(5)),
+                ("routes.get", DefinitionKind::Function, 11, 11, Some(5)),
+                (
+                    "routes.quoted-key",
+                    DefinitionKind::Function,
+                    12,
+                    12,
+                    Some(5)
+                ),
+                ("default", DefinitionKind::Function, 14, 14, None),
+            ]
+        );
+        assert!(facts.definitions[0].exported());
+        assert!(!facts.definitions[1].exported());
+    }
+
+    #[test]
+    fn files_with_syntax_errors_keep_definitions_and_drop_relationships() {
+        let source = "import { helper } from './helper';\nexport class BaseServer {\n  handle() { return helper(); }\n}\nconst broken = ;\nexport function after() { return 2; }\n";
+        let facts = NavigationPreparer::default().prepare("base.ts", source);
+        assert!(facts.valid && facts.partial);
+        assert!(facts.references.is_empty() && facts.imports.is_empty());
+        let names = facts
+            .definitions
+            .iter()
+            .map(|d| (d.qualified.as_str(), d.complete))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&("BaseServer", true)));
+        assert!(names.contains(&("BaseServer.handle", true)));
+        assert!(names.contains(&("after", true)));
+        let index = index(&[("base.ts", source)]);
+        assert!(!index.is_parsed("base.ts"));
+        assert_eq!(index.lookup("BaseServer").len(), 1);
+        assert_eq!(index.coverage().partial_files, 1);
+    }
+
+    #[test]
+    fn lookup_by_leaf_qualified_and_case() {
+        let index = index(&[
+            (
+                "a.ts",
+                "export class Server { handle() {} }\nexport function handle() {}\n",
+            ),
+            (
+                "b.ts",
+                "export class NextNodeServer { handle() {} }\nexport const HANDLE = 1;\n",
+            ),
+        ]);
+        assert_eq!(index.coverage().definitions, 6);
+        assert_eq!(index.coverage().parsed_files, 2);
+        assert_eq!(index.lookup("handle").len(), 3);
+        let qualified = index.lookup_qualified("Server.handle");
+        assert_eq!(qualified.len(), 1);
+        assert_eq!(index.path(qualified[0]), "a.ts");
+        assert_eq!(index.get(qualified[0]).qualified, "Server.handle");
+        assert_eq!(index.lookup_qualified("NextNodeServer.handle").len(), 1);
+        assert_eq!(index.lookup_qualified("Nope.handle").len(), 0);
+        assert!(index.lookup("Handle").is_empty());
+        let insensitive = index.lookup_insensitive("Handle");
+        assert_eq!(insensitive.len(), 4);
+        assert!(insensitive.iter().any(|r| index.get(*r).name == "HANDLE"));
+    }
+
+    fn summary(
+        path: &str,
+        source: &str,
+    ) -> Vec<(String, DefinitionKind, usize, usize, Option<usize>, bool)> {
+        let facts = NavigationPreparer::default().prepare(path, source);
+        assert!(facts.valid && !facts.partial, "{path} should parse");
+        assert!(facts.references.is_empty() && facts.imports.is_empty());
+        facts
+            .definitions
+            .iter()
+            .map(|d| {
+                (
+                    d.qualified.clone(),
+                    d.kind,
+                    d.start_line,
+                    d.end_line,
+                    d.container,
+                    d.exported(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn python_definitions_with_decorators_methods_and_nested_functions() {
+        let source = "import os\n\nX = 1\n\n@decorator\ndef top(a, b=2):\n    def inner(): pass\n    return a\n\nclass Flask(App):\n    \"\"\"Doc.\"\"\"\n    def __init__(self, name):\n        self.name = name\n\n    @property\n    def wsgi_app(self):\n        return 1\n\n    @staticmethod\n    def _make(): pass\n\nasync def fetch(): pass\n";
+        let got = summary("app.py", source);
+        let want = [
+            ("top", DefinitionKind::Function, 5, 8, None, true),
+            ("inner", DefinitionKind::Function, 7, 7, None, true),
+            ("Flask", DefinitionKind::Class, 10, 20, None, true),
+            (
+                "Flask.__init__",
+                DefinitionKind::Method,
+                12,
+                13,
+                Some(2),
+                false,
+            ),
+            (
+                "Flask.wsgi_app",
+                DefinitionKind::Method,
+                15,
+                17,
+                Some(2),
+                true,
+            ),
+            (
+                "Flask._make",
+                DefinitionKind::Method,
+                19,
+                20,
+                Some(2),
+                false,
+            ),
+            ("fetch", DefinitionKind::Function, 22, 22, None, true),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+        let index = NavigationIndex::new_shared([(
+            "app.py",
+            Arc::new(NavigationPreparer::default().prepare("app.py", source)),
+        )]);
+        assert_eq!(index.lookup_qualified("Flask.wsgi_app").len(), 1);
+        assert!(
+            !index.is_parsed("app.py"),
+            "definitions only: lexical relationships stay"
+        );
+        assert_eq!(index.coverage().parsed_files, 1);
+    }
+
+    #[test]
+    fn go_definitions_qualify_methods_by_receiver() {
+        let source = "package gin\n\ntype Context struct{ index int }\n\ntype Handler interface{ Serve() }\n\nconst Version = \"1\"\n\nfunc New() *Engine { return nil }\n\nfunc (c *Context) Next() { c.index++ }\n\nfunc (e Engine) run() {}\n";
+        let got = summary("gin.go", source);
+        let want = [
+            ("Context", DefinitionKind::Class, 3, 3, None, true),
+            ("Handler", DefinitionKind::Type, 5, 5, None, true),
+            ("Version", DefinitionKind::Constant, 7, 7, None, true),
+            ("New", DefinitionKind::Function, 9, 9, None, true),
+            ("Context.Next", DefinitionKind::Method, 11, 11, None, true),
+            ("Engine.run", DefinitionKind::Method, 13, 13, None, false),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+    }
+
+    #[test]
+    fn go_grouped_and_multi_name_constants_and_vars_are_each_definitions() {
+        let source = "package gin\n\nconst Single = 1\n\nconst a, b = 1, 2\n\nconst (\n\tDebugMode = \"debug\"\n\tReleaseMode = \"release\"\n)\n\nvar (\n\tdefaultPlatform string\n\tdefaultTrustedCIDRs = []string{}\n)\n\nvar Version = \"1\"\n";
+        let got = summary("mode.go", source);
+        let want = [
+            ("Single", DefinitionKind::Constant, 3, 3, None, true),
+            ("a", DefinitionKind::Constant, 5, 5, None, false),
+            ("b", DefinitionKind::Constant, 5, 5, None, false),
+            ("DebugMode", DefinitionKind::Constant, 8, 8, None, true),
+            ("ReleaseMode", DefinitionKind::Constant, 9, 9, None, true),
+            (
+                "defaultPlatform",
+                DefinitionKind::Constant,
+                13,
+                13,
+                None,
+                false,
+            ),
+            (
+                "defaultTrustedCIDRs",
+                DefinitionKind::Constant,
+                14,
+                14,
+                None,
+                false,
+            ),
+            ("Version", DefinitionKind::Constant, 17, 17, None, true),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+    }
+
+    #[test]
+    fn rust_definitions_group_impl_members_under_their_type() {
+        let source = "pub struct Searcher<'a> { x: &'a str }\npub enum Kind { A, B }\npub trait Matcher { fn find(&self) -> bool; }\nimpl<'a> Searcher<'a> {\n    pub fn new(x: &'a str) -> Self { Self { x } }\n    fn private(&self) {}\n}\nimpl Matcher for Searcher<'_> { fn find(&self) -> bool { true } }\npub fn top_level() {}\npub mod inner { pub fn nested() {} }\nconst MAX: usize = 1;\npub type Alias = u8;\nmacro_rules! m { () => {} }\n";
+        let got = summary("lib.rs", source);
+        let want = [
+            ("Searcher", DefinitionKind::Type, 1, 1, None, true),
+            ("Kind", DefinitionKind::Type, 2, 2, None, true),
+            ("Matcher", DefinitionKind::Type, 3, 3, None, true),
+            ("Matcher.find", DefinitionKind::Method, 3, 3, Some(2), false),
+            ("Searcher", DefinitionKind::Class, 4, 7, None, true),
+            ("Searcher.new", DefinitionKind::Method, 5, 5, Some(4), true),
+            (
+                "Searcher.private",
+                DefinitionKind::Method,
+                6,
+                6,
+                Some(4),
+                false,
+            ),
+            ("Searcher", DefinitionKind::Class, 8, 8, None, true),
+            (
+                "Searcher.find",
+                DefinitionKind::Method,
+                8,
+                8,
+                Some(7),
+                false,
+            ),
+            ("top_level", DefinitionKind::Function, 9, 9, None, true),
+            ("inner", DefinitionKind::Module, 10, 10, None, true),
+            ("nested", DefinitionKind::Function, 10, 10, None, true),
+            ("MAX", DefinitionKind::Constant, 11, 11, None, false),
+            ("Alias", DefinitionKind::Type, 12, 12, None, true),
+            ("m", DefinitionKind::Function, 13, 13, None, true),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+    }
+
+    #[test]
+    fn ruby_definitions_nest_classes_in_modules_and_split_scoped_names() {
+        let source = "module Discourse\n  class Upload < ActiveRecord::Base\n    def url; end\n    def self.create_for(user); end\n    private\n    def secret; end\n  end\nend\nclass Foo::Bar\n  def call; end\nend\ndef top; end\n";
+        let got = summary("upload.rb", source);
+        let want = [
+            ("Discourse", DefinitionKind::Module, 1, 8, None, true),
+            (
+                "Discourse.Upload",
+                DefinitionKind::Class,
+                2,
+                7,
+                Some(0),
+                true,
+            ),
+            (
+                "Discourse.Upload.url",
+                DefinitionKind::Method,
+                3,
+                3,
+                Some(1),
+                true,
+            ),
+            (
+                "Discourse.Upload.create_for",
+                DefinitionKind::Method,
+                4,
+                4,
+                Some(1),
+                true,
+            ),
+            (
+                "Discourse.Upload.secret",
+                DefinitionKind::Method,
+                6,
+                6,
+                Some(1),
+                true,
+            ),
+            ("Foo.Bar", DefinitionKind::Class, 9, 11, None, true),
+            (
+                "Foo.Bar.call",
+                DefinitionKind::Method,
+                10,
+                10,
+                Some(5),
+                true,
+            ),
+            ("top", DefinitionKind::Function, 12, 12, None, true),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+        let index = NavigationIndex::new_shared([(
+            "upload.rb",
+            Arc::new(NavigationPreparer::default().prepare("upload.rb", source)),
+        )]);
+        assert_eq!(index.lookup("Upload").len(), 1);
+        assert_eq!(index.lookup_qualified("Upload.url").len(), 1);
+        assert_eq!(
+            index
+                .lookup_qualified("Foo::Bar".replace("::", ".").as_str())
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn java_definitions_nest_members_constants_and_enum_values() {
+        let source = "package io.javalin;\n\nimport java.util.List;\n\n@Component\npublic class Javalin implements AutoCloseable {\n    public static final int DEFAULT_PORT = 8080;\n    private int port;\n\n    public Javalin(int port) { this.port = port; }\n\n    @Override\n    public Javalin start() { return this; }\n\n    private void stop() {}\n\n    public static class Config { public boolean debug; }\n\n    public enum Mode { DEV, PROD; public String label() { return name(); } }\n}\n\ninterface Handler {\n    int LIMIT = 1;\n    void handle(Context ctx);\n}\n\nrecord Point(int x, int y) {}\n";
+        let got = summary("Javalin.java", source);
+        let want = [
+            ("Javalin", DefinitionKind::Class, 5, 20, None, true),
+            (
+                "Javalin.DEFAULT_PORT",
+                DefinitionKind::Constant,
+                7,
+                7,
+                Some(0),
+                true,
+            ),
+            (
+                "Javalin.Javalin",
+                DefinitionKind::Method,
+                10,
+                10,
+                Some(0),
+                true,
+            ),
+            (
+                "Javalin.start",
+                DefinitionKind::Method,
+                12,
+                13,
+                Some(0),
+                true,
+            ),
+            (
+                "Javalin.stop",
+                DefinitionKind::Method,
+                15,
+                15,
+                Some(0),
+                false,
+            ),
+            (
+                "Javalin.Config",
+                DefinitionKind::Class,
+                17,
+                17,
+                Some(0),
+                true,
+            ),
+            ("Javalin.Mode", DefinitionKind::Class, 19, 19, Some(0), true),
+            (
+                "Javalin.Mode.DEV",
+                DefinitionKind::Constant,
+                19,
+                19,
+                Some(6),
+                true,
+            ),
+            (
+                "Javalin.Mode.PROD",
+                DefinitionKind::Constant,
+                19,
+                19,
+                Some(6),
+                true,
+            ),
+            (
+                "Javalin.Mode.label",
+                DefinitionKind::Method,
+                19,
+                19,
+                Some(6),
+                true,
+            ),
+            ("Handler", DefinitionKind::Type, 22, 25, None, false),
+            (
+                "Handler.LIMIT",
+                DefinitionKind::Constant,
+                23,
+                23,
+                Some(10),
+                true,
+            ),
+            (
+                "Handler.handle",
+                DefinitionKind::Method,
+                24,
+                24,
+                Some(10),
+                true,
+            ),
+            ("Point", DefinitionKind::Class, 27, 27, None, false),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
+        let index = NavigationIndex::new_shared([(
+            "Javalin.java",
+            Arc::new(NavigationPreparer::default().prepare("Javalin.java", source)),
+        )]);
+        assert_eq!(index.lookup("start").len(), 1);
+        assert_eq!(index.lookup_qualified("Javalin.start").len(), 1);
+        assert_eq!(index.lookup_qualified("Mode.DEV").len(), 1);
+    }
+
+    #[test]
+    fn kotlin_definitions_cover_classes_objects_properties_and_enums() {
+        let source = "package io.javalin\n\nimport java.util.List\n\nconst val DEFAULT_PORT = 8080\n\nclass JavalinConfig(val port: Int) {\n    @JvmField val routes = Routes()\n    var started = false\n\n    fun start(): JavalinConfig {\n        val local = 1\n        return this\n    }\n\n    private fun stop() {}\n\n    constructor() : this(0)\n\n    companion object {\n        @JvmStatic fun create() = JavalinConfig()\n    }\n\n    inner class Http {\n        fun bind() {}\n    }\n}\n\ninterface Handler {\n    fun handle(ctx: Context)\n}\n\nobject Defaults {\n    val limit = 1\n}\n\nenum class Mode {\n    DEV,\n    PROD\n}\n\ntypealias Ctx = Context\n\ninternal fun helper() = 1\n";
+        let got = summary("JavalinConfig.kt", source);
+        let want = [
+            ("DEFAULT_PORT", DefinitionKind::Constant, 5, 5, None, true),
+            ("JavalinConfig", DefinitionKind::Class, 7, 27, None, true),
+            (
+                "JavalinConfig.routes",
+                DefinitionKind::Constant,
+                8,
+                8,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.started",
+                DefinitionKind::Constant,
+                9,
+                9,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.start",
+                DefinitionKind::Method,
+                11,
+                14,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.stop",
+                DefinitionKind::Method,
+                16,
+                16,
+                Some(1),
+                false,
+            ),
+            (
+                "JavalinConfig.JavalinConfig",
+                DefinitionKind::Method,
+                18,
+                18,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.create",
+                DefinitionKind::Method,
+                21,
+                21,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.Http",
+                DefinitionKind::Class,
+                24,
+                26,
+                Some(1),
+                true,
+            ),
+            (
+                "JavalinConfig.Http.bind",
+                DefinitionKind::Method,
+                25,
+                25,
+                Some(8),
+                true,
+            ),
+            ("Handler", DefinitionKind::Type, 29, 31, None, true),
+            (
+                "Handler.handle",
+                DefinitionKind::Method,
+                30,
+                30,
+                Some(10),
+                true,
+            ),
+            ("Defaults", DefinitionKind::Class, 33, 35, None, true),
+            (
+                "Defaults.limit",
+                DefinitionKind::Constant,
+                34,
+                34,
+                Some(12),
+                true,
+            ),
+            ("Mode", DefinitionKind::Class, 37, 40, None, true),
+            ("Mode.DEV", DefinitionKind::Constant, 38, 38, Some(14), true),
+            (
+                "Mode.PROD",
+                DefinitionKind::Constant,
+                39,
+                39,
+                Some(14),
+                true,
+            ),
+            ("Ctx", DefinitionKind::Type, 42, 42, None, true),
+            ("helper", DefinitionKind::Function, 44, 44, None, false),
+        ];
+        assert_eq!(
+            got,
+            want.map(|(q, k, s, e, c, x)| (q.to_owned(), k, s, e, c, x))
+        );
     }
 
     fn index(files: &[(&str, &str)]) -> NavigationIndex {
@@ -1580,7 +3000,10 @@ mod tests {
         assert!(facts.definitions.is_empty());
         assert!(facts.references.is_empty());
         assert!(facts.matches_source("nested.ts", &text));
-        let huge = format!("export function run() {{}}\n{}", " ".repeat(256 * 1024));
+        let huge = format!(
+            "export function run() {{}}\n{}",
+            " ".repeat(PARSED_FILE_BYTES)
+        );
         assert!(
             NavigationPreparer::default()
                 .prepare("large.ts", &huge)

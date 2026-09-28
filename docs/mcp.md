@@ -64,6 +64,17 @@ Setup is **per project**. Run it again for another project. Codex desktop and CL
 share project MCP configuration for trusted projects; setup does not require a
 separate Codex CLI installation. For downloads, see the [installation guide](installation.md); see [release maintenance](releasing.md).
 
+For Claude Code, setup also writes `.claude/settings.local.json` (machine-local,
+added to `.gitignore`): an allow rule for `mcp__oko__search`, and hooks that run
+`oko hook`. They tell the main agent and every subagent, as plain facts, that the
+Oko tool is loaded; add a line naming Oko to the task of an exploring subagent
+(Explore, Plan, general-purpose) that does not mention it; and put a reminder
+beside the first grep or find for code, then every fourth, until an Oko search.
+A hook never blocks or changes a tool call otherwise; anything unexpected is
+ignored. Your own settings and hooks in that file are kept. The reminder counts
+live in the user cache directory and are removed after a day. `--no-hooks`
+skips all of this.
+
 For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
 agent instruction files untouched, and `--install-dir DIRECTORY` to choose the
 stable binary location. These options also support isolated setup tests.
@@ -86,9 +97,14 @@ GUI clients; their working directory may not be your project.
 
 The server exposes `search` with these inputs:
 
-- `question`: required, nonblank, at most 4096 bytes.
+- `question`: nonblank, at most 4096 bytes; needed unless `symbols`,
+  `questions` or `mode: unused` says what to find.
+- `questions`: up to eight independent questions answered in one call (below).
+- `symbols`: exact names, comma-separated, up to twelve (below).
+- `mode`: `usages`, `enumerate` or `unused` (below).
 - `directory`: optional subdirectory inside the configured root.
-- `intent`: `implementation` (default), `explanation`, or `general`.
+- `intent`: `implementation` (default), `explanation`, `general`, or `callers`
+  (every use of the named definition, as a listing).
 - `deep`: optional, defaults to `false`.
 - `max_steps`: deep mode only, 1–5, defaults to 5.
 
@@ -164,6 +180,15 @@ plausible excerpt misses multi-location answers:
   (`definitions`), described below.
 - `partial excerpt`: the enclosing code continues outside the range (`truncated`),
   so the file should be read when the rest matters.
+- `body abridged`: a complete definition too long to show whole (over 256 lines).
+  Its signature, the start of its body, the ranked evidence when that sits
+  deeper, and its end are shown; each gap is marked
+  `… N lines omitted (path:a-b) …` and listed in `omitted`.
+- `outline`: the same for a class the parser knows the members of: the class
+  header and one line per member (at most 60), with the gaps marked.
+- `exact name match`: the definition of a name the question used, shown
+  although the ranker did not accept it (`exactName`). A name match, not a
+  relevance claim; see "Names" below.
 
 Supporting excerpts are introduced by `Definition referenced from`, `Caller of`
 (parser-resolved bindings, with the reference or target location), or
@@ -225,10 +250,13 @@ When the line that best matches the question is in a comment directly above a
 declaration in the winning chunk, the declaration is treated as the match: doc
 comments often repeat the question better than the code they document.
 
-When a ranked match lies in a function with a known boundary of at most 256
-lines, Oko returns the full implementation instead of the usual 60-line source
-window, for every match and not only the first: a window that stops a few lines
-short of the relevant statement costs a follow-up read, or a wrong answer.
+When a ranked match lies in a definition (function, method, class, type or
+constant) with a known boundary of at most 256 lines, Oko returns the full
+implementation instead of the usual 60-line source window, for every match and
+not only the first: a window that stops a few lines short of the relevant
+statement costs a follow-up read, or a wrong answer. A longer complete
+definition is abridged rather than windowed (`body abridged`, `outline`), so
+its signature and end are always visible.
 Under the response cap, lower-ranked complete definitions are first narrowed
 back to that window, lowest rank first, before any match is dropped.
 If the primary source match lacks a complete function boundary, Oko retains its
@@ -364,3 +392,197 @@ to choose it over native search. Codex project setup is available above. Release
 packages are tested with the CLI and stdio MCP protocol on each CI target.
 Automated Rust tests cover actual stdio messages and mock Jev
 requests without real credentials.
+
+## Names
+
+Agents ask for code by name far more often than by behaviour, and a
+one-line definition can lose a keyword shortlist to files that repeat its
+name. Oko indexes every definition of the languages it parses (JavaScript,
+TypeScript, Python, Go, Rust, Ruby, Java and Kotlin: functions, classes, methods, types,
+modules and constants, with their qualified names such as `Server.handle`,
+`Context.Next`, `Searcher.new`, `Discourse.Upload.url` or `Javalin.start`) and
+looks the question's identifier-shaped words up in that index: qualified
+names, `snake_case`, `camelCase`, `PascalCase`, anything in backticks, and a
+Capitalized word beside a code noun ("Upload model"). Up to three such
+definitions lead the shortlist as whole-definition chunks, so the ranker
+judges them; one it rejects is still shown, labelled `exact name match`, after
+the ranker's first choice. A pinned definition alone is an answer, so "No
+relevant code found" never appears while a named definition exists.
+
+Same-named definitions are chosen by the question's own hints (a container or
+a path segment named in it), then non-test over test, exported over not,
+shorter path. A name defined five or more times outside tests (`render`,
+`Page`) needs such a hint; otherwise a note says how many places define it.
+Other definitions of a pinned name are listed in a note. The metrics record
+the identifiers found, the pins and the notes under `floor`.
+
+## Long prompts
+
+A prompt of 25 words or more (Codex and OpenCode send the task text rather
+than a question) gets a second, focused query beside the raw one: its
+identifiers, quoted literals and first sentence, with constraint clauses
+("must remain unchanged", "do not touch the tests") dropped. The two keyword
+rankings are fused by reciprocal rank, the raw order breaking ties, so
+nothing the raw question found is lost; Jev still judges against the raw
+text, which is where the exclusions belong. The metrics record the focused
+terms and how many candidates they added under `focused`.
+
+## Several questions in one call
+
+`questions` takes up to eight independent questions. Each gets its own
+shortlist, floor and ranking at the same time, on its own thread; only the
+first question sends the requests judged beside its shortlist and the
+recovery call, so a four-question call costs about six Jev requests where
+four separate calls cost twelve. The answer is one packet: winners are taken
+one per question before any question's second, every excerpt is labelled
+with the question it answers (`Q2`; `Q1+Q3` when two questions led to the
+same code), a duplicate is shown once, and a question that found nothing is
+named in a note. The excerpt cap grows by two per extra question (up to
+twelve) and the response cap by 5,000 bytes (up to 36,000). The first
+question leads the notes, the floor and the metrics; `retrieval.questions`
+records each question's results, pins, Jev calls and timing.
+
+Shapes that used to be refused are answered as meant: a `question` beside
+`questions` joins them, one entry in `questions` is a plain question, more
+than eight keep the first eight with a note, `symbols` beside `questions`
+adds those definitions (labelled `symbols`), `mode: usages` or `enumerate`
+beside `questions` gives every question that names a definition its
+listing, and unknown fields (`max_results`, `limit`) are ignored. Only `deep`
+with `questions` is still an error.
+
+## Names as a parameter
+
+`symbols` takes exact names, comma-separated, up to twelve ("wsgi_app,
+Flask.dispatch_request, Upload"), and returns their definitions whole, in
+that order, with no ranking and no Jev call: a function or short class as
+its full text, a long class as an outline. A name the index does not define
+is reported in a note (`` `Nope`: no definition in the index. ``) while the
+others answer. `question` may be omitted when `symbols` is given. The
+parameter is a string rather than an array because an array costs an
+`anyOf` in every turn's schema and Codex sends arrays as strings anyway.
+
+`mode` turns the answer into a listing for the named definition (from
+`symbols` or the question): `usages` is every use by line, as for a callers
+question; `enumerate` is every file that uses it, in the dependents shape
+described under [Callers and tests](#callers-and-tests). `unused` lists the
+definitions nothing uses ([Unused definitions](#unused-definitions)).
+
+When a question names a definition that four or more code files use, the
+answer carries one line summarising the dependents, most uses first, so
+"what depends on X" needs no second call:
+
+```
+`Upload` is used by 116 files (301 uses): lib/file_store/to_s3_migration.rb:23 (16), lib/file_store/s3_store.rb:28 (11), …, +106 more; 86 test files. Ask "who uses Upload" for every file with path:line and the enclosing definition.
+```
+
+## Callers and tests
+
+A question that asks who uses a name ("who calls `wsgi_app`", "callers of
+Context.Next", "where is X used"), or a search with `intent: callers`, is
+answered with a listing instead of ranked excerpts: every whole-word use of
+the name across the index, each attributed to the definition it sits in and
+classified as a call, import or reference, grouped by file with the
+definition's own file first, up to 40 rows in 12 files and a count of the
+rest. Hits in comments, tests and documentation files are counted, not
+listed. No ranker runs, so the answer takes a few milliseconds. `oko ask
+--intent callers` does the same on the command line.
+
+```
+Callers of Context.Next — 7 calls; 2 in comments, 37 in tests hidden
+Defined at context.go:188
+
+gin.go
+  722	call	Engine.handleHTTPRequest	c.Next()
+  766	call	serveError	c.Next()
+```
+
+A callers listing of more than twelve files, and `mode: enumerate`, switch
+to the dependents shape: every production file that uses the name, one row
+per enclosing definition as `path:line`, the definition's qualified name and
+the line, grouped by area (`app/controllers (5 files)`) with counts. Nothing
+is dropped for having few uses: over the budget (14 KB, or 8 KB inside a
+several-question answer), extra rows within a file go first, then the line
+text, then the definition name, leaving a bare `path:line` per file (a few
+hundred files fit); only past that are whole areas summarised by name with a
+hint to pass `directory`. Task, data, locale and translation (`.po`) and
+script files are counted after the code, the definition's own file is counted, the header says the listing is
+complete for the indexed code and names what it cannot see (references built
+at runtime: reflection, `send`, names in strings), and a closing section lists the
+specs and tests that use the name as `path:line`, files named after the
+definition first, each pointing at the file's `describe` (or test class,
+`func Test…`, `def test_…`) of the name when it has one. For a Ruby class, lines that refer to it the Rails way
+without spelling its constant count as uses and carry the rule that matched:
+`belongs_to :upload`, `has_one :upload`, `has_many :uploads` and
+`has_and_belongs_to_many :uploads` (a `class_name: "Upload"` spells the
+constant, so it counts already), derived with ActiveRecord's own inflection
+rules (`OptimizedImage` → `optimized_image`,
+`optimized_images`). The foreign key (`upload_id`) is not a use: it names a
+column in serializers and params far more often than a dependency.
+
+```
+Files using Upload — 106 files, 285 uses in code; 16 in its own file; 86 test files (415 uses). One row per enclosing definition: path:line, definition, line.
+app/controllers (5 files)
+  app/controllers/metadata_controller.rb:118	MetadataController.default_manifest	upload = Upload.find_by(sha1: Upload.extract_sha1(image))
+  app/controllers/uploads_controller.rb:89	UploadsController.create	render json: …  (+4 more in this file)
+…
+Specs and tests using Upload (86 files, 415 uses), named after it first:
+  spec/models/upload_spec.rb:12	61
+```
+
+An answer never exceeds the response cap: when a listing and the notes above
+it cannot fit beside even one excerpt, whole lines are cut from the end of the
+listing and a last line says how many, and to narrow the question or pass
+`directory` to see them.
+
+A question that asks for tests ("tests for `MultiDecoder`", "which specs
+cover Upload") first lists the test files named after the definition's file
+or name (`high`) or mentioning it (`medium`), each as `path:line` of its
+first mention with the enclosing test function, and then the ranked code as
+usual. The target of either question may be a plain word the index defines,
+not only an identifier-shaped one.
+
+## Unused definitions
+
+A question that asks what nothing uses ("dead code in the gin package",
+"unused helpers", "functions that are never called"), or a search with
+`mode: unused`, is answered with a deletion-candidate listing: every
+definition of the searched directory whose name appears nowhere in non-test
+code of the workspace outside the definition itself. Private names with no
+use anywhere come first, then private names only tests use (dead in
+production, with up to three test locations as evidence), then exported
+names in the same two groups (other repositories may use them; the
+test-only ones are capped at twelve). Each row is `path:line`, kind,
+qualified name and its evidence. Pass names in `symbols` to check only
+those. The check is by name over the indexed code, so a method that
+implements an interface, a name reached through reflection, a route or a
+template, and public API can look unused; the answer says so. A short
+question gets the listing alone; a longer one that mentions dead code among
+other things gets it as a note above the ranked code.
+
+```
+Unused in production code under the workspace — 3 of 697 checked: 2 private, 1 exported; 2 of them are used by tests only. A row is a deletion candidate with its evidence.
+private, used by tests only (2):
+  utils.go:23	constant localhostIP — tests only: context_test.go:1169, context_test.go:1171, context_test.go:1175, +5 more
+  utils.go:26	constant localhostIPv6 — tests only: context_test.go:2016
+exported, no use in this repository (other repositories may use them) (1):
+  errors.go:18	constant ErrorTypeRender — no reference anywhere in the workspace
+```
+
+## Coverage
+
+The first line of a session's first answer says what was searched. Later
+answers repeat it only when the index changed, when it names a skipped file
+the question mentions, or after ten answers or ten idle minutes:
+
+```
+Index: 25,873 of 26,687 files (814 skipped: 17 over size, 797 unreadable), 20,250 parsed for symbols (js, tsx, ts, jsx), watched
+```
+
+Files are discovered with `rg --files`. Text files up to 256 KiB are indexed
+whole; files of a parsed language up to 1 MiB are indexed by their
+definitions only (a generated table gets no chunks; a minified file is
+skipped); binary, non-UTF-8, blank and larger files are skipped and counted.
+`watched` means the index is kept current by the file watcher, `rescanned`
+that this search re-validated it, `built now` that it was just created. When a
+word of the question is the file stem of a skipped file, that file is named
+with its size. The counts are recorded under `coverage` in the metrics.

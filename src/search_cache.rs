@@ -22,7 +22,7 @@ use std::{
 };
 
 // Bump whenever chunking, tokenization, symbol extraction, or ranking features change.
-const FORMAT_VERSION: u32 = 4;
+const FORMAT_VERSION: u32 = 8;
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -49,11 +49,47 @@ pub struct CacheTimings {
     pub fallback_reason: Option<String>,
 }
 
+/// What the index covers, for the first line of every answer.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Coverage {
+    /// Files discovery listed (respecting ignore rules).
+    pub discovered: usize,
+    /// Files with chunks in the index.
+    pub indexed: usize,
+    /// Files skipped for size, largest first, capped; `(path, bytes)`.
+    pub skipped_over_size: Vec<(String, u64)>,
+    /// Files skipped as binary, non-UTF-8, blank, minified or unreadable.
+    pub skipped_unreadable: usize,
+}
+const SKIPPED_PATHS_KEPT: usize = 256;
+impl Coverage {
+    fn new(indexed: usize, skipped: Vec<(String, search::SkipReason, u64)>) -> Self {
+        let mut over_size: Vec<(String, u64)> = skipped
+            .iter()
+            .filter(|(_, reason, _)| *reason == search::SkipReason::OverSize)
+            .map(|(path, _, bytes)| (path.clone(), *bytes))
+            .collect();
+        over_size.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        over_size.truncate(SKIPPED_PATHS_KEPT);
+        Self {
+            discovered: indexed + skipped.len(),
+            indexed,
+            skipped_unreadable: skipped
+                .iter()
+                .filter(|(_, reason, _)| *reason == search::SkipReason::Unreadable)
+                .count(),
+            skipped_over_size: over_size,
+        }
+    }
+}
+
 /// One captured view is used for ranking and all subsequent source evidence.
 pub struct WorkspaceSnapshot {
     chunks: Arc<[Chunk]>,
     prepared: PreparedCorpus,
     navigation: NavigationIndex,
+    coverage: Coverage,
     /// Built by the first search that needs it, then shared by every later one.
     links: std::sync::OnceLock<crate::connected::Links>,
 }
@@ -63,6 +99,9 @@ impl WorkspaceSnapshot {
     }
     pub fn navigation(&self) -> &NavigationIndex {
         &self.navigation
+    }
+    pub fn coverage(&self) -> &Coverage {
+        &self.coverage
     }
     pub fn rank(&self, question: &str) -> Vec<Chunk> {
         self.prepared.rank(question, |_| true)
@@ -240,7 +279,7 @@ impl WorkspaceCache {
         // Deserialization can overlap fresh reads, but no disk data is used
         // until discovery succeeds and its content manifest has been compared.
         // Same-root memory snapshots never trigger a redundant disk load.
-        let captured = scan_and_load_snapshot(
+        let mut captured = scan_and_load_snapshot(
             &root,
             if has_previous {
                 None
@@ -249,7 +288,9 @@ impl WorkspaceCache {
             },
             self.watching.as_mut(),
         )?;
+        let skipped = std::mem::take(&mut captured.capture.skipped);
         let sources = captured.capture.sources;
+        let coverage = Coverage::new(sources.len(), skipped);
         timings.read_files = captured.capture.read_files;
         timings.reused_contents = captured.capture.reused_contents;
         timings.validation = captured.capture.validation.into();
@@ -399,6 +440,7 @@ impl WorkspaceCache {
             chunks,
             prepared,
             navigation,
+            coverage,
             links: std::sync::OnceLock::new(),
         });
         let record = DiskSnapshot {
@@ -542,11 +584,27 @@ fn prepare_source(
         });
     let (prepared, navigation, chunks, reused) = if let Some((file, chunks)) = cached {
         (file.prepared, file.navigation, chunks, true)
+    } else if search::is_big_source(&source.path, &source.text) {
+        // Over the lexical cap: the parser decides what is worth indexing.
+        let navigation = navigator.prepare(&source.path, &source.text);
+        let chunks = search::chunk_definitions(&source.path, &source.text, &navigation.definitions);
+        (
+            preparer.prepare_definition_chunks(&source.path, &chunks),
+            Arc::new(navigation),
+            chunks,
+            false,
+        )
     } else {
-        let chunks = search::chunk_text(&source.path, &source.text);
+        // Parsed files are chunked along their definitions; the rest by lines.
+        let navigation = navigator.prepare(&source.path, &source.text);
+        let chunks = if navigation.has_definitions() {
+            search::chunk_by_definitions(&source.path, &source.text, &navigation.definitions)
+        } else {
+            search::chunk_text(&source.path, &source.text)
+        };
         (
             preparer.prepare_file(&chunks),
-            Arc::new(navigator.prepare(&source.path, &source.text)),
+            Arc::new(navigation),
             chunks,
             false,
         )
@@ -713,12 +771,108 @@ fn write_snapshot(path: &Path, record: &DiskSnapshot) -> Result<()> {
     temporary.write_all(&bytes)?;
     temporary.flush()?;
     temporary.persist(path)?;
+    remove_stale_versions(path);
     Ok(())
+}
+
+/// Delete this root's snapshots written by other format versions. Each format
+/// has its own file name, so a version bump would otherwise leave the old
+/// snapshot on disk for good.
+fn remove_stale_versions(path: &Path) {
+    let Some(current) = path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let Some((_, suffix)) = current.split_once('-') else {
+        return;
+    };
+    let Some(directory) = path.parent() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let stale = name != current
+            && name
+                .strip_prefix('v')
+                .and_then(|rest| rest.split_once('-'))
+                .is_some_and(|(version, rest)| {
+                    rest == suffix
+                        && !version.is_empty()
+                        && version.bytes().all(|b| b.is_ascii_digit())
+                });
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the parsers extract from one small file per language, pinned to
+    /// the cache format. A visitor or chunking change alters it: bump
+    /// `FORMAT_VERSION` so old caches are rebuilt, then update the digest.
+    #[test]
+    fn extracted_facts_are_pinned_to_the_cache_format() {
+        let samples = [
+            (
+                "a.py",
+                "class A:\n    def run(self):\n        return 1\n\nLIMIT = 3\n",
+            ),
+            (
+                "a.go",
+                "package a\n\nconst (\n\tX = 1\n\tY = 2\n)\n\nfunc (s *S) Run() {}\n",
+            ),
+            (
+                "a.rs",
+                "pub struct S;\nimpl S {\n    pub fn run(&self) {}\n}\npub const MAX: u8 = 1;\n",
+            ),
+            (
+                "a.rb",
+                "module M\n  class A\n    def run; end\n  end\nend\n",
+            ),
+            (
+                "A.java",
+                "public class A {\n  public static final int X = 1;\n  public void run() {}\n}\n",
+            ),
+            ("A.kt", "class A {\n    val x = 1\n    fun run() {}\n}\n"),
+            (
+                "a.ts",
+                "export function run(): number {\n  return 1;\n}\nexport class A {}\n",
+            ),
+        ];
+        let mut preparer = crate::navigation::NavigationPreparer::default();
+        let mut digest = Sha256::new();
+        for (path, text) in samples {
+            let facts = preparer.prepare(path, text);
+            digest.update(serde_json::to_vec(&facts.definitions).unwrap());
+            for chunk in crate::search::chunk_text(path, text) {
+                digest.update(format!(
+                    "{}:{}-{}\n",
+                    chunk.path, chunk.start_line, chunk.end_line
+                ));
+            }
+        }
+        let digest: String = digest
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            (FORMAT_VERSION, digest.as_str()),
+            (
+                8,
+                "260335f39ee130ca268fb5c79f9bb4e2ff271ad40efb6ac2778d0e7dfbf7329d"
+            ),
+            "extracted facts changed: bump FORMAT_VERSION, then update the pinned digest"
+        );
+    }
 
     fn fixture() -> (tempfile::TempDir, tempfile::TempDir, WorkspaceCache) {
         let root = tempfile::tempdir().unwrap();
@@ -731,6 +885,30 @@ mod tests {
         let mut cache = WorkspaceCache::with_directory(disk.path().to_path_buf());
         cache.load(root.path()).unwrap();
         (root, disk, cache)
+    }
+
+    #[test]
+    fn writing_a_snapshot_removes_this_roots_older_format_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let disk = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("a.rs"), "fn a() {}\n").unwrap();
+        let mut cache = WorkspaceCache::with_directory(disk.path().to_owned());
+        let current = cache
+            .cache_path(&root.path().canonicalize().unwrap())
+            .unwrap();
+        let name = current.file_name().unwrap().to_str().unwrap().to_owned();
+        let suffix = name.split_once('-').unwrap().1.to_owned();
+        let stale = disk.path().join(format!("v4-{suffix}"));
+        let other_root = disk.path().join("v4-0000.bin");
+        let unrelated = disk.path().join(format!("x4-{suffix}"));
+        for path in [&stale, &other_root, &unrelated] {
+            fs::write(path, b"old").unwrap();
+        }
+        cache.load(root.path()).unwrap();
+        assert!(current.exists());
+        assert!(!stale.exists(), "the same root's older version is removed");
+        assert!(other_root.exists(), "other roots are untouched");
+        assert!(unrelated.exists(), "only v<digits>- files are considered");
     }
 
     #[test]
