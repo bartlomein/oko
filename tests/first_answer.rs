@@ -416,3 +416,56 @@ fn a_file_head_section_shows_the_function_not_its_imports() {
     assert_eq!(excerpt.start_line, line_of(&source, "/**"));
     assert!(excerpt.definition_complete && !excerpt.truncated);
 }
+
+#[test]
+fn copies_of_a_helper_in_two_files_are_named_as_copies() {
+    let helper = |comment: &str, types: &str| {
+        format!(
+            "{comment}\nexport function getFirstForwardedValue(header?: {types}) {{\n\treturn header\n\t\t?.toString()\n\t\t?.split(',')\n\t\t.map((e) => e.trim())?.[0];\n}}\n"
+        )
+    };
+    let root = tempfile::tempdir().unwrap();
+    let disk = tempfile::tempdir().unwrap();
+    let files = [
+        ("core/validate-headers.ts", helper("/** Returns the first value, trimmed. */", "string | string[]")),
+        ("helpers/request.ts", helper("// Parses multiple header and returns first value.", "string | string[] | null")),
+        ("other/format.ts", "export function getFirstForwardedValue(n: number) {\n\treturn n.toFixed(2).padStart(8, ' ');\n}\n".to_owned()),
+    ];
+    for (name, text) in &files {
+        let file = root.path().join(name);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let mut cache = WorkspaceCache::with_directory(disk.path().to_owned());
+    let loaded = cache.load(root.path()).unwrap();
+    let chunks = loaded.snapshot.chunks();
+    let winner = |path: &str| (chunks.iter().find(|c| c.path == path).unwrap().clone(), 0.9);
+    let question = "helper that extracts the first forwarded header value";
+    let copies = build_packet_with_navigation(
+        chunks,
+        &[
+            winner("core/validate-headers.ts"),
+            winner("helpers/request.ts"),
+        ],
+        question,
+        loaded.snapshot.navigation(),
+    );
+    assert!(
+        copies.render_text().starts_with(
+            "`getFirstForwardedValue` is defined in 2 shown files with nearly the same code: core/validate-headers.ts:2, helpers/request.ts:2.\n"
+        ),
+        "{}",
+        copies.render_text()
+    );
+    // The same name over different code is not a copy.
+    let different = build_packet_with_navigation(
+        chunks,
+        &[
+            winner("core/validate-headers.ts"),
+            winner("other/format.ts"),
+        ],
+        question,
+        loaded.snapshot.navigation(),
+    );
+    assert!(!different.render_text().contains("nearly the same code"));
+}

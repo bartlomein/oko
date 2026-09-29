@@ -36,6 +36,10 @@ const RELATED_LINES: usize = 32;
 // the match, by a reference or by the question; larger ones are left to ranking.
 const SIBLING_LINES: usize = 20;
 const SIBLING_BUDGET: usize = 30;
+/// Share of code words (comments aside) two same-named definitions must have
+/// in common to be called copies: astro's two `getFirstForwardedValue` share
+/// 94%, two printers' `finish` methods in ripgrep 80%.
+const COPY_SIMILARITY: f64 = 0.9;
 // Candidates the ranker rated just below its cutoff held as much of the missing
 // code again, while most responses used a fraction of the budget and one or two
 // of three slots. They are shown only in a spare slot of a small response, as a
@@ -1310,7 +1314,7 @@ impl ContextPacket {
     /// Compact agent-facing rendering: exact source without JSON escaping,
     /// scores, or serving metadata. Matches are in ranked order.
     pub fn render_text(&self) -> String {
-        let mut out = String::new();
+        let mut out = self.copies_note();
         for result in &self.results {
             if !out.is_empty() {
                 out.push('\n');
@@ -1355,6 +1359,77 @@ impl ContextPacket {
             out.push_str("\nLower-ranked evidence was omitted to fit the response limit.\n");
         }
         out
+    }
+
+    /// A line naming the shown definitions that are copies of one another:
+    /// the same name, in different files, with mostly the same code. An agent
+    /// that edits the first one it sees may edit the copy the request did not
+    /// mean (astro's `getFirstForwardedValue` in two packages: once both were
+    /// shown in full, the better-documented copy ranked first).
+    fn copies_note(&self) -> String {
+        let shown: Vec<&SourceExcerpt> = self
+            .results
+            .iter()
+            .filter(|r| !r.seen && r.excerpt.definition_complete)
+            .map(|r| &r.excerpt)
+            .collect();
+        // Comments are left out: a copy's doc comment may be written anew.
+        let words = |excerpt: &SourceExcerpt| -> HashSet<String> {
+            excerpt
+                .text
+                .lines()
+                .filter(|line| {
+                    let line = line.trim_start();
+                    !(line.starts_with("//")
+                        || line.starts_with("/*")
+                        || line.starts_with('*')
+                        || (line.starts_with('#') && !line.starts_with("#[")))
+                })
+                .flat_map(tokenize)
+                .collect()
+        };
+        let mut lines = String::new();
+        let mut named = HashSet::new();
+        for (index, first) in shown.iter().enumerate() {
+            let Some(name) = first.symbol.as_ref().map(|s| s.name.as_str()) else {
+                continue;
+            };
+            if !named.insert(name) {
+                continue;
+            }
+            let own = words(first);
+            let copies: Vec<&&SourceExcerpt> = shown[index + 1..]
+                .iter()
+                .filter(|other| {
+                    other.path != first.path
+                        && other.symbol.as_ref().is_some_and(|s| s.name == name)
+                        && {
+                            let theirs = words(other);
+                            let shared = own.intersection(&theirs).count() as f64;
+                            shared / (own.len().max(theirs.len()).max(1) as f64) >= COPY_SIMILARITY
+                        }
+                })
+                .collect();
+            if copies.is_empty() {
+                continue;
+            }
+            let places = std::iter::once(*first)
+                .chain(copies.into_iter().copied())
+                .map(|e| {
+                    format!(
+                        "{}:{}",
+                        e.path,
+                        e.symbol.as_ref().map_or(e.start_line, |s| s.line)
+                    )
+                })
+                .collect::<Vec<_>>();
+            lines.push_str(&format!(
+                "`{name}` is defined in {} shown files with nearly the same code: {}.\n\n",
+                places.len(),
+                places.join(", ")
+            ));
+        }
+        lines
     }
 
     fn prune_related(&mut self) {

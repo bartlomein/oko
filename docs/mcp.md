@@ -220,6 +220,12 @@ began one or two lines after a shown definition, and agents read on regardless,
 at a model turn each. A definition tied to neither stays out, so responses do
 not grow with unrelated neighbours.
 
+When the shown excerpts hold definitions with one name in different files and
+nearly the same code (comments aside), the answer begins with a line naming
+them, e.g. "`getFirstForwardedValue` is defined in 2 shown files with nearly
+the same code: …". An agent that edits the first excerpt it sees would
+otherwise change the copy the request did not mean.
+
 Parsed files are chunked along their definitions, and definitions shorter than
 20 lines share one ranked section, so Jev judges several of them at once. The
 answer then shows the definition in that section that holds most of the
