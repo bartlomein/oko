@@ -84,6 +84,26 @@ def digest(path):
     return engine.digest(path)
 
 
+# A finished session keeps its record (events, metrics, result, patch) but not
+# its index cache or its copy of the client's configuration: tens of MB each,
+# never read again, and 324 of them filled the disk and halted a paid run.
+SESSION_SCRATCH = ('cache', 'harness-config')
+# Below this much free space a paid run does not start.
+MIN_FREE_BYTES = 5 * 1024**3
+
+
+def discard_scratch(trial):
+    for name in SESSION_SCRATCH:
+        shutil.rmtree(Path(trial) / name, ignore_errors=True)
+
+
+def require_free_space(folder):
+    free = shutil.disk_usage(folder).free
+    if free < MIN_FREE_BYTES:
+        raise RuntimeError(f'Only {free / 1024**3:.1f} GB free under {folder}; '
+                           f'a paid run needs at least {MIN_FREE_BYTES // 1024**3} GB')
+
+
 def implementation_digest():
     paths = sorted(ROOT.glob('*.py')) + [ROOT.parent / 'benchmark-twenty' / f for f in ('runner.py', 'oko-server.py', 'isolation-smoke.py')] + [ROOT.parent / 'benchmark_observability.py']
     return hashlib.sha256(''.join(digest(p) for p in paths).encode()).hexdigest()
@@ -445,6 +465,7 @@ def verify_settings(args, schedule):
 
 def execute(args, schedule):
     settings = verify_settings(args, schedule)
+    require_free_space(STATE)
     ids = [{'repository':n,'task':t['id'],'client':c,'condition':condition,'repetition':t.get('repetition',1)} for n,t,c,condition in schedule]
     if args.resume:
         output=args.resume.resolve()
@@ -502,6 +523,7 @@ def execute(args, schedule):
             row['tokenBreakdown']=token_breakdown(row)
             row['measurements']=measurements(row)
             save(Path(row['artifact'])/'result.json',row)
+            discard_scratch(row['artifact'])
             data['runs'].append(row)
             report(output,data)
             if row.get('error') and row.get('errorType')!='answer':
