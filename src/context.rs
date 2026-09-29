@@ -4,7 +4,8 @@
 //! compatible source evidence; unknown qualification or ambiguity is omitted.
 mod related;
 use crate::navigation::{NavigationIndex, Relation};
-use crate::search::{Chunk, FUNCTION_CHUNK_LINES, tokenize};
+use crate::search::{Chunk, FUNCTION_CHUNK_LINES, import_lines, tokenize};
+use crate::stemmer::stemmer;
 use regex::Regex;
 use serde::Serialize;
 use std::{
@@ -589,9 +590,7 @@ impl<'a> Snapshot<'a> {
             let (Some(raw), Some(code)) = (self.lines.get(&line), self.code.get(&line)) else {
                 break;
             };
-            let code = code.trim();
-            let attached = !raw.trim().is_empty()
-                && (code.is_empty() || code.starts_with('@') || code.starts_with("#["));
+            let attached = !raw.trim().is_empty() && attachment(code);
             if !attached
                 || self
                     .declarations
@@ -604,33 +603,59 @@ impl<'a> Snapshot<'a> {
         }
         start
     }
+    /// Whether a short neighbouring definition belongs with the shown lines
+    /// `shown`: the shown code uses it or the question names it (both only for
+    /// a `following` one), or it lies in the same ranked section and its code,
+    /// not its comments, does a part of the question the shown lines do not.
+    /// A section merges short definitions and the ranker judged all of it;
+    /// comments repeat generic words ("status codes", "validation") that would
+    /// tie any neighbour. A definition above that the shown code calls is
+    /// already offered as a related definition.
+    fn tied(
+        &self,
+        shown: (usize, usize),
+        neighbour: &Declaration,
+        header: usize,
+        section: (usize, usize),
+        asked: &Asked,
+        following: bool,
+    ) -> bool {
+        let referenced = (shown.0..=shown.1).any(|n| {
+            self.code.get(&n).is_some_and(|code| {
+                code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                    .any(|word| word == neighbour.name)
+            })
+        });
+        let named = tokenize(&neighbour.name).iter().any(|part| {
+            part.len() >= 4
+                && asked.terms.iter().any(|term| {
+                    term.len() >= 4
+                        && (term.starts_with(part.as_str()) || part.starts_with(term.as_str()))
+                })
+        });
+        let fresh = || {
+            header >= section.0
+                && neighbour.line <= section.1
+                && !self
+                    .code_evidence((header, neighbour.end), &asked.stems)
+                    .is_subset(&self.evidence(shown, &asked.stems))
+        };
+        (following && (referenced || named)) || fresh()
+    }
     /// The end of a short, proven definition that directly follows line `end`:
     /// only blank lines may separate them, and everything attached above the
     /// sibling comes with it.
     fn following_sibling(
         &self,
         (start, end): (usize, usize),
-        terms: &HashSet<String>,
+        section: (usize, usize),
+        asked: &Asked,
     ) -> Option<usize> {
         let next = self.declarations.iter().find(|d| d.line > end)?;
-        // The shown code uses it, or the question asks about it by name.
-        let referenced = (start..=end).any(|n| {
-            self.code.get(&n).is_some_and(|code| {
-                code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
-                    .any(|word| word == next.name)
-            })
-        });
-        let asked = tokenize(&next.name).iter().any(|part| {
-            part.len() >= 4
-                && terms.iter().any(|term| {
-                    term.len() >= 4
-                        && (term.starts_with(part.as_str()) || part.starts_with(term.as_str()))
-                })
-        });
-        if !referenced && !asked {
+        let header = self.attached_header_start(next.line);
+        if !self.tied((start, end), next, header, section, asked, true) {
             return None;
         }
-        let header = self.attached_header_start(next.line);
         let adjoins = (end + 1..header).all(|n| {
             self.lines
                 .get(&n)
@@ -640,9 +665,60 @@ impl<'a> Snapshot<'a> {
         (next.complete && adjoins && present && header > end && next.end - header < SIBLING_LINES)
             .then_some(next.end)
     }
+    /// The first line of a short, proven definition that directly precedes
+    /// line `start`: a lifecycle method that resets a counter sits right above
+    /// the one that reads it. Only the section rule ties it: names that share a
+    /// word run in chains up a file.
+    fn preceding_sibling(
+        &self,
+        (start, end): (usize, usize),
+        section: (usize, usize),
+        asked: &Asked,
+    ) -> Option<usize> {
+        // The outermost definition that ends last before `start`.
+        let previous = self
+            .declarations
+            .iter()
+            .filter(|d| d.end < start)
+            .max_by_key(|d| (d.end, std::cmp::Reverse(d.line)))?;
+        let header = self.attached_header_start(previous.line);
+        if !self.tied((start, end), previous, header, section, asked, false) {
+            return None;
+        }
+        let adjoins = (previous.end + 1..start).all(|n| {
+            self.lines
+                .get(&n)
+                .is_some_and(|line| line.trim().is_empty())
+        });
+        let present = (header..=previous.end).all(|n| self.lines.contains_key(&n));
+        (previous.complete && adjoins && present && previous.end - header < SIBLING_LINES)
+            .then_some(header)
+    }
+    /// The question's stems that lines `from..=to` contain.
+    fn evidence(&self, (from, to): (usize, usize), stems: &HashSet<String>) -> HashSet<String> {
+        if stems.is_empty() || from > to {
+            return HashSet::new();
+        }
+        stems_in(self.lines.range(from..=to).map(|(_, line)| *line), stems)
+    }
+    /// The same, counting only code: comments and strings removed.
+    fn code_evidence(
+        &self,
+        (from, to): (usize, usize),
+        stems: &HashSet<String>,
+    ) -> HashSet<String> {
+        if stems.is_empty() || from > to {
+            return HashSet::new();
+        }
+        stems_in(
+            self.code.range(from..=to).map(|(_, line)| line.as_str()),
+            stems,
+        )
+    }
     /// A doc comment often repeats the question better than the code it
-    /// documents, and chunks begin at that comment. Only comments and blank
-    /// lines may separate the line from the declaration it introduces.
+    /// documents, and chunks begin at that comment. Only comments, blank lines
+    /// and attributes or decorators (`#[inline]`, `@classmethod`) may separate
+    /// the line from the declaration it introduces.
     fn documented_declaration(&self, line: usize, last: usize) -> Option<usize> {
         if self.containing(line).is_some() {
             return None;
@@ -652,7 +728,7 @@ impl<'a> Snapshot<'a> {
             .iter()
             .find(|d| d.line > line && d.line <= last)?;
         (line..declaration.line)
-            .all(|n| self.code.get(&n).is_some_and(|code| code.trim().is_empty()))
+            .all(|n| self.code.get(&n).is_some_and(|code| attachment(code)))
             .then_some(declaration.line)
     }
     fn containing(&self, number: usize) -> Option<&Declaration> {
@@ -661,6 +737,19 @@ impl<'a> Snapshot<'a> {
             .filter(|d| d.line <= number && d.end >= number)
             .max_by_key(|d| d.line)
     }
+}
+fn stems_in<'a>(lines: impl Iterator<Item = &'a str>, stems: &HashSet<String>) -> HashSet<String> {
+    lines
+        .flat_map(tokenize)
+        .map(|word| stemmer(&word))
+        .filter(|stem| stems.contains(stem))
+        .collect()
+}
+/// Code that belongs to the declaration below it: nothing (a comment or a
+/// blank line), a decorator, or an attribute.
+fn attachment(code: &str) -> bool {
+    let code = code.trim();
+    code.is_empty() || code.starts_with('@') || code.starts_with("#[")
 }
 fn prefix(text: &str, bytes: usize) -> &str {
     let mut end = text.len().min(bytes);
@@ -687,8 +776,8 @@ fn excerpt(
     range: (usize, usize),
     limit: usize,
     preserve_range: bool,
-    // The question's words, for choosing which following definitions belong.
-    terms: &HashSet<String>,
+    // What the question asks, for choosing which neighbouring definitions belong.
+    asked: &Asked,
 ) -> Option<SourceExcerpt> {
     snapshot.lines.get(&focus)?;
     let parent = snapshot.containing(focus);
@@ -750,7 +839,7 @@ fn excerpt(
     let mut definitions = usize::from(!unproven && bounded_parent.is_some());
     if definitions == 1 {
         let mut added = 0;
-        while let Some(sibling_end) = snapshot.following_sibling((start, end), terms) {
+        while let Some(sibling_end) = snapshot.following_sibling((start, end), range, asked) {
             let size = sibling_end - end;
             if added + size > SIBLING_BUDGET || end - start + 1 + size > limit {
                 break;
@@ -758,6 +847,13 @@ fn excerpt(
             end = sibling_end;
             added += size;
             definitions += 1;
+        }
+        if let Some(sibling_start) = snapshot.preceding_sibling((start, end), range, asked) {
+            let size = start - sibling_start;
+            if added + size <= SIBLING_BUDGET && end - start + 1 + size <= limit {
+                start = sibling_start;
+                definitions += 1;
+            }
         }
     }
     let text = (start..=end)
@@ -804,6 +900,26 @@ fn query_terms(question: &str) -> HashSet<String> {
         .filter(|t| t.len() > 2 && !STOP.contains(&t.as_str()))
         .take(32)
         .collect()
+}
+/// What a question asks: its words, for matching names, and their stems, for
+/// weighing the evidence in a definition's lines.
+struct Asked {
+    terms: HashSet<String>,
+    stems: HashSet<String>,
+}
+impl Asked {
+    fn new(question: &str) -> Self {
+        let terms = query_terms(question);
+        let stems = terms.iter().map(|term| stemmer(term)).collect();
+        Self { terms, stems }
+    }
+    /// Nothing asked: a supporting definition stays as small as it is.
+    fn nothing() -> Self {
+        Self {
+            terms: HashSet::new(),
+            stems: HashSet::new(),
+        }
+    }
 }
 /// Lines of a long definition's body shown before the omission marker.
 const ABRIDGED_HEAD_LINES: usize = 120;
@@ -930,16 +1046,22 @@ fn abridged_excerpt(
 }
 
 fn focus_line(chunk: &Chunk, terms: &HashSet<String>, snapshot: &Snapshot<'_>) -> usize {
-    chunk
-        .text
-        .split('\n')
+    let lines: Vec<&str> = chunk.text.split('\n').collect();
+    // An import names what the question asks about without doing any of it.
+    let imports = import_lines(&chunk.path, &lines);
+    lines
+        .iter()
         .enumerate()
         .max_by_key(|(offset, line)| {
-            let matches = tokenize(line)
-                .iter()
-                .filter(|term| terms.contains(*term))
-                .collect::<HashSet<_>>()
-                .len();
+            let matches = if imports[*offset] {
+                0
+            } else {
+                tokenize(line)
+                    .iter()
+                    .filter(|term| terms.contains(*term))
+                    .collect::<HashSet<_>>()
+                    .len()
+            };
             (
                 matches,
                 snapshot
@@ -950,6 +1072,75 @@ fn focus_line(chunk: &Chunk, terms: &HashSet<String>, snapshot: &Snapshot<'_>) -
             )
         })
         .map_or(chunk.start_line, |(offset, _)| chunk.start_line + offset)
+}
+/// The definition to show from a ranked section that holds several: the one
+/// whose lines hold most of the question, each part weighted by how few of the
+/// section's definitions share it and doubled when the definition's name holds
+/// it. Definitions under twenty lines share a section, and the line-by-line
+/// focus counts raw word matches and prefers the earliest line, so a
+/// constructor that mentions `phrase` once beat the `get_reason_phrase` lookup
+/// the question described. `None` keeps `focus`.
+fn section_focus(
+    chunk: &Chunk,
+    snapshot: &Snapshot<'_>,
+    asked: &Asked,
+    focus: usize,
+) -> Option<usize> {
+    if asked.stems.is_empty() {
+        return None;
+    }
+    let section = (chunk.start_line, chunk.end_line);
+    let inside: Vec<(&Declaration, usize)> = snapshot
+        .declarations
+        .iter()
+        .filter(|d| d.complete && section.0 <= d.line && d.line <= section.1)
+        .map(|d| (d, snapshot.attached_header_start(d.line)))
+        .filter(|(_, header)| *header >= section.0)
+        .collect();
+    // Only the outermost: what a method defines inside it is part of it.
+    let outer: Vec<(&Declaration, usize)> = inside
+        .iter()
+        .filter(|(d, _)| {
+            !inside
+                .iter()
+                .any(|(o, _)| o.line < d.line && d.end <= o.end)
+        })
+        .copied()
+        .collect();
+    if outer.len() < 2 {
+        return None;
+    }
+    let evidence: Vec<HashSet<String>> = outer
+        .iter()
+        .map(|(d, header)| snapshot.evidence((*header, d.end.min(section.1)), &asked.stems))
+        .collect();
+    let mut shared: HashMap<&str, usize> = HashMap::new();
+    for stems in &evidence {
+        for stem in stems {
+            *shared.entry(stem.as_str()).or_default() += 1;
+        }
+    }
+    let weight = |d: &Declaration, stems: &HashSet<String>| -> f64 {
+        let name: HashSet<String> = tokenize(&d.name).iter().map(|w| stemmer(w)).collect();
+        stems
+            .iter()
+            .map(|stem| if name.contains(stem) { 2.0 } else { 1.0 } / shared[stem.as_str()] as f64)
+            .sum()
+    };
+    let (best, score) = outer
+        .iter()
+        .zip(&evidence)
+        .map(|((d, header), stems)| (d, *header, weight(d, stems)))
+        // At equal weight, the definition already focused, then the earlier.
+        .max_by(|a, b| {
+            let holds =
+                |(d, header, _): &(&&Declaration, usize, f64)| *header <= focus && focus <= d.end;
+            a.2.total_cmp(&b.2)
+                .then(holds(a).cmp(&holds(b)))
+                .then(b.0.line.cmp(&a.0.line))
+        })
+        .map(|(d, _, score)| (d, score))?;
+    (score > 0.0).then_some(best.line)
 }
 fn overlaps(a: &SourceExcerpt, b: &SourceExcerpt) -> bool {
     a.path == b.path && a.start_line <= b.end_line && b.start_line <= a.end_line
@@ -1356,7 +1547,8 @@ fn build_packet_limited(
     for chunk in corpus {
         by_path.entry(&chunk.path).or_default().push(chunk);
     }
-    let terms = query_terms(question);
+    let asked = Asked::new(question);
+    let terms = &asked.terms;
     let mut snapshots = HashMap::new();
     // The ranker's first choice leads; the pins come before its second and
     // third, so the budget drops those first; runners-up come last.
@@ -1409,10 +1601,16 @@ fn build_packet_limited(
             packet.omitted = true;
             continue;
         }
-        let focus = focus_line(chunk, &terms, snapshot);
+        let focus = focus_line(chunk, terms, snapshot);
         let focus = snapshot
             .documented_declaration(focus, chunk.end_line)
             .unwrap_or(focus);
+        // A pin is its own definition; a ranked section may hold several.
+        let focus = if exact_name {
+            focus
+        } else {
+            section_focus(chunk, snapshot, &asked, focus).unwrap_or(focus)
+        };
         let primary = packet.results.is_empty();
         // A runner-up earns a focused window, not a long implementation.
         let whole = if lower_confidence {
@@ -1465,7 +1663,7 @@ fn build_packet_limited(
                         (chunk.start_line, chunk.end_line),
                         EXCERPT_LINES,
                         false,
-                        &terms,
+                        &asked,
                     )
                 })
                 .flatten();
@@ -1502,7 +1700,7 @@ fn build_packet_limited(
             (chunk.start_line, chunk.end_line),
             limit,
             preserve_range,
-            &terms,
+            &asked,
         ) else {
             continue;
         };
@@ -1522,7 +1720,7 @@ fn build_packet_limited(
                     (chunk.start_line, chunk.end_line),
                     EXCERPT_LINES,
                     false,
-                    &terms,
+                    &asked,
                 )
             })
             .flatten()
@@ -1655,8 +1853,7 @@ fn build_packet_limited(
                 (declaration.line, declaration.end),
                 RELATED_LINES,
                 false,
-                // A supporting definition stays as small as it is.
-                &HashSet::new(),
+                &Asked::nothing(),
             ) else {
                 continue;
             };

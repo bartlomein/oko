@@ -1945,8 +1945,12 @@ fn cached_syntax_supports_validators_with_one_provider_call_and_bounded_wire_out
     );
     assert_eq!(requests.len(), 1);
     let packet = assert_packet_envelope(&response);
-    // The five-line file is one definition-aligned chunk, shown whole.
-    assert_eq!(packet["results"][0]["wholeFile"], true);
+    // The five-line file is one definition-aligned chunk; its import names
+    // the question's words but does not choose what is shown, so the answer
+    // is the function, complete, and the imported rules come as related.
+    assert_eq!(packet["results"][0]["startLine"], 2);
+    assert_eq!(packet["results"][0]["endLine"], 5);
+    assert_eq!(packet["results"][0]["definitionComplete"], true);
     assert_eq!(packet["results"][0]["truncated"], false);
     let related = packet["related"].as_array().unwrap();
     assert_eq!(related.len(), 2);

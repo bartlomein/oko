@@ -178,6 +178,104 @@ pub fn tokenize(value: &str) -> Vec<String> {
         .map(|m| m.as_str().to_owned())
         .collect()
 }
+/// Which lines of a run of source lines import or declare dependencies:
+/// `import`, `from … import`, `use`, `require`, `package`, and the lines of a
+/// multi-line import. They name what a question asks about without doing any
+/// of it, so they must not decide which code an answer shows.
+pub fn import_lines(path: &str, lines: &[&str]) -> Vec<bool> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind {
+        Script,
+        Python,
+        Rust,
+        Go,
+        Jvm,
+        Ruby,
+        Other,
+    }
+    // An import still open after this many lines was not one.
+    const OPEN_LINES: usize = 200;
+    let kind = match path.rsplit('.').next().unwrap_or("") {
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts" => Kind::Script,
+        "py" | "pyi" => Kind::Python,
+        "rs" => Kind::Rust,
+        "go" => Kind::Go,
+        "java" | "kt" | "kts" | "scala" => Kind::Jvm,
+        "rb" => Kind::Ruby,
+        _ => Kind::Other,
+    };
+    let mut mask = vec![false; lines.len()];
+    if kind == Kind::Other {
+        return mask;
+    }
+    // The text that closes a multi-line import, and where it opened.
+    let mut open: Option<(&str, usize)> = None;
+    for (index, line) in lines.iter().enumerate() {
+        let line = line.trim();
+        if let Some((close, since)) = open {
+            if index - since > OPEN_LINES {
+                open = None;
+            } else {
+                mask[index] = true;
+                if line.contains(close) {
+                    open = None;
+                }
+                continue;
+            }
+        }
+        let starts = |prefix: &str| line.starts_with(prefix);
+        let (import, close) = match kind {
+            Kind::Script => {
+                let import = starts("import ")
+                    || starts("import{")
+                    || (starts("export ") && (line.contains(" from ") || starts("export {")))
+                    || ((starts("const ") || starts("let ") || starts("var "))
+                        && line.contains("require("));
+                let unclosed = line.contains('{') && !line.contains('}');
+                (import, unclosed.then_some("}"))
+            }
+            Kind::Python => {
+                let import = starts("import ") || (starts("from ") && line.contains(" import "));
+                let unclosed = line.contains('(') && !line.contains(')');
+                (import, unclosed.then_some(")"))
+            }
+            Kind::Rust => {
+                let import = [
+                    "use ",
+                    "pub use ",
+                    "pub(crate) use ",
+                    "pub(super) use ",
+                    "extern crate ",
+                ]
+                .iter()
+                .any(|prefix| starts(prefix));
+                (import, (!line.ends_with(';')).then_some(";"))
+            }
+            Kind::Go => {
+                let import = starts("import ") || starts("import(") || starts("package ");
+                (import, line.ends_with('(').then_some(")"))
+            }
+            Kind::Jvm => (starts("import ") || starts("package "), None),
+            Kind::Ruby => (
+                [
+                    "require ",
+                    "require(",
+                    "require_relative ",
+                    "require_relative(",
+                ]
+                .iter()
+                .any(|prefix| starts(prefix)),
+                None,
+            ),
+            Kind::Other => (false, None),
+        };
+        if import {
+            mask[index] = true;
+            open = close.map(|close| (close, index));
+        }
+    }
+    mask
+}
 pub fn compare_text(a: &str, b: &str) -> Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
@@ -1549,6 +1647,58 @@ fn read_workspace_paths_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn import_lines_by_language() {
+        let marked = |path: &str, text: &str| -> Vec<usize> {
+            let lines: Vec<&str> = text.lines().collect();
+            import_lines(path, &lines)
+                .iter()
+                .enumerate()
+                .filter(|(_, import)| **import)
+                .map(|(index, _)| index + 1)
+                .collect()
+        };
+        assert_eq!(
+            marked(
+                "a.ts",
+                "import type { A } from './a';\nimport {\n  isRemoteAllowed,\n  B,\n} from './b';\nexport { c } from './c';\nconst d = require('d');\nexport function f() {\n  return import('./lazy');\n}\n"
+            ),
+            vec![1, 2, 3, 4, 5, 6, 7]
+        );
+        assert_eq!(
+            marked(
+                "a.py",
+                "from __future__ import annotations\nimport os\nfrom .x import (\n    a,\n    b,\n)\n\ndef importer():\n    return 1\n"
+            ),
+            vec![1, 2, 3, 4, 5, 6]
+        );
+        assert_eq!(
+            marked(
+                "a.rs",
+                "use std::io;\npub(crate) use crate::{\n    a,\n    b,\n};\n\nfn used() {}\n"
+            ),
+            vec![1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            marked(
+                "a.go",
+                "package main\n\nimport (\n\t\"fmt\"\n)\n\nfunc main() {}\n"
+            ),
+            vec![1, 3, 4, 5]
+        );
+        assert_eq!(
+            marked("A.java", "package a;\nimport b.C;\nclass A {}\n"),
+            vec![1, 2]
+        );
+        assert_eq!(
+            marked(
+                "a.rb",
+                "require 'json'\nrequire_relative 'x'\nclass A; end\n"
+            ),
+            vec![1, 2]
+        );
+        assert!(marked("README.md", "import this\n").is_empty());
+    }
 
     #[test]
     fn chunk_lines_rejects_chunks_whose_text_does_not_match_their_range() {
