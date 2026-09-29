@@ -1213,7 +1213,10 @@ fn implementation_intent_recovers_prose_crowded_source_in_one_request() {
         let mut application_request = requests[0].clone();
         // Transport adds the model after the application request budget check.
         application_request.as_object_mut().unwrap().remove("model");
-        assert!(serde_json::to_vec(&application_request).unwrap().len() <= 32_000);
+        assert!(
+            serde_json::to_vec(&application_request).unwrap().len()
+                <= oko::ranking::MAX_JEV_REQUEST_BYTES
+        );
         let candidates = requests[0]["state"]["candidates"].as_array().unwrap();
         assert_eq!(candidates.len(), oko::ranking::MAX_ITEMS);
         let paths: Vec<_> = candidates
@@ -1376,7 +1379,7 @@ fn normal_packet_retains_thirty_previews_and_expands_a_late_winner_in_one_call()
         fs::write(root.path().join(format!("{index:02}.rs")), source).unwrap();
     }
     assert!(
-        full_source_bytes > 32_000,
+        full_source_bytes > oko::ranking::MAX_JEV_REQUEST_BYTES,
         "full candidates exceed the provider request budget"
     );
     fs::write(
@@ -1675,7 +1678,10 @@ fn normal_search_preserves_annotations_and_returns_a_long_signature_body() {
     assert_eq!(requests.len(), 1, "normal search uses one provider call");
     let mut application_request = requests[0].clone();
     application_request.as_object_mut().unwrap().remove("model");
-    assert!(serde_json::to_vec(&application_request).unwrap().len() <= 32_000);
+    assert!(
+        serde_json::to_vec(&application_request).unwrap().len()
+            <= oko::ranking::MAX_JEV_REQUEST_BYTES
+    );
     let packet = assert_packet_envelope(&response);
     assert_eq!(packet["retrieval"]["omittedCandidates"], 0);
     let result = &packet["results"][0];

@@ -25,7 +25,7 @@ can score highly at once, and the scores do not need to sum to one. The `0.5`
 cutoff is an initial decision threshold, not a calibrated accuracy guarantee.
 These scores are not comparable with older versions' Choice scores.
 
-`omittedCount` counts items dropped by the 32,000-byte request budget, not items
+`omittedCount` counts items dropped by the 48,000-byte request budget, not items
 outside the top five or below the relevance cutoff. Supply candidates in your
 existing search order. Independent questions share that budget with the item
 text, so large inputs may lose more trailing items than before. Normal code

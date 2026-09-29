@@ -345,8 +345,13 @@ fn extreme_question_budgets_drop_only_a_suffix_then_error_when_impossible() {
     let chunks: Vec<_> = (0..30)
         .map(|index| chunk(&format!("src/{index}.rs"), 1, "fn encode() {}".into()))
         .collect();
-    let items =
-        ranking_previews(&"x".repeat(30_000), &chunks, RankingIntent::Implementation).unwrap();
+    let budget = crate::ranking::MAX_JEV_REQUEST_BYTES;
+    let items = ranking_previews(
+        &"x".repeat(budget - 2_000),
+        &chunks,
+        RankingIntent::Implementation,
+    )
+    .unwrap();
     assert!(!items.is_empty());
     assert!(items.len() < chunks.len());
     assert_eq!(
@@ -355,7 +360,7 @@ fn extreme_question_budgets_drop_only_a_suffix_then_error_when_impossible() {
             .map(|index| index.to_string())
             .collect::<Vec<_>>()
     );
-    assert!(ranking_previews(&"x".repeat(32_000), &chunks, RankingIntent::General).is_err());
+    assert!(ranking_previews(&"x".repeat(budget), &chunks, RankingIntent::General).is_err());
     let mut invalid = chunks[0].clone();
     invalid.end_line += 1;
     assert!(ranking_previews("encode", &[invalid], RankingIntent::General).is_err());
@@ -747,4 +752,129 @@ fn recovery_previews_add_evidence_without_exceeding_wire_budget() {
         assert_eq!(a.source, b.source);
         assert_eq!(a.id, b.id);
     }
+}
+
+/// Sixty long candidates: more than a request can hold in full.
+fn crowded(first: Chunk, question_word: &str) -> Vec<Chunk> {
+    let mut chunks = vec![first];
+    chunks.extend((1..60).map(|index| {
+        let mut lines = vec![format!("pub fn filler_{index}() {{")];
+        lines.extend((0..80).map(|n| {
+            format!(
+                "    let {question_word}_{n} = compute_{n}(\"{}\");",
+                "y".repeat(40)
+            )
+        }));
+        lines.push("}".into());
+        chunk(&format!("src/filler_{index}.rs"), 1, lines.join("\n"))
+    }));
+    chunks
+}
+
+#[test]
+fn the_first_candidates_get_fuller_previews_and_the_rest_their_essentials() {
+    let chunks = crowded(
+        chunk(
+            "src/first.rs",
+            1,
+            format!(
+                "pub fn first() {{\n{}\n    record(total);\n}}",
+                "    let step = next_step(\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\");\n"
+                    .repeat(80)
+            ),
+        ),
+        "record",
+    );
+    let items = ranking_previews(
+        "where is the total recorded",
+        &chunks,
+        RankingIntent::Implementation,
+    )
+    .unwrap();
+    let (request, retained) = ranking::prepare_request_with_intent(
+        "where is the total recorded",
+        &items,
+        RankingIntent::Implementation,
+    )
+    .unwrap();
+    assert_eq!(retained.len(), 60);
+    assert!(serde_json::to_vec(&request).unwrap().len() <= ranking::MAX_JEV_REQUEST_BYTES);
+    let head = items[..HEAD_PREVIEWS]
+        .iter()
+        .map(|item| item.text.len())
+        .min()
+        .unwrap();
+    let tail = items[HEAD_PREVIEWS..]
+        .iter()
+        .map(|item| item.text.len())
+        .max()
+        .unwrap();
+    assert!(head > tail, "head {head} tail {tail}");
+    for item in &items[HEAD_PREVIEWS..] {
+        assert!(item.text.contains("pub fn filler_"), "{}", item.text);
+    }
+    assert!(items[0].text.contains("record(total)"), "{}", items[0].text);
+}
+
+#[test]
+fn imports_and_a_type_above_do_not_crowd_out_the_function_body() {
+    let mut lines = vec![
+        "import { isRemoteAllowed } from '@astrojs/internal-helpers/remote';".to_owned(),
+        "import { AstroError, AstroErrorData } from '../../core/errors/index.js';".into(),
+        "".into(),
+        "type RemoteImageConfig = Pick<AstroConfig['image'], 'domains' | 'remotePatterns'>;".into(),
+        "".into(),
+        "export async function inferRemoteSize(url: string, imageConfig?: RemoteImageConfig) {"
+            .into(),
+    ];
+    lines.extend((0..40).map(|n| format!("\tconst chunk{n} = await read(reader, {n});")));
+    lines.push("\tif (!isRemoteAllowed(response.url, allowlistConfig)) {".into());
+    lines.push("\t\tthrow new AstroError(AstroErrorData.RemoteImageNotAllowed);".into());
+    lines.push("\t}".into());
+    lines.push("}".into());
+    let chunks = crowded(chunk("src/remoteProbe.ts", 1, lines.join("\n")), "remote");
+    let question = "remote image URL authorization check for domains and remote patterns";
+    let items = ranking_previews(question, &chunks, RankingIntent::Implementation).unwrap();
+    let preview = &items[0].text;
+    assert!(
+        preview.contains("isRemoteAllowed(response.url"),
+        "{preview}"
+    );
+    assert!(!preview.contains("import {"), "{preview}");
+}
+
+#[test]
+fn a_merged_section_is_judged_on_the_definition_that_matches() {
+    let text = [
+        "// Parses multiple header and returns first value if available.",
+        "export function getFirstForwardedValue(multiValueHeader?: string | string[] | null) {",
+        "\treturn multiValueHeader",
+        "\t\t?.toString()",
+        "\t\t?.split(',')",
+        "\t\t.map((e) => e.trim())?.[0];",
+        "}",
+        "",
+        "// Character-allowlist for IP addresses. Rejects injection payloads (HTML, SQL,",
+        "// path traversal, etc.) while accepting any well-formed IPv4/IPv6 string.",
+        "//   0-9    digits (IPv4 octets, IPv6 groups)",
+        "//   a-fA-F hex digits (IPv6)",
+        "export function isValidIpAddress(value: string): boolean {",
+        "\treturn /^[0-9a-fA-F.:]{1,45}$/.test(value);",
+        "}",
+    ]
+    .join("\n");
+    let items = ranking_previews(
+        "helper that extracts the first forwarded header value",
+        &[chunk("src/request.ts", 5, text)],
+        RankingIntent::Implementation,
+    )
+    .unwrap();
+    let preview = &items[0].text;
+    assert!(preview.contains("?.split(',')"), "{preview}");
+    // The other definition keeps its declaration line, not its comment.
+    assert!(
+        preview.contains("export function isValidIpAddress"),
+        "{preview}"
+    );
+    assert!(!preview.contains("Character-allowlist"), "{preview}");
 }

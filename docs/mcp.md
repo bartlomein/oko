@@ -290,7 +290,8 @@ The cached TypeScript parser establishes function boundaries for union and
 structural return annotations; uncertain lexical-only boundaries use the fallback.
 
 Normal searches rank compact, line-labelled previews instead of full chunks.
-Preview size adapts to the existing 32,000-byte Jev request budget. Winner IDs
+Preview size adapts to the 48,000-byte Jev request budget; when not every
+candidate fits in full, the shortlist's first 15 get fuller previews. Winner IDs
 map back to original source, so preview markers are never mistaken for source.
 Previews prioritize declaration names, attached source annotations or comments,
 and implementation statements. Adjacent decorator context can be recovered from

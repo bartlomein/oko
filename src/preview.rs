@@ -20,9 +20,11 @@ const HEADER_LINES: usize = 4;
 const SIGNATURE_SCAN_LINES: usize = 64;
 const CONTEXT_LINES: usize = 12;
 const BLOCK_LINES: usize = 12;
-// Batch 2 `head` arm: the shortlist's first candidates hold most of the
-// needed code (360 of 404 expected locations in the 0.6.0 suite were in the
-// first 20), so they get fuller previews and the rest only their essentials.
+// The shortlist's first candidates hold most of the needed code (360 of 404
+// expected locations in the 0.6.0 agent suite were in the first 20), so when
+// every candidate cannot have a full preview, the first 15 get the room and
+// the rest keep their essentials: anchor, signature, first body evidence and
+// decision block.
 const HEAD_PREVIEWS: usize = 15;
 const ESSENTIAL_PREVIEW_BYTES: usize = 640;
 const OMITTED: &str = "[omitted]";
@@ -183,12 +185,7 @@ fn previews_with_budget(
     {
         return Ok(desired);
     }
-    // TEMPORARY experiment knob, removed with the arms.
-    let head_previews = std::env::var("OKO_X_HEAD")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(HEAD_PREVIEWS);
-    if ranking::preview_experiment("head") && prepared.len() > head_previews {
+    if prepared.len() > HEAD_PREVIEWS {
         // The first candidates get the largest allowance that fits while the
         // rest keep their essentials; if even that does not fit, share evenly.
         let tiered = |head: usize| {
@@ -197,7 +194,7 @@ fn previews_with_budget(
                 .enumerate()
                 .map(|(index, preview)| RankItem {
                     id: index.to_string(),
-                    text: if index < head_previews {
+                    text: if index < HEAD_PREVIEWS {
                         preview.render(head)
                     } else {
                         preview.render_essential(ESSENTIAL_PREVIEW_BYTES)
@@ -281,11 +278,7 @@ impl<'a> PreparedPreview<'a> {
         let lines: Vec<_> = chunk.text.split('\n').collect();
         validate_chunk(chunk)?;
         // An import names what the question asks about without doing it.
-        let imports = if ranking::preview_experiment("imports") {
-            search::import_lines(&chunk.path, &lines)
-        } else {
-            vec![false; lines.len()]
-        };
+        let imports = search::import_lines(&chunk.path, &lines);
         let mut scored = Vec::with_capacity(lines.len());
         let mut focus = Vec::with_capacity(lines.len());
         let mut matches = Vec::with_capacity(lines.len());
@@ -318,34 +311,29 @@ impl<'a> PreparedPreview<'a> {
         // A merged section holds several declarations; the one whose block
         // holds the most of the question heads the preview, not the one whose
         // own line does.
-        let block_header = ranking::preview_experiment("header")
+        let declarations: Vec<usize> = (0..lines.len())
+            .filter(|&index| !imports[index] && is_declaration(lines[index], &chunk.path))
+            .collect();
+        let block_header = (declarations.len() > 1)
             .then(|| {
-                let declarations: Vec<usize> = (0..lines.len())
-                    .filter(|&index| !imports[index] && is_declaration(lines[index], &chunk.path))
-                    .collect();
-                (declarations.len() > 1)
-                    .then(|| {
-                        declarations
+                declarations
+                    .iter()
+                    .map(|&start| {
+                        let end = declarations
                             .iter()
-                            .map(|&start| {
-                                let end = declarations
-                                    .iter()
-                                    .copied()
-                                    .find(|&other| {
-                                        other > start
-                                            && indentation(lines[other])
-                                                <= indentation(lines[start])
-                                    })
-                                    .unwrap_or(lines.len());
-                                let covered: HashSet<&String> =
-                                    matches[start..end].iter().flatten().collect();
-                                (start, covered.len())
+                            .copied()
+                            .find(|&other| {
+                                other > start
+                                    && indentation(lines[other]) <= indentation(lines[start])
                             })
-                            .max_by_key(|&(start, covered)| (covered, std::cmp::Reverse(start)))
-                            .filter(|&(_, covered)| covered > 0)
-                            .map(|(start, _)| start)
+                            .unwrap_or(lines.len());
+                        let covered: HashSet<&String> =
+                            matches[start..end].iter().flatten().collect();
+                        (start, covered.len())
                     })
-                    .flatten()
+                    .max_by_key(|&(start, covered)| (covered, std::cmp::Reverse(start)))
+                    .filter(|&(_, covered)| covered > 0)
+                    .map(|(start, _)| start)
             })
             .flatten();
         let header = block_header
@@ -432,10 +420,7 @@ impl<'a> PreparedPreview<'a> {
             priority.extend(block);
         }
         // Counted before duplicates are dropped; they keep their places first.
-        let essential = {
-            let mut seen = HashSet::new();
-            priority.iter().filter(|index| seen.insert(**index)).count()
-        };
+        let essentials: HashSet<usize> = priority.iter().copied().collect();
         // Prefer covering different parts of the question before repeating
         // the same keyword-heavy comments or diagnostics. This is source- and
         // language-independent, and bounded even for a very long question.
@@ -443,22 +428,34 @@ impl<'a> PreparedPreview<'a> {
             .iter()
             .flat_map(|&index| matches[index].iter().cloned())
             .collect::<HashSet<_>>();
-        // The `header` arm keeps the evidence inside the heading definition
-        // first: a type alias above a function can name more of the question
-        // than the checks inside it do.
-        let block = (ranking::preview_experiment("header")
-            && header.is_some_and(|h| is_declaration(lines[h], &chunk.path)))
-        .then(|| {
-            let start = header.unwrap_or(0);
-            let end = (start + 1..lines.len())
-                .find(|&other| {
-                    !imports[other]
-                        && is_declaration(lines[other], &chunk.path)
-                        && indentation(lines[other]) <= indentation(lines[start])
+        // Evidence inside the heading definition comes first: a type alias
+        // above a function can name more of the question than the checks
+        // inside it do.
+        // The heading declaration's span: from the comments and attributes
+        // above it to the end of its body (the first line back at its depth
+        // after the signature; a closing brace belongs to the body).
+        let python = matches!(chunk.path.rsplit('.').next(), Some("py" | "pyi"));
+        let span = |declaration: usize| {
+            let start = declaration_context(&lines, declaration)
+                .first()
+                .copied()
+                .unwrap_or(declaration);
+            let from = signature_end(&lines, declaration, &chunk.path).unwrap_or(declaration) + 1;
+            let depth = indentation(lines[declaration]);
+            let end = (from..lines.len())
+                .find(|&index| {
+                    !lines[index].trim().is_empty() && indentation(lines[index]) <= depth
+                })
+                .map(|index| {
+                    let closer = lines[index].trim_start().starts_with(['}', ')', ']']);
+                    if closer && !python { index + 1 } else { index }
                 })
                 .unwrap_or(lines.len());
-            (start, end)
-        });
+            (start, end.max(declaration + 1))
+        };
+        let block = header
+            .filter(|&h| is_declaration(lines[h], &chunk.path))
+            .map(span);
         let inside = |index: usize| block.is_none_or(|(start, end)| start <= index && index < end);
         for _ in 0..8 {
             let Some((index, fresh)) = matches
@@ -504,6 +501,22 @@ impl<'a> PreparedPreview<'a> {
         priority.extend(0..lines.len());
         let mut seen = HashSet::new();
         priority.retain(|index| seen.insert(*index));
+        // The ranker judges the definition that heads the preview. Outside
+        // it, only declaration lines and lines holding part of the question
+        // are shown, so a neighbour's long comment cannot make the section
+        // look like something else.
+        if let Some(block) = block {
+            priority.retain(|&index| {
+                (block.0 <= index && index < block.1)
+                    || (!imports[index]
+                        && (is_declaration(lines[index], &chunk.path)
+                            || !matches[index].is_empty()))
+            });
+        }
+        let essential = priority
+            .iter()
+            .take_while(|index| essentials.contains(index))
+            .count();
         Ok(Self {
             chunk,
             lines,

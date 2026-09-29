@@ -59,8 +59,16 @@ They also prioritize up to 12 contiguous lines of a query-matching control-flow
 block, so nearby predicates and outcomes can survive the preview budget.
 This is an indentation-based context hint, not a language parser; multiline
 conditions and unsupported syntax use the existing preview selection.
+Import lines are never preview evidence. In a section that holds several
+definitions, the one whose body holds most of the question heads the preview;
+outside it only declaration lines and lines naming part of the question are
+shown, so a neighbour's long comment cannot make the section read as something
+else. When the 60 candidates cannot all have full previews, the shortlist's
+first 15 get the room and the rest keep their essentials (anchor, signature,
+first body evidence, decision block).
 Preview selection itself adds no model requests. Each Jev request keeps the
-60-item, 32,000-byte budget. See the
+60-item, 48,000-byte budget (32,000 in 0.6.0: previews then averaged about
+250 bytes and Jev rejected code it could not see). See the
 [rank-fusion audit](../benchmarks/rank-fusion.md) for offline results and limits;
 the [earlier shortlist audit](../benchmarks/shortlist.md) documents the prior design.
 
@@ -154,7 +162,7 @@ also stops when Jev chooses to finish or all offered actions are exhausted.
 Actions that expose the same evidence are deduplicated. An empty answer cannot
 finish while untried actions remain; Jev must choose another action. Actions do
 not repeat. Each provider call retains the existing ten-second timeout,
-32 KB request budget and no automatic retries. No total wall-time or token-cost
+48 KB request budget and no automatic retries. No total wall-time or token-cost
 budget is implemented. Use a step limit when bounding API use matters.
 
 The repository is read once into a snapshot using the same ignored-file, UTF-8,
