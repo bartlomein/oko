@@ -133,7 +133,7 @@ class StandInJev:
                     score, match = stand_in.lookup(scores, candidate.get('source', ''))
                     answers[f'candidate_{index + 1}'] = {'type': 'noul', 'noul': score}
                     rows.append({'source': candidate.get('source'), 'textBytes': len(candidate.get('text', '')),
-                                 'score': score, 'match': match})
+                                 'text': candidate.get('text', ''), 'score': score, 'match': match})
                 stand_in.requests.append({'phase': self.headers.get('x-oko-phase', ''), 'candidates': rows})
                 reply = json.dumps({'answers': answers, 'usage': {'input_tokens': 0, 'output_tokens': 0}}).encode()
                 self.send_response(200)
@@ -177,16 +177,25 @@ def environment(stand_in, extra):
 
 def anchor_evidence(requests, expected):
     """For each expected location: the shortlist position and preview size of the
-    first normal-request candidate that overlaps it, as the stand-in saw them."""
-    normal = next((r for r in requests if r['phase'] == 'normal'), None)
+    first normal-request candidate that overlaps it, as the stand-in saw them,
+    and whether any of the location's lines is in that preview: what Jev can
+    see of it. Previews number their lines `N: text`."""
     found = []
     for path, start, end in expected:
         hit = None
-        for position, row in enumerate((normal or {}).get('candidates') or []):
-            p, _, lines = (row['source'] or '').rpartition(':')
-            s, _, e = lines.partition('-')
-            if p == path and s.isdigit() and e.isdigit() and int(s) <= end and start <= int(e):
-                hit = {'position': position, 'textBytes': row['textBytes'], 'score': row['score']}
+        for request in requests:
+            if request['phase'] != 'normal':
+                continue
+            for position, row in enumerate(request['candidates']):
+                p, _, lines = (row['source'] or '').rpartition(':')
+                s, _, e = lines.partition('-')
+                if p == path and s.isdigit() and e.isdigit() and int(s) <= end and start <= int(e):
+                    shown = {int(line.split(':', 1)[0]) for line in row['text'].split('\n')
+                             if line.split(':', 1)[0].isdigit()}
+                    hit = {'position': position, 'textBytes': row['textBytes'], 'score': row['score'],
+                           'visible': any(start <= n <= end for n in shown)}
+                    break
+            if hit:
                 break
         found.append(hit)
     return found
@@ -210,11 +219,12 @@ def replay_session(binary, workspace, cache, stand_in, arguments, call, expected
     recorded = [(e['path'], e['startLine'], e['endLine']) for e in call.get('results') or []]
     lookups = [c['match'] for r in stand_in.requests for c in r['candidates']]
     normal = [c['textBytes'] for r in stand_in.requests if r['phase'] == 'normal' for c in r['candidates']]
+    evidence = anchor_evidence(stand_in.requests, expected)
     row.update(shown=shown, recordedShown=recorded, reproduced=shown == recorded,
                textBytes=len(''.join(b.get('text', '') for b in response.get('content', []))),
                defaultLookups=sum(m in ('default', 'unknown') for m in lookups), lookups=len(lookups),
                previewBytesMean=(sum(normal) / len(normal)) if normal else None,
-               anchors=anchor_evidence(stand_in.requests, expected))
+               anchors=evidence)
     return row
 
 
@@ -232,7 +242,12 @@ def summarize(rows, labels):
             task['expected'] += row['expected']
             task['reproduced'] += row['reproduced']
             task['textBytes'] += row['textBytes']
+        anchors = [a for r in mine for a in r.get('anchors') or []]
+        seen = [a for a in anchors if a]
         out[label] = {'sessions': len(mine), 'errors': sum(r['build'] == label and 'error' in r for r in rows),
+                      'anchors': len(anchors), 'anchorsJudged': len(seen),
+                      'anchorsVisible': sum(a.get('visible', False) for a in seen),
+                      'anchorPreviewBytesMedian': sorted(a['textBytes'] for a in seen)[len(seen) // 2] if seen else None,
                       'full': sum(r['full'] for r in mine),
                       'reproduced': sum(r['reproduced'] for r in mine),
                       'defaultLookups': sum(r['defaultLookups'] for r in mine),
@@ -246,12 +261,14 @@ def render(summary, labels, reports):
     lines = ['# First answers replayed with recorded Jev verdicts', '',
              'Reports: ' + ', '.join(str(r) for r in reports), '',
              '| Build | Sessions | First answer has every expected location | Same excerpts as recorded | '
-             'Scores not in the recording | Answer bytes |',
-             '|---|---:|---:|---:|---:|---:|']
+             'Scores not in the recording | Answer bytes | Expected lines in the Jev preview | '
+             'Median preview bytes of those candidates |',
+             '|---|---:|---:|---:|---:|---:|---:|---:|']
     for label in labels:
         s = summary[label]
         lines.append(f"| {label} | {s['sessions']} | {s['full']} | {s['reproduced']} | "
-                     f"{s['defaultLookups']} of {s['lookups']} | {s['textBytes']} |")
+                     f"{s['defaultLookups']} of {s['lookups']} | {s['textBytes']} | "
+                     f"{s['anchorsVisible']} of {s['anchorsJudged']} | {s['anchorPreviewBytesMedian']} |")
     lines += ['', '"Same excerpts as recorded" compares with what the recorded build showed; it is the '
               'check that the stand-in reproduces the recording when the build is the recorded one.', '',
               '| Task | ' + ' | '.join(f'{label}: every location / sessions (anchors covered)' for label in labels) + ' |',

@@ -20,6 +20,11 @@ const HEADER_LINES: usize = 4;
 const SIGNATURE_SCAN_LINES: usize = 64;
 const CONTEXT_LINES: usize = 12;
 const BLOCK_LINES: usize = 12;
+// Batch 2 `head` arm: the shortlist's first candidates hold most of the
+// needed code (360 of 404 expected locations in the 0.6.0 suite were in the
+// first 20), so they get fuller previews and the rest only their essentials.
+const HEAD_PREVIEWS: usize = 15;
+const ESSENTIAL_PREVIEW_BYTES: usize = 640;
 const OMITTED: &str = "[omitted]";
 const TRUNCATED: &str = "[truncated]";
 
@@ -178,6 +183,52 @@ fn previews_with_budget(
     {
         return Ok(desired);
     }
+    // TEMPORARY experiment knob, removed with the arms.
+    let head_previews = std::env::var("OKO_X_HEAD")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(HEAD_PREVIEWS);
+    if ranking::preview_experiment("head") && prepared.len() > head_previews {
+        // The first candidates get the largest allowance that fits while the
+        // rest keep their essentials; if even that does not fit, share evenly.
+        let tiered = |head: usize| {
+            prepared
+                .iter()
+                .enumerate()
+                .map(|(index, preview)| RankItem {
+                    id: index.to_string(),
+                    text: if index < head_previews {
+                        preview.render(head)
+                    } else {
+                        preview.render_essential(ESSENTIAL_PREVIEW_BYTES)
+                    },
+                    source: Some(format!(
+                        "{}:{}-{}",
+                        preview.chunk.path, preview.chunk.start_line, preview.chunk.end_line
+                    )),
+                })
+                .collect::<Vec<_>>()
+        };
+        let fits = |items: &[RankItem]| {
+            ranking::prepare_request_with_intent(question, items, intent)
+                .is_ok_and(|(_, retained)| retained.len() == items.len())
+        };
+        let floor = tiered(ESSENTIAL_PREVIEW_BYTES);
+        if fits(&floor) {
+            let (mut low, mut high, mut best) = (ESSENTIAL_PREVIEW_BYTES, desired_bytes, floor);
+            while high - low > 16 {
+                let middle = low + (high - low) / 2;
+                let items = tiered(middle);
+                if fits(&items) {
+                    low = middle;
+                    best = items;
+                } else {
+                    high = middle;
+                }
+            }
+            return Ok(best);
+        }
+    }
 
     let smallest = items_at(MIN_TEXT_BYTES);
     let (_, mut best) = ranking::prepare_request_with_intent(question, &smallest, intent)?;
@@ -216,6 +267,9 @@ struct PreparedPreview<'a> {
     lines: Vec<&'a str>,
     focus: Vec<usize>,
     priority: Vec<usize>,
+    /// How many of `priority` are the essentials: the anchor, its
+    /// annotations and signature, the first body evidence, a decision block.
+    essential: usize,
 }
 
 impl<'a> PreparedPreview<'a> {
@@ -226,6 +280,12 @@ impl<'a> PreparedPreview<'a> {
     ) -> Result<Self> {
         let lines: Vec<_> = chunk.text.split('\n').collect();
         validate_chunk(chunk)?;
+        // An import names what the question asks about without doing it.
+        let imports = if ranking::preview_experiment("imports") {
+            search::import_lines(&chunk.path, &lines)
+        } else {
+            vec![false; lines.len()]
+        };
         let mut scored = Vec::with_capacity(lines.len());
         let mut focus = Vec::with_capacity(lines.len());
         let mut matches = Vec::with_capacity(lines.len());
@@ -233,7 +293,10 @@ impl<'a> PreparedPreview<'a> {
             let lower = line.to_ascii_lowercase();
             let mut matching = HashSet::new();
             let mut first_match = None;
-            for word in search::tokenize(line) {
+            for word in search::tokenize(line)
+                .into_iter()
+                .filter(|_| !imports[index])
+            {
                 // Find the original token, not its stem: e.g. "filing" stems
                 // to "file", which need not occur verbatim in the source.
                 let stem = stems
@@ -252,10 +315,46 @@ impl<'a> PreparedPreview<'a> {
             matches.push(matching);
         }
         scored.sort_by_key(|&(index, matches)| (std::cmp::Reverse(matches), index));
-        let header = scored
-            .iter()
-            .map(|&(index, _)| index)
-            .find(|&index| is_declaration(lines[index], &chunk.path))
+        // A merged section holds several declarations; the one whose block
+        // holds the most of the question heads the preview, not the one whose
+        // own line does.
+        let block_header = ranking::preview_experiment("header")
+            .then(|| {
+                let declarations: Vec<usize> = (0..lines.len())
+                    .filter(|&index| !imports[index] && is_declaration(lines[index], &chunk.path))
+                    .collect();
+                (declarations.len() > 1)
+                    .then(|| {
+                        declarations
+                            .iter()
+                            .map(|&start| {
+                                let end = declarations
+                                    .iter()
+                                    .copied()
+                                    .find(|&other| {
+                                        other > start
+                                            && indentation(lines[other])
+                                                <= indentation(lines[start])
+                                    })
+                                    .unwrap_or(lines.len());
+                                let covered: HashSet<&String> =
+                                    matches[start..end].iter().flatten().collect();
+                                (start, covered.len())
+                            })
+                            .max_by_key(|&(start, covered)| (covered, std::cmp::Reverse(start)))
+                            .filter(|&(_, covered)| covered > 0)
+                            .map(|(start, _)| start)
+                    })
+                    .flatten()
+            })
+            .flatten();
+        let header = block_header
+            .or_else(|| {
+                scored
+                    .iter()
+                    .map(|&(index, _)| index)
+                    .find(|&index| is_declaration(lines[index], &chunk.path))
+            })
             // A Markdown-shaped line may instead be a Python/shell comment.
             // Prefer an actual declaration whenever this chunk contains one.
             .or_else(|| {
@@ -332,6 +431,11 @@ impl<'a> PreparedPreview<'a> {
         }) {
             priority.extend(block);
         }
+        // Counted before duplicates are dropped; they keep their places first.
+        let essential = {
+            let mut seen = HashSet::new();
+            priority.iter().filter(|index| seen.insert(**index)).count()
+        };
         // Prefer covering different parts of the question before repeating
         // the same keyword-heavy comments or diagnostics. This is source- and
         // language-independent, and bounded even for a very long question.
@@ -339,10 +443,28 @@ impl<'a> PreparedPreview<'a> {
             .iter()
             .flat_map(|&index| matches[index].iter().cloned())
             .collect::<HashSet<_>>();
+        // The `header` arm keeps the evidence inside the heading definition
+        // first: a type alias above a function can name more of the question
+        // than the checks inside it do.
+        let block = (ranking::preview_experiment("header")
+            && header.is_some_and(|h| is_declaration(lines[h], &chunk.path)))
+        .then(|| {
+            let start = header.unwrap_or(0);
+            let end = (start + 1..lines.len())
+                .find(|&other| {
+                    !imports[other]
+                        && is_declaration(lines[other], &chunk.path)
+                        && indentation(lines[other]) <= indentation(lines[start])
+                })
+                .unwrap_or(lines.len());
+            (start, end)
+        });
+        let inside = |index: usize| block.is_none_or(|(start, end)| start <= index && index < end);
         for _ in 0..8 {
             let Some((index, fresh)) = matches
                 .iter()
                 .enumerate()
+                .filter(|&(index, _)| inside(index))
                 .map(|(index, matching)| (index, matching.difference(&covered).count()))
                 .max_by_key(|&(index, fresh)| {
                     (fresh, matches[index].len(), std::cmp::Reverse(index))
@@ -359,10 +481,16 @@ impl<'a> PreparedPreview<'a> {
         priority.extend(
             scored
                 .iter()
-                .filter(|&&(_, matches)| matches > 0)
+                .filter(|&&(index, matches)| matches > 0 && inside(index))
                 .map(|&(index, _)| index),
         );
         priority.extend(documentation);
+        priority.extend(
+            scored
+                .iter()
+                .filter(|&&(index, matches)| matches > 0 && !inside(index))
+                .map(|&(index, _)| index),
+        );
         // One line either side gives small statements and multiline headers
         // context, after retaining the strongest matches themselves.
         for index in priority.clone() {
@@ -381,15 +509,25 @@ impl<'a> PreparedPreview<'a> {
             lines,
             focus,
             priority,
+            essential,
         })
     }
 
     fn render(&self, budget: usize) -> String {
+        self.render_from(budget, &self.priority)
+    }
+
+    /// Only the essential lines, within `budget`.
+    fn render_essential(&self, budget: usize) -> String {
+        self.render_from(budget, &self.priority[..self.essential])
+    }
+
+    fn render_from(&self, budget: usize, priority: &[usize]) -> String {
         let mut selected = BTreeMap::new();
         // A wholly omitted chunk is one marker. Track JSON text size as lines
         // are inserted instead of repeatedly rendering every selected line.
         let mut encoded_bytes = OMITTED.len();
-        for &index in &self.priority {
+        for &index in priority {
             let previous = selected
                 .range(..index)
                 .next_back()
@@ -426,7 +564,7 @@ impl<'a> PreparedPreview<'a> {
         // Very large source line numbers still need an honest, nonempty
         // preview. The final serialized request check handles their overhead.
         if selected.is_empty() {
-            let index = self.priority[0];
+            let index = priority[0];
             selected.insert(index, fragment(self.lines[index], self.focus[index], 24));
         }
         self.render_selected(&selected)
