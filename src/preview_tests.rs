@@ -878,3 +878,35 @@ fn a_merged_section_is_judged_on_the_definition_that_matches() {
     );
     assert!(!preview.contains("Character-allowlist"), "{preview}");
 }
+
+#[test]
+fn listed_candidates_keep_their_whole_section() {
+    let text = [
+        "export function getFirstForwardedValue(header?: string) {",
+        "\treturn header?.split(',')[0];",
+        "}",
+        "",
+        "// Character-allowlist for IP addresses.",
+        "export function isValidIpAddress(value: string): boolean {",
+        "\treturn /^[0-9a-fA-F.:]{1,45}$/.test(value);",
+        "}",
+    ]
+    .join("\n");
+    let chunks = [chunk("src/request.ts", 1, text)];
+    let question = "helper that extracts the first forwarded header value";
+    let judged =
+        ranking_previews_with_context(question, &chunks, &chunks, RankingIntent::Implementation)
+            .unwrap();
+    let listed =
+        listing_previews_with_context(question, &chunks, &chunks, RankingIntent::Related).unwrap();
+    assert!(
+        !judged[0].text.contains("Character-allowlist"),
+        "{}",
+        judged[0].text
+    );
+    assert!(
+        listed[0].text.contains("Character-allowlist"),
+        "{}",
+        listed[0].text
+    );
+}

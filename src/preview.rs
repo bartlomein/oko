@@ -30,6 +30,38 @@ const ESSENTIAL_PREVIEW_BYTES: usize = 640;
 const OMITTED: &str = "[omitted]";
 const TRUNCATED: &str = "[truncated]";
 
+/// How previews are shaped.
+///
+/// The shortlist the ranker accepts from is `judged`: the first candidates get
+/// the room, imports are not evidence, and a section of several definitions
+/// is previewed on the one that matches. Candidates that can only be named in
+/// a list (connected files, further keyword matches) keep even shares of the
+/// whole chunk: shaped like the shortlist, they fell out of Agent Retrieval
+/// Bench's top 20 (R@20 on tests and ripple tasks −0.04 against 0.6.0 run
+/// the same day), and agents never read them as excerpts.
+#[derive(Clone, Copy)]
+struct Shape {
+    /// The first candidates get the room when not all fit in full.
+    head: bool,
+    /// Imports are not evidence, and a section of several definitions is
+    /// previewed on the one that matches.
+    focused: bool,
+}
+impl Shape {
+    fn judged() -> Self {
+        Self {
+            head: true,
+            focused: true,
+        }
+    }
+    fn listed() -> Self {
+        Self {
+            head: false,
+            focused: false,
+        }
+    }
+}
+
 /// Recover attached declaration context that chunk boundaries put in the
 /// previous candidate. Only an adjacent source-backed prefix is added; IDs
 /// still refer to the caller's original candidates in exactly the same order.
@@ -39,7 +71,32 @@ pub fn ranking_previews_with_context(
     corpus: &[Chunk],
     intent: RankingIntent,
 ) -> Result<Vec<RankItem>> {
-    contextual_previews(question, chunks, corpus, intent, DESIRED_TEXT_BYTES)
+    contextual_previews(
+        question,
+        chunks,
+        corpus,
+        intent,
+        DESIRED_TEXT_BYTES,
+        Shape::judged(),
+    )
+}
+
+/// The same for candidates that can only be named in a list (connected
+/// files, further keyword matches).
+pub fn listing_previews_with_context(
+    question: &str,
+    chunks: &[Chunk],
+    corpus: &[Chunk],
+    intent: RankingIntent,
+) -> Result<Vec<RankItem>> {
+    contextual_previews(
+        question,
+        chunks,
+        corpus,
+        intent,
+        DESIRED_TEXT_BYTES,
+        Shape::listed(),
+    )
 }
 
 /// A smaller recovery batch gets fuller evidence within the same wire budget.
@@ -49,7 +106,7 @@ pub fn recovery_previews_with_context(
     corpus: &[Chunk],
     intent: RankingIntent,
 ) -> Result<Vec<RankItem>> {
-    contextual_previews(question, chunks, corpus, intent, 3_000)
+    contextual_previews(question, chunks, corpus, intent, 3_000, Shape::judged())
 }
 
 fn contextual_previews(
@@ -58,6 +115,7 @@ fn contextual_previews(
     corpus: &[Chunk],
     intent: RankingIntent,
     desired_bytes: usize,
+    shape: Shape,
 ) -> Result<Vec<RankItem>> {
     for chunk in chunks.iter().take(ranking::MAX_ITEMS) {
         validate_chunk(chunk)?;
@@ -122,7 +180,7 @@ fn contextual_previews(
             result
         })
         .collect();
-    previews_with_budget(question, &enriched, intent, desired_bytes)
+    previews_with_budget(question, &enriched, intent, desired_bytes, shape)
 }
 
 /// Build previews without changing candidate order, IDs, or original chunks.
@@ -135,7 +193,13 @@ pub fn ranking_previews(
     chunks: &[Chunk],
     intent: RankingIntent,
 ) -> Result<Vec<RankItem>> {
-    previews_with_budget(question, chunks, intent, DESIRED_TEXT_BYTES)
+    previews_with_budget(
+        question,
+        chunks,
+        intent,
+        DESIRED_TEXT_BYTES,
+        Shape::judged(),
+    )
 }
 
 fn previews_with_budget(
@@ -143,6 +207,7 @@ fn previews_with_budget(
     chunks: &[Chunk],
     intent: RankingIntent,
     desired_bytes: usize,
+    shape: Shape,
 ) -> Result<Vec<RankItem>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
@@ -163,7 +228,7 @@ fn previews_with_budget(
     let prepared = chunks
         .iter()
         .take(ranking::MAX_ITEMS)
-        .map(|chunk| PreparedPreview::new(chunk, &terms, &mut stems))
+        .map(|chunk| PreparedPreview::new(chunk, &terms, &mut stems, shape.focused))
         .collect::<Result<Vec<_>>>()?;
     let items_at = |budget| {
         prepared
@@ -185,7 +250,7 @@ fn previews_with_budget(
     {
         return Ok(desired);
     }
-    if prepared.len() > HEAD_PREVIEWS {
+    if shape.head && prepared.len() > HEAD_PREVIEWS {
         // The first candidates get the largest allowance that fits while the
         // rest keep their essentials; if even that does not fit, share evenly.
         let tiered = |head: usize| {
@@ -274,11 +339,16 @@ impl<'a> PreparedPreview<'a> {
         chunk: &'a Chunk,
         terms: &HashSet<String>,
         stems: &mut HashMap<String, String>,
+        focused: bool,
     ) -> Result<Self> {
         let lines: Vec<_> = chunk.text.split('\n').collect();
         validate_chunk(chunk)?;
         // An import names what the question asks about without doing it.
-        let imports = search::import_lines(&chunk.path, &lines);
+        let imports = if focused {
+            search::import_lines(&chunk.path, &lines)
+        } else {
+            vec![false; lines.len()]
+        };
         let mut scored = Vec::with_capacity(lines.len());
         let mut focus = Vec::with_capacity(lines.len());
         let mut matches = Vec::with_capacity(lines.len());
@@ -314,7 +384,7 @@ impl<'a> PreparedPreview<'a> {
         let declarations: Vec<usize> = (0..lines.len())
             .filter(|&index| !imports[index] && is_declaration(lines[index], &chunk.path))
             .collect();
-        let block_header = (declarations.len() > 1)
+        let block_header = (focused && declarations.len() > 1)
             .then(|| {
                 declarations
                     .iter()
@@ -454,7 +524,7 @@ impl<'a> PreparedPreview<'a> {
             (start, end.max(declaration + 1))
         };
         let block = header
-            .filter(|&h| is_declaration(lines[h], &chunk.path))
+            .filter(|&h| focused && is_declaration(lines[h], &chunk.path))
             .map(span);
         let inside = |index: usize| block.is_none_or(|(start, end)| start <= index && index < end);
         for _ in 0..8 {

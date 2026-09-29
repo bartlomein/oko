@@ -307,7 +307,7 @@ fn judge_beside(
     if chunks.is_empty() {
         return (Vec::new(), calls);
     }
-    let judged = oko::preview::ranking_previews_with_context(question, chunks, corpus, intent)
+    let judged = oko::preview::listing_previews_with_context(question, chunks, corpus, intent)
         .and_then(|items| {
             ranking::rank_items_with_stats(
                 question,

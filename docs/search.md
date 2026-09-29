@@ -65,7 +65,10 @@ outside it only declaration lines and lines naming part of the question are
 shown, so a neighbour's long comment cannot make the section read as something
 else. When the 60 candidates cannot all have full previews, the shortlist's
 first 15 get the room and the rest keep their essentials (anchor, signature,
-first body evidence, decision block).
+first body evidence, decision block). Connected files and further keyword
+matches, which can only be named in a list, keep even shares of their whole
+chunk: shaped like the shortlist, they fell out of the Agent Retrieval Bench's
+top 20 on tests and ripple tasks.
 Preview selection itself adds no model requests. Each Jev request keeps the
 60-item, 48,000-byte budget (32,000 in 0.6.0: previews then averaged about
 250 bytes and Jev rejected code it could not see). See the
