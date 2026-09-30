@@ -516,15 +516,22 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(args[-1],'PROMPT')
         self.assertIn('--dangerously-bypass-hook-trust',args)
         self.assertIn('input={question="${prompt}",prefetch="codex:${session_id}"}',args[args.index('-c')+1])
+        with tempfile.TemporaryDirectory() as tmp:
+            config=json.dumps({'mcp':{'oko':{'type':'local','command':['python3','oko-server.py','/work','/cache']}}})
+            args,env=r.prefetch('opencode',['opencode','run','--pure','--agent','comparison','PROMPT'],
+                                {'OPENCODE_CONFIG_CONTENT':config,'XDG_CONFIG_HOME':tmp})
+            self.assertEqual(args,['opencode','run','--agent','comparison','PROMPT'])
+            plugin=(Path(tmp)/'opencode/plugins/oko-prefetch.js').read_text()
+            self.assertIn('const COMMAND = ["python3", "oko-server.py", "/work", "/cache"];',plugin)
+            self.assertNotIn('__OKO_',plugin)
         with self.assertRaises(RuntimeError):
-            r.prefetch('opencode',['opencode','run','PROMPT'],{})
+            r.prefetch('cursor',['cursor','PROMPT'],{})
         task={'kind':'search','question':'Where is it?','cacheCondition':'guided'}
         self.assertEqual(r.prompt(task,True),r.prompt({**task,'cacheCondition':'prefetch'},True),
                          'the prompt is the guided one; only the hook differs')
         import subprocess, sys
         listed=subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','branch','--guided','--skip-previous','--prefetch'],capture_output=True,text=True)
-        # OpenCode has no prompt hook: 243 plus 54 prefetch sessions.
-        self.assertIn("297 sessions; suite=branch; repeats=3; conditions=('native', 'current', 'guided', 'prefetch')",listed.stdout)
+        self.assertIn("324 sessions; suite=branch; repeats=3; conditions=('native', 'current', 'guided', 'prefetch')",listed.stdout)
         self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','branch','--prefetch'],capture_output=True).returncode,0)
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp)/'oko-metrics.jsonl').write_text(

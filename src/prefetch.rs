@@ -13,14 +13,15 @@ use crate::floor;
 /// known. Codex keeps about 2,500 tokens of hook context before it spills
 /// the rest to a file.
 pub const MAX_CONTEXT_CHARS: usize = 8_000;
-/// Claude Code keeps 10,000 characters of hook context. A function cut at
-/// 8,000 lost the check four lines past its excerpt.
-const CLAUDE_CONTEXT_CHARS: usize = 9_600;
+/// Claude Code keeps 10,000 characters of hook context; OpenCode sets no
+/// limit on a plugin's part. A function cut at 8,000 lost the check four
+/// lines past its excerpt.
+const ROOMY_CONTEXT_CHARS: usize = 9_600;
 
 /// Room for the injected block for the client named by the hook.
 pub fn max_context_chars(client: &str) -> usize {
-    if client == "claude" {
-        CLAUDE_CONTEXT_CHARS
+    if matches!(client, "claude" | "opencode") {
+        ROOMY_CONTEXT_CHARS
     } else {
         MAX_CONTEXT_CHARS
     }
@@ -30,7 +31,9 @@ pub fn max_context_chars(client: &str) -> usize {
 /// `codex:<id>`); any other value is a session id alone.
 pub fn client_session(value: &str) -> (&str, &str) {
     match value.split_once(':') {
-        Some((client, session)) if matches!(client, "claude" | "codex") => (client, session),
+        Some((client, session)) if matches!(client, "claude" | "codex" | "opencode") => {
+            (client, session)
+        }
         _ => ("", value),
     }
 }
@@ -484,5 +487,7 @@ mod tests {
         assert_eq!(client_session("other:x"), ("", "other:x"));
         assert!(max_context_chars("claude") < 10_000);
         assert_eq!(max_context_chars("codex"), MAX_CONTEXT_CHARS);
+        assert_eq!(client_session("opencode:ses_1"), ("opencode", "ses_1"));
+        assert_eq!(max_context_chars("opencode"), max_context_chars("claude"));
     }
 }

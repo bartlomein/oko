@@ -48,9 +48,9 @@ def compares_builds():
 # channel for standing instructions. The same file is what setup installs.
 GUIDED = 'guided'
 GUIDANCE = PROJECT / 'src/guidance.md'
-# Guided plus the prompt hook `oko setup` installs: the running server answers
-# a code question before the agent's first turn. Claude Code and Codex only;
-# OpenCode has no prompt hook.
+# Guided plus the prompt hook `oko setup` installs: Oko answers a code
+# question before the agent's first turn. Claude Code and Codex call the
+# running server; OpenCode loads setup's plugin, which keeps an Oko of its own.
 PREFETCH = 'prefetch'
 PREFETCH_INPUT = {'question': '${prompt}', 'prefetch': 'claude:${session_id}'}
 
@@ -87,6 +87,19 @@ def prefetch(client, args, env):
                 'input={question="${prompt}",prefetch="codex:${session_id}"},timeout=15}]}]')
         # Session-flag hooks still need trust; `codex exec` cannot ask for it.
         args[-1:-1] = ['--dangerously-bypass-hook-trust', '-c', hook]
+    elif client == 'opencode':
+        # The plugin launches Oko as the session's MCP server is launched, so
+        # both share the trial's cache and metrics file. `--pure` would skip it;
+        # the private config home holds no other plugin.
+        command = json.loads(env['OPENCODE_CONFIG_CONTENT'])['mcp']['oko']['command']
+        plugin = (PROJECT / 'src/opencode_prefetch.js').read_text()
+        plugin = plugin.replace('__OKO_COMMAND__', json.dumps(command)).replace('__OKO_ENV__', '{}')
+        folder = Path(env['XDG_CONFIG_HOME']) / 'opencode' / 'plugins'
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'oko-prefetch.js').write_text(plugin)
+        if args.count('--pure') != 1:
+            raise RuntimeError('OpenCode arguments changed; update the prefetch condition')
+        args.remove('--pure')
     else:
         raise RuntimeError('The prefetch condition needs a client with a prompt hook')
     return args, env
@@ -292,8 +305,6 @@ def plan(repos, clients, repeats=1):
                     shift = repeat % len(conditions)
                     conditions = conditions[shift:] + conditions[:shift]
                     for condition in conditions:
-                        if condition == PREFETCH and c == 'opencode':
-                            continue
                         task = dict(item['tasks'][task_index], repetition=repeat + 1)
                         result.append((item['name'], task, c, condition))
     return result

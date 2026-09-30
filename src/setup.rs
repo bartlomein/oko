@@ -11,7 +11,7 @@ use std::{
 };
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded,\nand a prompt hook through which Oko answers a code question before the agent's\nfirst turn (--no-prefetch skips that one; --no-hooks skips them all).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded.\nFor all three it adds a prompt hook through which Oko answers a code question\nbefore the agent's first turn (--no-prefetch skips that one; --no-hooks skips\nevery hook).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
@@ -313,6 +313,20 @@ fn codex_prompt_hook(doc: &mut DocumentMut, prefetch: bool) -> Result<()> {
         doc.remove("hooks");
     }
     Ok(())
+}
+/// OpenCode's prompt hook: a plugin OpenCode loads from the project's
+/// `.opencode/plugins/`. OpenCode has no prompt hook in its configuration.
+const OPENCODE_PLUGIN: &str = include_str!("opencode_prefetch.js");
+const OPENCODE_PLUGIN_PATH: &str = ".opencode/plugins/oko-prefetch.js";
+const OPENCODE_PLUGIN_MARKER: &str = "// Managed by oko setup";
+fn opencode_plugin(exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<String> {
+    let mut command = vec![exe.to_str().context("Executable path must be UTF-8")?];
+    command.extend(server_args(root, offline)?);
+    let environment =
+        serde_json::json!({"OKO_RIPGREP": rg.to_str().context("ripgrep path must be UTF-8")?});
+    Ok(OPENCODE_PLUGIN
+        .replace("__OKO_COMMAND__", &serde_json::to_string(&command)?)
+        .replace("__OKO_ENV__", &serde_json::to_string(&environment)?))
 }
 fn server_args(root: &Path, offline: bool) -> Result<Vec<&str>> {
     let mut args = vec![
@@ -829,6 +843,8 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         ));
     }
     let mut shared_opencode = false;
+    // Setup's own OpenCode prompt hook, removed when prefetch is turned off.
+    let mut stale_plugin = None;
     if wants(Client::OpenCode) {
         if options.root.join("opencode.jsonc").exists() {
             bail!(
@@ -855,6 +871,29 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             before,
             after,
         });
+        let plugin = options.root.join(OPENCODE_PLUGIN_PATH);
+        let existing = text(&plugin)?;
+        let managed = existing
+            .as_deref()
+            .is_some_and(|text| text.starts_with(OPENCODE_PLUGIN_MARKER));
+        if options.hooks && options.prefetch {
+            if existing.is_some() && !managed {
+                bail!(
+                    "{OPENCODE_PLUGIN_PATH} exists and was not written by setup; rename it or run setup with --no-prefetch."
+                );
+            }
+            edits.push(Edit {
+                path: plugin,
+                before: existing,
+                after: opencode_plugin(&executable, &options.root, &rg, options.offline)?,
+            });
+            ignored.push((
+                "/.opencode/plugins/oko-prefetch.js",
+                "# Oko: machine-local prompt hook for OpenCode",
+            ));
+        } else if managed {
+            stale_plugin = Some(plugin);
+        }
     }
     let claude = if wants(Client::Claude) {
         let claude = Claude::find(&options.root)?;
@@ -961,6 +1000,9 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         claude.connect(*replace, &executable, &rg, options.offline)?;
     }
     apply(&edits, &install.join("setup-backups"))?;
+    if let Some(plugin) = stale_plugin {
+        fs::remove_file(&plugin).with_context(|| format!("Cannot remove {}", plugin.display()))?;
+    }
     println!(
         "Oko installed: {}\nMCP startup and search-tool discovery verified.",
         executable.display()
@@ -974,7 +1016,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                 Client::Claude =>
                     "Claude Code connection added for this project and user, with its hooks and permission in .claude/settings.local.json. Start a new session and use /mcp to check it.",
                 Client::OpenCode =>
-                    "OpenCode project configuration saved. Start a new session and run `opencode mcp list` to check the connection.",
+                    "OpenCode project configuration saved, with Oko's prompt hook in .opencode/plugins/. Start a new session and run `opencode mcp list` to check the connection.",
             }
         );
     }
