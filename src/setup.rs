@@ -11,7 +11,7 @@ use std::{
 };
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded\n(--no-hooks skips them).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded,\nand a prompt hook through which Oko answers a code question before the agent's\nfirst turn (--no-prefetch skips that one; --no-hooks skips them all).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
@@ -67,10 +67,12 @@ struct Options {
     offline: bool,
     instructions: bool,
     hooks: bool,
+    /// Oko answers a code question as the prompt is submitted.
+    prefetch: bool,
 }
 fn options(args: &[String], cwd: &Path) -> Result<Options> {
-    let (mut root, mut install, mut offline, mut instructions, mut hooks) =
-        (None, None, false, true, true);
+    let (mut root, mut install, mut offline, mut instructions, mut hooks, mut prefetch) =
+        (None, None, false, true, true, true);
     let mut chosen = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -87,6 +89,7 @@ fn options(args: &[String], cwd: &Path) -> Result<Options> {
             "--no-jev" if !offline => offline = true,
             "--no-instructions" if instructions => instructions = false,
             "--no-hooks" if hooks => hooks = false,
+            "--no-prefetch" if prefetch => prefetch = false,
             _ => bail!("Invalid setup arguments.\n{USAGE}"),
         }
     }
@@ -117,6 +120,7 @@ fn options(args: &[String], cwd: &Path) -> Result<Options> {
         offline,
         instructions,
         hooks,
+        prefetch,
     })
 }
 fn executable_name(name: &str) -> String {
@@ -183,7 +187,14 @@ fn instruction_file(root: &Path, path: PathBuf) -> Result<PathBuf> {
         ),
     }
 }
-fn config(original: &str, exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<String> {
+fn config(
+    original: &str,
+    exe: &Path,
+    root: &Path,
+    rg: &Path,
+    offline: bool,
+    prefetch: bool,
+) -> Result<String> {
     let mut doc: DocumentMut = original.parse().map_err(|_| {
         anyhow::anyhow!("Existing Codex configuration is invalid TOML; nothing was overwritten")
     })?;
@@ -235,7 +246,73 @@ fn config(original: &str, exe: &Path, root: &Path, rg: &Path, offline: bool) -> 
     environment["OKO_RIPGREP"] = value(rg.to_str().context("ripgrep path must be UTF-8")?);
     server["env"] = Item::Table(environment);
     doc["mcp_servers"]["oko"] = Item::Table(server);
+    codex_prompt_hook(&mut doc, prefetch)?;
     Ok(doc.to_string())
+}
+/// Codex's prompt hook: the running Oko server answers a code question
+/// before the agent's first turn. Setup's own handler (an `mcp_tool` call to
+/// the `oko` server) is replaced or removed; other prompt hooks are kept.
+fn codex_prompt_hook(doc: &mut DocumentMut, prefetch: bool) -> Result<()> {
+    if doc.get("hooks").is_some_and(|hooks| !hooks.is_table()) {
+        bail!("hooks must be a TOML table; nothing was overwritten");
+    }
+    let present = doc
+        .get("hooks")
+        .and_then(|hooks| hooks.get("UserPromptSubmit"))
+        .is_some();
+    if !prefetch && !present {
+        return Ok(());
+    }
+    if doc.get("hooks").is_none() {
+        let mut hooks = Table::new();
+        hooks.set_implicit(true);
+        doc["hooks"] = Item::Table(hooks);
+    }
+    let hooks = doc["hooks"].as_table_mut().expect("checked above");
+    let groups = match hooks.remove("UserPromptSubmit") {
+        None => toml_edit::ArrayOfTables::new(),
+        Some(Item::ArrayOfTables(groups)) => groups,
+        Some(_) => {
+            bail!("hooks.UserPromptSubmit must be an array of tables; nothing was overwritten")
+        }
+    };
+    let mut kept = toml_edit::ArrayOfTables::new();
+    for mut group in groups {
+        if let Some(Item::ArrayOfTables(handlers)) = group.get_mut("hooks") {
+            handlers.retain(|handler| {
+                !(handler.get("type").and_then(Item::as_str) == Some("mcp_tool")
+                    && handler.get("server").and_then(Item::as_str) == Some("oko"))
+            });
+            if handlers.is_empty() {
+                continue;
+            }
+        }
+        kept.push(group);
+    }
+    if prefetch {
+        let mut handler = Table::new();
+        handler["type"] = value("mcp_tool");
+        handler["server"] = value("oko");
+        handler["tool"] = value("search");
+        let mut input = toml_edit::InlineTable::new();
+        input.insert("question", "${prompt}".into());
+        input.insert("prefetch", "${session_id}".into());
+        handler["input"] = value(input);
+        handler["timeout"] = value(15);
+        handler["statusMessage"] = value("Oko is searching the code");
+        let mut handlers = toml_edit::ArrayOfTables::new();
+        handlers.push(handler);
+        let mut group = Table::new();
+        group.insert("hooks", Item::ArrayOfTables(handlers));
+        kept.push(group);
+    }
+    if !kept.is_empty() {
+        hooks.insert("UserPromptSubmit", Item::ArrayOfTables(kept));
+    }
+    if hooks.is_empty() {
+        doc.remove("hooks");
+    }
+    Ok(())
 }
 fn server_args(root: &Path, offline: bool) -> Result<Vec<&str>> {
     let mut args = vec![
@@ -399,10 +476,12 @@ impl Claude {
     }
 }
 /// Claude Code settings for this project and user: hooks that tell the main
-/// agent and its subagents that Oko is loaded and remind a grep for code, and
-/// an allow rule so a search never waits on a permission prompt. Other settings
-/// and hooks are kept; only handlers that run `oko hook` are replaced.
-fn claude_settings(original: &str, exe: &Path) -> Result<String> {
+/// agent and its subagents that Oko is loaded and remind a grep for code, a
+/// prompt hook through which Oko answers a code question before the agent's
+/// first turn, and an allow rule so a search never waits on a permission
+/// prompt. Other settings and hooks are kept; only handlers setup installed
+/// are replaced.
+fn claude_settings(original: &str, exe: &Path, prefetch: bool) -> Result<String> {
     use serde_json::{Value, json};
     let mut doc: Value = if original.trim().is_empty() {
         json!({})
@@ -421,18 +500,50 @@ fn claude_settings(original: &str, exe: &Path) -> Result<String> {
             "The hooks in .claude/settings.local.json are not an object; nothing was overwritten"
         );
     };
-    for (event, matcher, argument, timeout) in [
-        ("SessionStart", None, "session-start", 10),
-        ("SubagentStart", None, "subagent-start", 10),
+    // The prompt hook calls the running server's search, so it uses the
+    // warm index and the session's memory of what was sent. Its answer is
+    // hook JSON, or `{}` for a prompt that is not a code question.
+    let prompt_hook = json!({
+        "type": "mcp_tool",
+        "server": "oko",
+        "tool": "search",
+        "input": {"question": "${prompt}", "prefetch": "${session_id}"},
+        "timeout": 15,
+        "statusMessage": "Oko is searching the code",
+    });
+    for (event, matcher, handler) in [
+        (
+            "SessionStart",
+            None,
+            Some(
+                json!({"type": "command", "command": format!("{program} hook session-start"), "timeout": 10}),
+            ),
+        ),
+        (
+            "SubagentStart",
+            None,
+            Some(
+                json!({"type": "command", "command": format!("{program} hook subagent-start"), "timeout": 10}),
+            ),
+        ),
         // Agent adds Oko to an exploring subagent's task; Oko's own tool is
         // matched so a search resets the reminder count.
         (
             "PreToolUse",
             Some("^(Bash|Grep|Glob|Agent|mcp__oko__.*)$"),
-            "pre-tool-use",
-            5,
+            Some(
+                json!({"type": "command", "command": format!("{program} hook pre-tool-use"), "timeout": 5}),
+            ),
+        ),
+        (
+            "UserPromptSubmit",
+            None,
+            prefetch.then(|| prompt_hook.clone()),
         ),
     ] {
+        if handler.is_none() && !hooks.contains_key(event) {
+            continue;
+        }
         let groups = hooks.entry(event).or_insert_with(|| json!([]));
         let Some(groups) = groups.as_array_mut() else {
             bail!(
@@ -441,8 +552,7 @@ fn claude_settings(original: &str, exe: &Path) -> Result<String> {
         };
         for group in groups.iter_mut() {
             if let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) {
-                handlers
-                    .retain(|handler| !runs_oko_hook(handler["command"].as_str().unwrap_or("")));
+                handlers.retain(|handler| !installed_by_setup(handler));
             }
         }
         groups.retain(|group| {
@@ -450,15 +560,16 @@ fn claude_settings(original: &str, exe: &Path) -> Result<String> {
                 .as_array()
                 .is_none_or(|handlers| !handlers.is_empty())
         });
-        let mut group = json!({"hooks": [{
-            "type": "command",
-            "command": format!("{program} hook {argument}"),
-            "timeout": timeout,
-        }]});
-        if let Some(matcher) = matcher {
-            group["matcher"] = json!(matcher);
+        if let Some(handler) = handler {
+            let mut group = json!({"hooks": [handler]});
+            if let Some(matcher) = matcher {
+                group["matcher"] = json!(matcher);
+            }
+            groups.push(group);
         }
-        groups.push(group);
+        if groups.is_empty() {
+            hooks.remove(event);
+        }
     }
     let permissions = settings.entry("permissions").or_insert_with(|| json!({}));
     let Some(allow) = permissions
@@ -474,6 +585,12 @@ fn claude_settings(original: &str, exe: &Path) -> Result<String> {
         allow.push(json!("mcp__oko__search"));
     }
     Ok(serde_json::to_string_pretty(&doc)? + "\n")
+}
+/// Whether a hook handler is one setup installed: a command running
+/// `oko hook`, or a call to the `oko` server's search.
+fn installed_by_setup(handler: &serde_json::Value) -> bool {
+    runs_oko_hook(handler["command"].as_str().unwrap_or(""))
+        || (handler["type"] == "mcp_tool" && handler["server"] == "oko")
 }
 /// Whether a hook command is one setup installed: an `oko` executable running `hook`.
 fn runs_oko_hook(command: &str) -> bool {
@@ -699,6 +816,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             &options.root,
             &rg,
             options.offline,
+            options.prefetch,
         )?;
         edits.push(Edit {
             path,
@@ -748,7 +866,11 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     if wants(Client::Claude) && options.hooks {
         let path = options.root.join(".claude").join("settings.local.json");
         let before = text(&path)?;
-        let after = claude_settings(before.as_deref().unwrap_or(""), &executable)?;
+        let after = claude_settings(
+            before.as_deref().unwrap_or(""),
+            &executable,
+            options.prefetch,
+        )?;
         edits.push(Edit {
             path,
             before,
@@ -848,7 +970,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             "{}",
             match client {
                 Client::Codex =>
-                    "Codex project configuration saved. Open this project in Codex, trust it if prompted, and start a new session. Use /mcp to check the connection.",
+                    "Codex project configuration saved. Open this project in Codex, trust it if prompted, and start a new session. Use /mcp to check the connection, and /hooks to trust Oko's prompt hook once.",
                 Client::Claude =>
                     "Claude Code connection added for this project and user, with its hooks and permission in .claude/settings.local.json. Start a new session and use /mcp to check it.",
                 Client::OpenCode =>
@@ -872,6 +994,61 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn codex_gets_one_prompt_hook_beside_the_users_own() {
+        let theirs = "[[hooks.UserPromptSubmit]]\n[[hooks.UserPromptSubmit.hooks]]\ntype = \"command\"\ncommand = \"./ticket.sh\"\n";
+        let run = |original: &str, prefetch: bool| {
+            config(
+                original,
+                Path::new("/bin/oko"),
+                Path::new("/project"),
+                Path::new("/bin/rg"),
+                false,
+                prefetch,
+            )
+            .unwrap()
+        };
+        let twice = run(&run(theirs, true), true);
+        let doc: DocumentMut = twice.parse().unwrap();
+        let groups = doc["hooks"]["UserPromptSubmit"]
+            .as_array_of_tables()
+            .unwrap();
+        assert_eq!(groups.len(), 2, "{twice}");
+        let handler = |index: usize| {
+            groups.get(index).unwrap()["hooks"]
+                .as_array_of_tables()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(handler(0)["command"].as_str(), Some("./ticket.sh"));
+        let oko = handler(1);
+        assert_eq!(oko["type"].as_str(), Some("mcp_tool"));
+        assert_eq!(oko["server"].as_str(), Some("oko"));
+        assert_eq!(oko["tool"].as_str(), Some("search"));
+        let input = oko["input"].as_inline_table().unwrap();
+        assert_eq!(
+            input.get("question").and_then(|v| v.as_str()),
+            Some("${prompt}")
+        );
+        assert_eq!(
+            input.get("prefetch").and_then(|v| v.as_str()),
+            Some("${session_id}")
+        );
+        assert_eq!(oko["timeout"].as_integer(), Some(15));
+        // Turned off: setup's handler goes, the user's stays.
+        let off: DocumentMut = run(&twice, false).parse().unwrap();
+        assert_eq!(
+            off["hooks"]["UserPromptSubmit"]
+                .as_array_of_tables()
+                .unwrap()
+                .len(),
+            1
+        );
+        // Never added, nothing written.
+        assert!(!run("", false).contains("hooks"));
+    }
+    #[test]
     fn updating_owned_config_keeps_user_options_and_other_environment() {
         let first = config(
             "",
@@ -879,6 +1056,7 @@ mod tests {
             Path::new("/project"),
             Path::new("/bin/rg"),
             false,
+            true,
         )
         .unwrap();
         let mut doc: DocumentMut = first.parse().unwrap();
@@ -889,6 +1067,7 @@ mod tests {
             Path::new("/new/oko"),
             Path::new("/project"),
             Path::new("/new/rg"),
+            true,
             true,
         )
         .unwrap();

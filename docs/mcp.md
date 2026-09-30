@@ -75,6 +75,21 @@ ignored. Your own settings and hooks in that file are kept. The reminder counts
 live in the user cache directory and are removed after a day. `--no-hooks`
 skips all of this.
 
+**Prompt hook (Claude Code and Codex).** Setup also adds a hook that runs when you
+submit a prompt: it calls the running Oko server's `search` with your prompt, so
+for a code question the agent starts with Oko's answer already in its context and
+skips the turn it would spend calling Oko. The server decides per prompt, and most
+prompts get nothing: replies, commands and chores ("yes", "commit this and push")
+are skipped from their text alone; a prompt that names no definition or file the
+index knows, and does not read as a code question, is skipped without a Jev call;
+and an answer is added only when Jev rates an excerpt relevant or the prompt names
+a definition. The question searched is the prompt's first paragraph, with names
+mentioned later in the prompt. The added block is at most 8,000 characters, says
+it is Oko's answer to the prompt, and is remembered like any answer, so a later
+search stubs code it already showed. The hook reaches the main agent only, not
+subagents. OpenCode has no prompt hook. In Codex, trust the hook once in `/hooks`.
+`--no-prefetch` leaves it out; `--no-hooks` skips every hook.
+
 For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
 agent instruction files untouched, and `--install-dir DIRECTORY` to choose the
 stable binary location. These options also support isolated setup tests.

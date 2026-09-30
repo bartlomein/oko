@@ -502,6 +502,39 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn(' previous',full.stdout)
         self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','branch','--skip-previous'],capture_output=True).returncode,0)
 
+    def test_prefetch_condition_is_guided_plus_the_prompt_hook(self):
+        settings=json.dumps({'disableAllHooks':True,'autoMemoryEnabled':False})
+        args,_=r.prefetch('claude',['claude','-p','--settings',settings,'PROMPT'],{})
+        written=json.loads(args[3])
+        self.assertFalse(written['disableAllHooks'])
+        self.assertFalse(written['autoMemoryEnabled'],'nothing else changes')
+        handler=written['hooks']['UserPromptSubmit'][0]['hooks'][0]
+        self.assertEqual((handler['type'],handler['server'],handler['tool']),('mcp_tool','oko','search'))
+        self.assertEqual(handler['input'],{'question':'${prompt}','prefetch':'${session_id}'})
+        args,_=r.prefetch('codex',['codex','exec','--disable','hooks','--disable','apps','PROMPT'],{})
+        self.assertNotIn('hooks',args[:4])
+        self.assertEqual(args[-1],'PROMPT')
+        self.assertIn('--dangerously-bypass-hook-trust',args)
+        self.assertIn('input={question="${prompt}",prefetch="${session_id}"}',args[args.index('-c')+1])
+        with self.assertRaises(RuntimeError):
+            r.prefetch('opencode',['opencode','run','PROMPT'],{})
+        task={'kind':'search','question':'Where is it?','cacheCondition':'guided'}
+        self.assertEqual(r.prompt(task,True),r.prompt({**task,'cacheCondition':'prefetch'},True),
+                         'the prompt is the guided one; only the hook differs')
+        import subprocess, sys
+        listed=subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','branch','--guided','--skip-previous','--prefetch'],capture_output=True,text=True)
+        # OpenCode has no prompt hook: 243 plus 54 prefetch sessions.
+        self.assertIn("297 sessions; suite=branch; repeats=3; conditions=('native', 'current', 'guided', 'prefetch')",listed.stdout)
+        self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','branch','--prefetch'],capture_output=True).returncode,0)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp)/'oko-metrics.jsonl').write_text(
+                json.dumps({'event':'prewarm','cache':{'status':'disk'}})+'\n'
+                +json.dumps({'prefetch':{'decision':'inject'},'timings':{'totalMs':900},
+                             'retrieval':{'jevCalls':[{'usage':{'inputTokens':11000}}]}})+'\n')
+            self.assertEqual(r.prefetch_lines(tmp),[{'decision':'inject','totalMs':900,'responseBytes':None,
+                                                     'jevCalls':1,'jevInputTokens':11000}])
+            self.assertEqual(r.prewarm_observations(tmp),[{'status':'disk'}])
+
     def test_report_includes_failed_attempts(self):
         with tempfile.TemporaryDirectory() as temp:
             data={'plan':[{},{}],'complete':True,'runs':[

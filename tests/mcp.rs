@@ -2762,3 +2762,213 @@ fn a_long_question_for_unused_code_and_callers_gets_both_listings() {
     assert!(text.contains("orphan_helper"), "{text}");
     assert!(text.contains("Callers of parse_header"), "{text}");
 }
+
+/// A repository where one long function answers the upload question.
+fn upload_fixture() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let mut body = String::from("pub fn retry_upload(job: &Job) -> Result<(), Error> {\n");
+    for attempt in 0..14 {
+        body.push_str(&format!(
+            "    if send(job).is_ok() {{ return Ok(()); }} // attempt {attempt} after a timeout\n"
+        ));
+    }
+    body.push_str("    Err(Error::GaveUp)\n}\n");
+    fs::write(root.path().join("uploads.rs"), body).unwrap();
+    fs::write(
+        root.path().join("weather.rs"),
+        "pub fn forecast() -> u8 {\n    7\n}\n",
+    )
+    .unwrap();
+    root
+}
+
+/// A provider that serves every request of a session, scoring candidates
+/// with `score`; returns its endpoint and each request's phase.
+fn session_provider(
+    score: impl Fn(&Value) -> f64 + Send + Sync + 'static,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::{
+        io::Read,
+        net::TcpListener,
+        sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering},
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let phases = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let (seen, stop) = (phases.clone(), done.clone());
+    thread::spawn(move || {
+        while !stop.load(Ordering::Acquire) {
+            let mut stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 4096];
+            let (request, headers) = loop {
+                let n = stream.read(&mut buffer).unwrap();
+                bytes.extend_from_slice(&buffer[..n]);
+                if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                    let len: usize = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if bytes.len() >= end + 4 + len {
+                        let body: Value =
+                            serde_json::from_slice(&bytes[end + 4..end + 4 + len]).unwrap();
+                        break (body, headers);
+                    }
+                }
+            };
+            let phase = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("x-oko-phase: "))
+                .unwrap_or("")
+                .to_owned();
+            seen.lock().unwrap().push(phase);
+            let body = serde_json::to_vec(&relevance_response(&request, &score)).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            stream.write_all(&body).unwrap();
+        }
+    });
+    (endpoint, phases, done)
+}
+
+fn hook_context(response: &Value) -> Option<String> {
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let hook: Value = serde_json::from_str(text).expect("a prefetch answers in hook JSON");
+    if hook == json!({}) {
+        return None;
+    }
+    assert_eq!(
+        hook["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    Some(
+        hook["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    )
+}
+
+#[test]
+fn a_code_prompt_is_answered_before_the_first_turn_and_other_prompts_are_not() {
+    let root = upload_fixture();
+    let (endpoint, phases, done) = session_provider(|candidate| {
+        if candidate["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("retry_upload")
+        {
+            0.9
+        } else {
+            0.1
+        }
+    });
+    let mut client = Client::start(root.path(), false, Some(&endpoint));
+    client.initialize();
+    let listed = client.request("tools/list", json!({}));
+    let properties = &listed["result"]["tools"][0]["inputSchema"]["properties"];
+    assert!(properties.get("question").is_some());
+    assert!(
+        properties.get("prefetch").is_none(),
+        "the hook's argument stays hidden"
+    );
+
+    for prompt in ["thanks!", "commit this and push", "/compact"] {
+        let response = client.search(json!({"question": prompt, "prefetch": "s1"}));
+        assert_eq!(hook_context(&response), None, "{prompt}");
+        assert_eq!(response["metrics"]["prefetch"]["decision"], "skip");
+    }
+    assert!(phases.lock().unwrap().is_empty(), "no Jev call for chores");
+
+    let prompt =
+        "Where does the uploader retry a failed upload after a timeout?\n\nAnswer in JSON.";
+    let response = client.search(json!({"question": prompt, "prefetch": "s1"}));
+    let context = hook_context(&response).expect("a code prompt is answered");
+    assert!(
+        context.starts_with("Oko answer for this prompt."),
+        "{context}"
+    );
+    assert!(context.contains("uploads.rs:1-"), "{context}");
+    assert!(context.contains("pub fn retry_upload"), "{context}");
+    assert!(!context.contains("forecast"), "{context}");
+    assert!(context.chars().count() <= 8_000);
+    assert_eq!(response["metrics"]["prefetch"]["decision"], "inject");
+    assert_eq!(
+        response["metrics"]["question"],
+        "Where does the uploader retry a failed upload after a timeout?"
+    );
+    // One request: nothing is judged beside the shortlist.
+    assert_eq!(*phases.lock().unwrap(), vec!["normal"]);
+
+    // A resent prompt is not searched again.
+    let again = client.search(json!({"question": prompt, "prefetch": "s1"}));
+    assert_eq!(hook_context(&again), None);
+    assert_eq!(again["metrics"]["prefetch"]["reason"], "repeat");
+
+    // The agent's own search knows the code was sent.
+    let search =
+        client.search(json!({"question": "Where does the uploader retry a failed upload?"}));
+    let text = search["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("uploads.rs:1-17 (shown in an earlier answer)"),
+        "{text}"
+    );
+
+    // A new session starts from nothing: the same prompt is answered again.
+    let fresh = client.search(json!({"question": prompt, "prefetch": "s2"}));
+    assert!(
+        hook_context(&fresh)
+            .unwrap()
+            .contains("pub fn retry_upload")
+    );
+    done.store(true, std::sync::atomic::Ordering::Release);
+}
+
+#[test]
+fn without_jev_a_prefetch_shows_only_definitions_the_prompt_names() {
+    let root = upload_fixture();
+    let mut client = Client::start(root.path(), true, None);
+    client.initialize();
+    // Keyword order is no judgement of relevance.
+    let words = client.search(json!({
+        "question": "Where does the uploader retry a failed upload after a timeout?",
+        "prefetch": "s1"
+    }));
+    assert_eq!(hook_context(&words), None);
+    assert_eq!(words["metrics"]["prefetch"]["reason"], "not code");
+    // A file-like name matching only a common leaf (`config`) is no name.
+    for module in ["a", "b", "c", "d"] {
+        fs::write(
+            root.path().join(format!("{module}.rs")),
+            "pub const config: u8 = 1;\n",
+        )
+        .unwrap();
+    }
+    let file = client.search(json!({
+        "question": "why does the server reload when app.config changes?",
+        "prefetch": "s1"
+    }));
+    assert_eq!(hook_context(&file), None);
+    assert_eq!(file["metrics"]["prefetch"]["reason"], "not code");
+    let named =
+        client.search(json!({"question": "Explain how retry_upload gives up", "prefetch": "s1"}));
+    let context = hook_context(&named).expect("a named definition is shown");
+    assert!(context.contains("pub fn retry_upload"), "{context}");
+    assert!(!context.contains("forecast"), "{context}");
+}

@@ -107,6 +107,13 @@ Setup keeps its own stable copy: run the newly installed `oko setup` (with the s
 updated server. If your client keeps an old server running, reconnect its MCP
 connection or restart the client. Saved credentials are separate from the binary.
 
+### Prompt hook
+
+`oko setup` for Claude Code and Codex also installs a prompt hook: when you ask a
+code question, Oko's answer is in the agent's context before its first turn, so it
+skips a round of searching. Other prompts get nothing. `--no-prefetch` leaves it
+out. See [the MCP guide](mcp.md) for how it decides.
+
 ### Upgrading to 0.6.1
 
 Reinstall, then rerun `oko setup` in each project. The guidance setup writes

@@ -335,7 +335,9 @@ def attach_oko_metrics(tools: Sequence[dict[str, Any]], path: Any) -> int:
     """
 
     lines = read_oko_metrics(path)
-    metrics = [line for line in lines if "event" not in line]
+    # A prompt hook's search (prefetch) ran before the agent's first turn and
+    # belongs to no tool call; the runner records it on the session.
+    metrics = [line for line in lines if "event" not in line and "prefetch" not in line]
     prewarm = [line for line in lines if line.get("event") == "prewarm"]
     calls = [tool for tool in tools if is_oko_tool(tool)]
     if calls and prewarm:

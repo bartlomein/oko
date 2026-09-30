@@ -550,7 +550,10 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
     fs::create_dir_all(root.join(".claude")).unwrap();
     let theirs = serde_json::json!({
         "model": "sonnet",
-        "hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "./lint.sh"}]}]},
+        "hooks": {
+            "PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "./lint.sh"}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "./ticket.sh"}]}]
+        },
         "permissions": {"allow": ["Bash(npm test)"]}
     });
     fs::write(
@@ -587,6 +590,22 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
     for event in ["SessionStart", "SubagentStart"] {
         assert_eq!(commands(event).len(), 1, "{event}");
     }
+    // The prompt hook calls the running server, beside the user's own.
+    let prompt: Vec<&serde_json::Value> = settings["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+        .collect();
+    assert_eq!(prompt.len(), 2, "{prompt:?}");
+    assert_eq!(prompt[0]["command"], "./ticket.sh");
+    assert_eq!(prompt[1]["type"], "mcp_tool");
+    assert_eq!(prompt[1]["server"], "oko");
+    assert_eq!(prompt[1]["tool"], "search");
+    assert_eq!(
+        prompt[1]["input"],
+        serde_json::json!({"question": "${prompt}", "prefetch": "${session_id}"})
+    );
     let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
     assert!(
         ignore
@@ -628,6 +647,47 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
             .unwrap()
             .contains("mcp__oko__search")
     );
+}
+#[cfg(unix)]
+#[test]
+fn claude_prefetch_can_be_turned_off_and_leaves_the_other_hooks() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let claude = fake_claude(temp.path(), None);
+    let install = temp.path().join("bin");
+    assert_ok(&setup_claude(&root, &install, &claude));
+    let output = Command::new(executable())
+        .args([
+            "setup",
+            "--no-jev",
+            "--no-prefetch",
+            "--client",
+            "claude",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--install-dir")
+        .arg(&install)
+        .env("OKO_CLAUDE", &claude)
+        .output()
+        .unwrap();
+    assert_ok(&output);
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".claude/settings.local.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        settings["hooks"].get("UserPromptSubmit").is_none(),
+        "{settings}"
+    );
+    for event in ["SessionStart", "SubagentStart", "PreToolUse"] {
+        assert_eq!(
+            settings["hooks"][event].as_array().unwrap().len(),
+            1,
+            "{event}"
+        );
+    }
 }
 #[cfg(unix)]
 #[test]

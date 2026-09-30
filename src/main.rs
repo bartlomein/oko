@@ -258,6 +258,7 @@ fn provider_unavailable(calls: &[JevCallStats]) -> Option<&'static str> {
 /// reach the excerpts, the possible matches or the recovery call: what the
 /// agent is shown is decided by the shortlist alone. The ones Jev rates
 /// relevant are named in the list of other files.
+#[derive(Default)]
 pub(crate) struct Further {
     /// Files one hop from the strongest matches: tests, callers, definitions.
     pub connected: Vec<search::Chunk>,

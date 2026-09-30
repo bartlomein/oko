@@ -48,6 +48,11 @@ def compares_builds():
 # channel for standing instructions. The same file is what setup installs.
 GUIDED = 'guided'
 GUIDANCE = PROJECT / 'src/guidance.md'
+# Guided plus the prompt hook `oko setup` installs: the running server answers
+# a code question before the agent's first turn. Claude Code and Codex only;
+# OpenCode has no prompt hook.
+PREFETCH = 'prefetch'
+PREFETCH_INPUT = {'question': '${prompt}', 'prefetch': '${session_id}'}
 
 
 def guide(client, args, env, trial):
@@ -64,6 +69,61 @@ def guide(client, args, env, trial):
     else:
         args[-1:-1] = ['--append-system-prompt', text]
     return args, env
+def prefetch(client, args, env):
+    if client == 'claude':
+        # --setting-sources '' keeps every other hook out.
+        index = args.index('--settings') + 1
+        settings = json.loads(args[index])
+        settings['disableAllHooks'] = False
+        settings['hooks'] = {'UserPromptSubmit': [{'hooks': [
+            {'type': 'mcp_tool', 'server': 'oko', 'tool': 'search', 'input': PREFETCH_INPUT, 'timeout': 15}]}]}
+        args[index] = json.dumps(settings)
+    elif client == 'codex':
+        pairs = [i for i in range(len(args) - 1) if args[i:i + 2] == ['--disable', 'hooks']]
+        if len(pairs) != 1:
+            raise RuntimeError('Codex arguments changed; update the prefetch condition')
+        del args[pairs[0]:pairs[0] + 2]
+        hook = ('hooks.UserPromptSubmit=[{hooks=[{type="mcp_tool",server="oko",tool="search",'
+                'input={question="${prompt}",prefetch="${session_id}"},timeout=15}]}]')
+        # Session-flag hooks still need trust; `codex exec` cannot ask for it.
+        args[-1:-1] = ['--dangerously-bypass-hook-trust', '-c', hook]
+    else:
+        raise RuntimeError('The prefetch condition needs a client with a prompt hook')
+    return args, env
+
+
+def prefetch_lines(trial):
+    """What the prompt hook's searches decided and cost, from the session's metrics."""
+    path = Path(trial) / 'oko-metrics.jsonl'
+    lines = []
+    for line in path.read_text().splitlines() if path.is_file() else []:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if 'prefetch' in value:
+            calls = (value.get('retrieval') or {}).get('jevCalls') or []
+            lines.append({**value['prefetch'], 'totalMs': (value.get('timings') or {}).get('totalMs'),
+                          'responseBytes': value.get('responseBytes'), 'jevCalls': len(calls),
+                          'jevInputTokens': sum((c.get('usage') or {}).get('inputTokens') or 0 for c in calls)})
+    return lines
+
+
+def prewarm_observations(trial):
+    """The server's startup preparation: a session answered from the prefetch
+    alone makes no Oko call to carry it."""
+    path = Path(trial) / 'oko-metrics.jsonl'
+    found = []
+    for line in path.read_text().splitlines() if path.is_file() else []:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if value.get('event') == 'prewarm' and isinstance(value.get('cache'), dict):
+            found.append(value['cache'])
+    return found
+
+
 SPEC = importlib.util.spec_from_file_location('public_engine', ROOT.parent / 'benchmark-twenty/runner.py')
 engine = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(engine)
@@ -232,6 +292,8 @@ def plan(repos, clients, repeats=1):
                     shift = repeat % len(conditions)
                     conditions = conditions[shift:] + conditions[:shift]
                     for condition in conditions:
+                        if condition == PREFETCH and c == 'opencode':
+                            continue
                         task = dict(item['tasks'][task_index], repetition=repeat + 1)
                         result.append((item['name'], task, c, condition))
     return result
@@ -264,8 +326,10 @@ def args_for(task, client, condition, work, trial):
     save(trial/'settings.json', engine.SETTINGS)
     args, env = original_args(task, client, condition, work, trial)
     env['OKO_PUBLIC_BENCH_REPO'] = task['repositoryName']
-    if task.get('cacheCondition') == GUIDED:
+    if task.get('cacheCondition') in (GUIDED, PREFETCH):
         args, env = guide(client, args, env, trial)
+    if task.get('cacheCondition') == PREFETCH:
+        args, env = prefetch(client, args, env)
     if compares_builds() and client == 'opencode':
         # Separate both conversation storage and configuration. Link login state only.
         original_data = Path(os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share')))
@@ -344,7 +408,7 @@ def prompt(task, enabled):
     if task.get('memoryCanary'):
         return task['question']
     text = original_prompt(task, enabled)
-    if task.get('cacheCondition') == GUIDED:
+    if task.get('cacheCondition') in (GUIDED, PREFETCH):
         excluded = 'do not load skills, personal instructions, AGENTS.md, CLAUDE.md, or saved memory.'
         if excluded not in text:
             raise RuntimeError('Benchmark prompt changed; update the guided condition')
@@ -495,7 +559,7 @@ def execute(args, schedule):
             engine.STATE=STATE/name
             engine.SETTINGS=dict(settings[name])
             if compares_builds():
-                selected = settings[name]['builds']['current' if condition in ('native', GUIDED) else condition]
+                selected = settings[name]['builds']['current' if condition in ('native', GUIDED, PREFETCH) else condition]
                 engine.SETTINGS.update(oko=selected['path'],okoSha256=selected['sha256'])
             engine_condition = ENGINE_CONDITIONS[condition]
             trials=engine.STATE/output.name/condition
@@ -512,7 +576,16 @@ def execute(args, schedule):
             if compares_builds():
                 row['build']=None if condition=='native' else selected
             row['cacheObservations']=cache_observations(row)
+            if condition==PREFETCH:
+                row['prefetch']=prefetch_lines(trial)
+                if not row['cacheObservations']:
+                    row['cacheObservations']=prewarm_observations(trial)
             row['cacheConditionVerified']=check_cache(condition,row['cacheObservations'])
+            if (condition==PREFETCH and row['cacheConditionVerified']
+                    and str(row.get('error','')).startswith('Observed Oko cache state did not match')):
+                # The engine reads the cache state from the agent's first Oko
+                # call; answered from the prefetch alone, there was none.
+                row.pop('error'); row.pop('errorType',None)
             if engine_condition == 'oko-warm':
                 warmup=Path(row['artifact'])/'warmup.json'
                 if warmup.exists():row['warmup']=json.loads(warmup.read_text())
@@ -606,6 +679,8 @@ def main():
                    help='smoke: previous vs current build on a few branch tasks, minutes not hours; direction only')
     p.add_argument('--guided',action='store_true',
                    help='Branch/smoke: add a condition that is the current build plus the agent guidance oko setup installs')
+    p.add_argument('--prefetch',action='store_true',
+                   help='With --guided: add a condition that is guided plus the prompt hook (Claude Code and Codex)')
     p.add_argument('--skip-previous',action='store_true',
                    help='Branch suite with --guided: run native, current and guided only')
     p.add_argument('--tasks',help='Smoke suite only: comma-separated branch task ids (default: '+','.join(SMOKE_TASKS)+')')
@@ -643,6 +718,10 @@ def main():
         if not compares_builds():p.error('--guided requires --suite branch or smoke')
         CONDITIONS=CONDITIONS+(GUIDED,)
         ENGINE_CONDITIONS={**ENGINE_CONDITIONS,GUIDED:'oko-'+args.cache_policy}
+    if args.prefetch:
+        if not args.guided:p.error('--prefetch requires --guided')
+        CONDITIONS=CONDITIONS+(PREFETCH,)
+        ENGINE_CONDITIONS={**ENGINE_CONDITIONS,PREFETCH:'oko-'+args.cache_policy}
     if args.skip_previous:
         # The previous build is compared often and cheaply elsewhere (replay, smoke).
         # Dropping it keeps a guided full run the size of an ordinary one.
