@@ -52,7 +52,7 @@ GUIDANCE = PROJECT / 'src/guidance.md'
 # a code question before the agent's first turn. Claude Code and Codex only;
 # OpenCode has no prompt hook.
 PREFETCH = 'prefetch'
-PREFETCH_INPUT = {'question': '${prompt}', 'prefetch': '${session_id}'}
+PREFETCH_INPUT = {'question': '${prompt}', 'prefetch': 'claude:${session_id}'}
 
 
 def guide(client, args, env, trial):
@@ -84,7 +84,7 @@ def prefetch(client, args, env):
             raise RuntimeError('Codex arguments changed; update the prefetch condition')
         del args[pairs[0]:pairs[0] + 2]
         hook = ('hooks.UserPromptSubmit=[{hooks=[{type="mcp_tool",server="oko",tool="search",'
-                'input={question="${prompt}",prefetch="${session_id}"},timeout=15}]}]')
+                'input={question="${prompt}",prefetch="codex:${session_id}"},timeout=15}]}]')
         # Session-flag hooks still need trust; `codex exec` cannot ask for it.
         args[-1:-1] = ['--dangerously-bypass-hook-trust', '-c', hook]
     else:

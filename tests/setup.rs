@@ -604,7 +604,7 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
     assert_eq!(prompt[1]["tool"], "search");
     assert_eq!(
         prompt[1]["input"],
-        serde_json::json!({"question": "${prompt}", "prefetch": "${session_id}"})
+        serde_json::json!({"question": "${prompt}", "prefetch": "claude:${session_id}"})
     );
     let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
     assert!(

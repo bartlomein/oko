@@ -36,9 +36,8 @@ const JEV_PATIENCE: Duration = Duration::from_secs(4);
 const OTHER_CANDIDATES: usize = 6;
 /// A prefetch runs while the user waits for the agent to start.
 const PREFETCH_PATIENCE: Duration = Duration::from_millis(2_500);
-/// The prefetched answer's JSON bytes; with the header it stays within
-/// `oko::prefetch::MAX_CONTEXT_CHARS`.
-const PREFETCH_ANSWER_BYTES: usize = 7_200;
+/// Room kept beside the answer for the header and its tags.
+const PREFETCH_WRAPPING_CHARS: usize = 40;
 /// A prompt that names code the ranker rejected still gets a pointer to
 /// candidates it rated at least this high.
 const PREFETCH_NEAR: f64 = 0.35;
@@ -622,9 +621,10 @@ impl OkoServer {
     /// cannot help adds nothing, and the agent searches as it would have.
     fn prefetch(&self, mut input: SearchInput, cancelled: &dyn Fn() -> bool) -> CallToolResult {
         let started = Instant::now();
-        let session = input.prefetch.take().unwrap_or_default();
+        let value = input.prefetch.take().unwrap_or_default();
+        let (client, session) = oko::prefetch::client_session(&value);
         let prompt = input.question.take().unwrap_or_default();
-        let context = match self.prefetch_answer(&session, &prompt, started, cancelled) {
+        let context = match self.prefetch_answer(client, session, &prompt, started, cancelled) {
             Ok(Prefetched::Context(context)) => Some(context),
             Ok(Prefetched::Nothing(reason)) => {
                 record_prefetch_skip(&prompt, reason, None, started);
@@ -642,6 +642,7 @@ impl OkoServer {
 
     fn prefetch_answer(
         &self,
+        client: &str,
         session: &str,
         prompt: &str,
         started: Instant,
@@ -785,7 +786,7 @@ impl OkoServer {
         let notes = self.notes(&ask, &mut found, &workspace.timings, None);
         let metadata = json!({"question": prefix(question, 512), "directory": self.root,
             "ranking": if judged {"jev"} else {"lexical"},
-            "prefetch": {"decision": "inject", "session": session, "strong": strong},
+            "prefetch": {"decision": "inject", "client": client, "session": session, "strong": strong},
             "retrieval": found.retrieval, "floor": found.floor, "focused": found.focused,
             "timings": {"cacheWaitMs": cache_wait_ms, "scanMs": workspace.timings.scan_ms,
                 "shortlistMs": found.shortlist_ms, "cache": workspace.timings}});
@@ -809,7 +810,10 @@ impl OkoServer {
             &notes,
             &found.candidates,
             found.direct.is_some(),
-            PREFETCH_ANSWER_BYTES,
+            // JSON bytes are never fewer than the text's characters.
+            oko::prefetch::max_context_chars(client)
+                - oko::prefetch::HEADER.chars().count()
+                - PREFETCH_WRAPPING_CHARS,
             started,
             context_started,
             &self.memory,
@@ -822,7 +826,7 @@ impl OkoServer {
             .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
             .collect();
         let context = oko::prefetch::wrap(&answer);
-        if context.chars().count() > oko::prefetch::MAX_CONTEXT_CHARS {
+        if context.chars().count() > oko::prefetch::max_context_chars(client) {
             bail!("prefetched answer over the hook limit");
         }
         Ok(Prefetched::Context(context))

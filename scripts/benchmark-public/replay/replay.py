@@ -177,7 +177,8 @@ def prompt_questions(tasks, repeats):
     questions = {}
     for task, (_, definition) in tasks.items():
         text = runner().prompt(dict(definition, cacheCondition=runner().GUIDED), True)
-        questions[task] = [{'question': text, 'prefetch': f'replay-{task}-{n}'} for n in range(repeats)]
+        # Named as Claude Code's hook names itself: the most room for the answer.
+        questions[task] = [{'question': text, 'prefetch': f'claude:replay-{task}-{n}'} for n in range(repeats)]
     return questions
 
 

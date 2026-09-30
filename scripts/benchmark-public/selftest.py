@@ -510,12 +510,12 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(written['autoMemoryEnabled'],'nothing else changes')
         handler=written['hooks']['UserPromptSubmit'][0]['hooks'][0]
         self.assertEqual((handler['type'],handler['server'],handler['tool']),('mcp_tool','oko','search'))
-        self.assertEqual(handler['input'],{'question':'${prompt}','prefetch':'${session_id}'})
+        self.assertEqual(handler['input'],{'question':'${prompt}','prefetch':'claude:${session_id}'})
         args,_=r.prefetch('codex',['codex','exec','--disable','hooks','--disable','apps','PROMPT'],{})
         self.assertNotIn('hooks',args[:4])
         self.assertEqual(args[-1],'PROMPT')
         self.assertIn('--dangerously-bypass-hook-trust',args)
-        self.assertIn('input={question="${prompt}",prefetch="${session_id}"}',args[args.index('-c')+1])
+        self.assertIn('input={question="${prompt}",prefetch="codex:${session_id}"}',args[args.index('-c')+1])
         with self.assertRaises(RuntimeError):
             r.prefetch('opencode',['opencode','run','PROMPT'],{})
         task={'kind':'search','question':'Where is it?','cacheCondition':'guided'}

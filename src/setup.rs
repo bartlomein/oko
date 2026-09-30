@@ -296,7 +296,7 @@ fn codex_prompt_hook(doc: &mut DocumentMut, prefetch: bool) -> Result<()> {
         handler["tool"] = value("search");
         let mut input = toml_edit::InlineTable::new();
         input.insert("question", "${prompt}".into());
-        input.insert("prefetch", "${session_id}".into());
+        input.insert("prefetch", "codex:${session_id}".into());
         handler["input"] = value(input);
         handler["timeout"] = value(15);
         handler["statusMessage"] = value("Oko is searching the code");
@@ -507,7 +507,7 @@ fn claude_settings(original: &str, exe: &Path, prefetch: bool) -> Result<String>
         "type": "mcp_tool",
         "server": "oko",
         "tool": "search",
-        "input": {"question": "${prompt}", "prefetch": "${session_id}"},
+        "input": {"question": "${prompt}", "prefetch": "claude:${session_id}"},
         "timeout": 15,
         "statusMessage": "Oko is searching the code",
     });
@@ -1033,7 +1033,7 @@ mod tests {
         );
         assert_eq!(
             input.get("prefetch").and_then(|v| v.as_str()),
-            Some("${session_id}")
+            Some("codex:${session_id}")
         );
         assert_eq!(oko["timeout"].as_integer(), Some(15));
         // Turned off: setup's handler goes, the user's stays.
