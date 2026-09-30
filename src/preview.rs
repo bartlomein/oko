@@ -20,8 +20,47 @@ const HEADER_LINES: usize = 4;
 const SIGNATURE_SCAN_LINES: usize = 64;
 const CONTEXT_LINES: usize = 12;
 const BLOCK_LINES: usize = 12;
+// The shortlist's first candidates hold most of the needed code (360 of 404
+// expected locations in the 0.6.0 agent suite were in the first 20), so when
+// every candidate cannot have a full preview, the first 15 get the room and
+// the rest keep their essentials: anchor, signature, first body evidence and
+// decision block.
+const HEAD_PREVIEWS: usize = 15;
+const ESSENTIAL_PREVIEW_BYTES: usize = 640;
 const OMITTED: &str = "[omitted]";
 const TRUNCATED: &str = "[truncated]";
+
+/// How previews are shaped.
+///
+/// The shortlist the ranker accepts from is `judged`: the first candidates get
+/// the room, imports are not evidence, and a section of several definitions
+/// is previewed on the one that matches. Candidates that can only be named in
+/// a list (connected files, further keyword matches) keep even shares of the
+/// whole chunk: shaped like the shortlist, they fell out of Agent Retrieval
+/// Bench's top 20 (R@20 on tests and ripple tasks −0.04 against 0.6.0 run
+/// the same day), and agents never read them as excerpts.
+#[derive(Clone, Copy)]
+struct Shape {
+    /// The first candidates get the room when not all fit in full.
+    head: bool,
+    /// Imports are not evidence, and a section of several definitions is
+    /// previewed on the one that matches.
+    focused: bool,
+}
+impl Shape {
+    fn judged() -> Self {
+        Self {
+            head: true,
+            focused: true,
+        }
+    }
+    fn listed() -> Self {
+        Self {
+            head: false,
+            focused: false,
+        }
+    }
+}
 
 /// Recover attached declaration context that chunk boundaries put in the
 /// previous candidate. Only an adjacent source-backed prefix is added; IDs
@@ -32,7 +71,32 @@ pub fn ranking_previews_with_context(
     corpus: &[Chunk],
     intent: RankingIntent,
 ) -> Result<Vec<RankItem>> {
-    contextual_previews(question, chunks, corpus, intent, DESIRED_TEXT_BYTES)
+    contextual_previews(
+        question,
+        chunks,
+        corpus,
+        intent,
+        DESIRED_TEXT_BYTES,
+        Shape::judged(),
+    )
+}
+
+/// The same for candidates that can only be named in a list (connected
+/// files, further keyword matches).
+pub fn listing_previews_with_context(
+    question: &str,
+    chunks: &[Chunk],
+    corpus: &[Chunk],
+    intent: RankingIntent,
+) -> Result<Vec<RankItem>> {
+    contextual_previews(
+        question,
+        chunks,
+        corpus,
+        intent,
+        DESIRED_TEXT_BYTES,
+        Shape::listed(),
+    )
 }
 
 /// A smaller recovery batch gets fuller evidence within the same wire budget.
@@ -42,7 +106,7 @@ pub fn recovery_previews_with_context(
     corpus: &[Chunk],
     intent: RankingIntent,
 ) -> Result<Vec<RankItem>> {
-    contextual_previews(question, chunks, corpus, intent, 3_000)
+    contextual_previews(question, chunks, corpus, intent, 3_000, Shape::judged())
 }
 
 fn contextual_previews(
@@ -51,6 +115,7 @@ fn contextual_previews(
     corpus: &[Chunk],
     intent: RankingIntent,
     desired_bytes: usize,
+    shape: Shape,
 ) -> Result<Vec<RankItem>> {
     for chunk in chunks.iter().take(ranking::MAX_ITEMS) {
         validate_chunk(chunk)?;
@@ -115,7 +180,7 @@ fn contextual_previews(
             result
         })
         .collect();
-    previews_with_budget(question, &enriched, intent, desired_bytes)
+    previews_with_budget(question, &enriched, intent, desired_bytes, shape)
 }
 
 /// Build previews without changing candidate order, IDs, or original chunks.
@@ -128,7 +193,13 @@ pub fn ranking_previews(
     chunks: &[Chunk],
     intent: RankingIntent,
 ) -> Result<Vec<RankItem>> {
-    previews_with_budget(question, chunks, intent, DESIRED_TEXT_BYTES)
+    previews_with_budget(
+        question,
+        chunks,
+        intent,
+        DESIRED_TEXT_BYTES,
+        Shape::judged(),
+    )
 }
 
 fn previews_with_budget(
@@ -136,6 +207,7 @@ fn previews_with_budget(
     chunks: &[Chunk],
     intent: RankingIntent,
     desired_bytes: usize,
+    shape: Shape,
 ) -> Result<Vec<RankItem>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
@@ -156,7 +228,7 @@ fn previews_with_budget(
     let prepared = chunks
         .iter()
         .take(ranking::MAX_ITEMS)
-        .map(|chunk| PreparedPreview::new(chunk, &terms, &mut stems))
+        .map(|chunk| PreparedPreview::new(chunk, &terms, &mut stems, shape.focused))
         .collect::<Result<Vec<_>>>()?;
     let items_at = |budget| {
         prepared
@@ -177,6 +249,47 @@ fn previews_with_budget(
         && retained.len() == desired.len()
     {
         return Ok(desired);
+    }
+    if shape.head && prepared.len() > HEAD_PREVIEWS {
+        // The first candidates get the largest allowance that fits while the
+        // rest keep their essentials; if even that does not fit, share evenly.
+        let tiered = |head: usize| {
+            prepared
+                .iter()
+                .enumerate()
+                .map(|(index, preview)| RankItem {
+                    id: index.to_string(),
+                    text: if index < HEAD_PREVIEWS {
+                        preview.render(head)
+                    } else {
+                        preview.render_essential(ESSENTIAL_PREVIEW_BYTES)
+                    },
+                    source: Some(format!(
+                        "{}:{}-{}",
+                        preview.chunk.path, preview.chunk.start_line, preview.chunk.end_line
+                    )),
+                })
+                .collect::<Vec<_>>()
+        };
+        let fits = |items: &[RankItem]| {
+            ranking::prepare_request_with_intent(question, items, intent)
+                .is_ok_and(|(_, retained)| retained.len() == items.len())
+        };
+        let floor = tiered(ESSENTIAL_PREVIEW_BYTES);
+        if fits(&floor) {
+            let (mut low, mut high, mut best) = (ESSENTIAL_PREVIEW_BYTES, desired_bytes, floor);
+            while high - low > 16 {
+                let middle = low + (high - low) / 2;
+                let items = tiered(middle);
+                if fits(&items) {
+                    low = middle;
+                    best = items;
+                } else {
+                    high = middle;
+                }
+            }
+            return Ok(best);
+        }
     }
 
     let smallest = items_at(MIN_TEXT_BYTES);
@@ -216,6 +329,9 @@ struct PreparedPreview<'a> {
     lines: Vec<&'a str>,
     focus: Vec<usize>,
     priority: Vec<usize>,
+    /// How many of `priority` are the essentials: the anchor, its
+    /// annotations and signature, the first body evidence, a decision block.
+    essential: usize,
 }
 
 impl<'a> PreparedPreview<'a> {
@@ -223,9 +339,16 @@ impl<'a> PreparedPreview<'a> {
         chunk: &'a Chunk,
         terms: &HashSet<String>,
         stems: &mut HashMap<String, String>,
+        focused: bool,
     ) -> Result<Self> {
         let lines: Vec<_> = chunk.text.split('\n').collect();
         validate_chunk(chunk)?;
+        // An import names what the question asks about without doing it.
+        let imports = if focused {
+            search::import_lines(&chunk.path, &lines)
+        } else {
+            vec![false; lines.len()]
+        };
         let mut scored = Vec::with_capacity(lines.len());
         let mut focus = Vec::with_capacity(lines.len());
         let mut matches = Vec::with_capacity(lines.len());
@@ -233,7 +356,10 @@ impl<'a> PreparedPreview<'a> {
             let lower = line.to_ascii_lowercase();
             let mut matching = HashSet::new();
             let mut first_match = None;
-            for word in search::tokenize(line) {
+            for word in search::tokenize(line)
+                .into_iter()
+                .filter(|_| !imports[index])
+            {
                 // Find the original token, not its stem: e.g. "filing" stems
                 // to "file", which need not occur verbatim in the source.
                 let stem = stems
@@ -252,10 +378,41 @@ impl<'a> PreparedPreview<'a> {
             matches.push(matching);
         }
         scored.sort_by_key(|&(index, matches)| (std::cmp::Reverse(matches), index));
-        let header = scored
-            .iter()
-            .map(|&(index, _)| index)
-            .find(|&index| is_declaration(lines[index], &chunk.path))
+        // A merged section holds several declarations; the one whose block
+        // holds the most of the question heads the preview, not the one whose
+        // own line does.
+        let declarations: Vec<usize> = (0..lines.len())
+            .filter(|&index| !imports[index] && is_declaration(lines[index], &chunk.path))
+            .collect();
+        let block_header = (focused && declarations.len() > 1)
+            .then(|| {
+                declarations
+                    .iter()
+                    .map(|&start| {
+                        let end = declarations
+                            .iter()
+                            .copied()
+                            .find(|&other| {
+                                other > start
+                                    && indentation(lines[other]) <= indentation(lines[start])
+                            })
+                            .unwrap_or(lines.len());
+                        let covered: HashSet<&String> =
+                            matches[start..end].iter().flatten().collect();
+                        (start, covered.len())
+                    })
+                    .max_by_key(|&(start, covered)| (covered, std::cmp::Reverse(start)))
+                    .filter(|&(_, covered)| covered > 0)
+                    .map(|(start, _)| start)
+            })
+            .flatten();
+        let header = block_header
+            .or_else(|| {
+                scored
+                    .iter()
+                    .map(|&(index, _)| index)
+                    .find(|&index| is_declaration(lines[index], &chunk.path))
+            })
             // A Markdown-shaped line may instead be a Python/shell comment.
             // Prefer an actual declaration whenever this chunk contains one.
             .or_else(|| {
@@ -332,6 +489,8 @@ impl<'a> PreparedPreview<'a> {
         }) {
             priority.extend(block);
         }
+        // Counted before duplicates are dropped; they keep their places first.
+        let essentials: HashSet<usize> = priority.iter().copied().collect();
         // Prefer covering different parts of the question before repeating
         // the same keyword-heavy comments or diagnostics. This is source- and
         // language-independent, and bounded even for a very long question.
@@ -339,10 +498,40 @@ impl<'a> PreparedPreview<'a> {
             .iter()
             .flat_map(|&index| matches[index].iter().cloned())
             .collect::<HashSet<_>>();
+        // Evidence inside the heading definition comes first: a type alias
+        // above a function can name more of the question than the checks
+        // inside it do.
+        // The heading declaration's span: from the comments and attributes
+        // above it to the end of its body (the first line back at its depth
+        // after the signature; a closing brace belongs to the body).
+        let python = matches!(chunk.path.rsplit('.').next(), Some("py" | "pyi"));
+        let span = |declaration: usize| {
+            let start = declaration_context(&lines, declaration)
+                .first()
+                .copied()
+                .unwrap_or(declaration);
+            let from = signature_end(&lines, declaration, &chunk.path).unwrap_or(declaration) + 1;
+            let depth = indentation(lines[declaration]);
+            let end = (from..lines.len())
+                .find(|&index| {
+                    !lines[index].trim().is_empty() && indentation(lines[index]) <= depth
+                })
+                .map(|index| {
+                    let closer = lines[index].trim_start().starts_with(['}', ')', ']']);
+                    if closer && !python { index + 1 } else { index }
+                })
+                .unwrap_or(lines.len());
+            (start, end.max(declaration + 1))
+        };
+        let block = header
+            .filter(|&h| focused && is_declaration(lines[h], &chunk.path))
+            .map(span);
+        let inside = |index: usize| block.is_none_or(|(start, end)| start <= index && index < end);
         for _ in 0..8 {
             let Some((index, fresh)) = matches
                 .iter()
                 .enumerate()
+                .filter(|&(index, _)| inside(index))
                 .map(|(index, matching)| (index, matching.difference(&covered).count()))
                 .max_by_key(|&(index, fresh)| {
                     (fresh, matches[index].len(), std::cmp::Reverse(index))
@@ -359,10 +548,16 @@ impl<'a> PreparedPreview<'a> {
         priority.extend(
             scored
                 .iter()
-                .filter(|&&(_, matches)| matches > 0)
+                .filter(|&&(index, matches)| matches > 0 && inside(index))
                 .map(|&(index, _)| index),
         );
         priority.extend(documentation);
+        priority.extend(
+            scored
+                .iter()
+                .filter(|&&(index, matches)| matches > 0 && !inside(index))
+                .map(|&(index, _)| index),
+        );
         // One line either side gives small statements and multiline headers
         // context, after retaining the strongest matches themselves.
         for index in priority.clone() {
@@ -376,20 +571,46 @@ impl<'a> PreparedPreview<'a> {
         priority.extend(0..lines.len());
         let mut seen = HashSet::new();
         priority.retain(|index| seen.insert(*index));
+        // The ranker judges the definition that heads the preview. Outside
+        // it, only declaration lines and lines holding part of the question
+        // are shown, so a neighbour's long comment cannot make the section
+        // look like something else.
+        if let Some(block) = block {
+            priority.retain(|&index| {
+                (block.0 <= index && index < block.1)
+                    || (!imports[index]
+                        && (is_declaration(lines[index], &chunk.path)
+                            || !matches[index].is_empty()))
+            });
+        }
+        let essential = priority
+            .iter()
+            .take_while(|index| essentials.contains(index))
+            .count();
         Ok(Self {
             chunk,
             lines,
             focus,
             priority,
+            essential,
         })
     }
 
     fn render(&self, budget: usize) -> String {
+        self.render_from(budget, &self.priority)
+    }
+
+    /// Only the essential lines, within `budget`.
+    fn render_essential(&self, budget: usize) -> String {
+        self.render_from(budget, &self.priority[..self.essential])
+    }
+
+    fn render_from(&self, budget: usize, priority: &[usize]) -> String {
         let mut selected = BTreeMap::new();
         // A wholly omitted chunk is one marker. Track JSON text size as lines
         // are inserted instead of repeatedly rendering every selected line.
         let mut encoded_bytes = OMITTED.len();
-        for &index in &self.priority {
+        for &index in priority {
             let previous = selected
                 .range(..index)
                 .next_back()
@@ -426,7 +647,7 @@ impl<'a> PreparedPreview<'a> {
         // Very large source line numbers still need an honest, nonempty
         // preview. The final serialized request check handles their overhead.
         if selected.is_empty() {
-            let index = self.priority[0];
+            let index = priority[0];
             selected.insert(index, fragment(self.lines[index], self.focus[index], 24));
         }
         self.render_selected(&selected)

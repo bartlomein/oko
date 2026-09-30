@@ -11,7 +11,14 @@ use std::{
 // candidates in a 32 KB request ahead of 30 on Loc-Bench (file@5 78 → 84) and
 // on the real-question replay (named hit 69 → 73%) for 30% more Jev tokens.
 pub const MAX_ITEMS: usize = 60;
-pub const MAX_JEV_REQUEST_BYTES: usize = 32_000;
+// 48 KB since 2026-09-29. At 32 KB, 60 candidates with about 280 bytes of
+// fixed JSON each left ~250-byte previews, and Jev rejected code it could not
+// see (a helper's body, a check 40 lines into a function). With the shortlist's
+// first 15 given fuller previews, 418 replayed agent questions went from 70 to
+// 81% answered in one response; Loc-Bench and Agent Retrieval Bench held; Jev
+// input tokens +15% on real questions. Shortening the per-candidate
+// instructions instead freed the same room but cost Loc-Bench file@1 67 → 52.
+pub const MAX_JEV_REQUEST_BYTES: usize = 48_000;
 // Provisional yes/no decision boundary, not a calibrated relevance cutoff.
 // Independent Noul scores do not share Choice's former `none` probability.
 pub const RELEVANCE_THRESHOLD: f64 = 0.5;
@@ -965,7 +972,8 @@ mod tests {
     #[test]
     fn budget_drops_tail_in_utf8_bytes() {
         let mut input = items();
-        input[1].text = "😀".repeat(8000);
+        // Four bytes each: the second item alone fills the request.
+        input[1].text = "😀".repeat(MAX_JEV_REQUEST_BYTES / 4);
         let (request, kept) = prepare_request("refund", &input).unwrap();
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0], input[0]);
@@ -1021,7 +1029,7 @@ mod tests {
                     )
                 })
                 .collect();
-            // Reserve at least ~26 KB of the 32 KB request for candidate state.
+            // Reserve most of the request for candidate state.
             assert!(serde_json::to_vec(&questions).unwrap().len() <= 200 * MAX_ITEMS);
             if !matches!(intent, RankingIntent::General) {
                 let state = match intent {

@@ -176,8 +176,8 @@ plausible excerpt misses multi-location answers:
   whole and is not reported as incomplete.
 - `complete definition`: a proven full definition (`definitionComplete`); it does
   not mean every dependency or caller is included. `2 complete definitions` means
-  the match and the short definition or definitions that directly follow it
-  (`definitions`), described below.
+  the match and the short definition or definitions next to it that belong
+  with it (`definitions`), described below.
 - `partial excerpt`: the enclosing code continues outside the range (`truncated`),
   so the file should be read when the rest matters.
 - `body abridged`: a complete definition too long to show whole (over 256 lines).
@@ -219,6 +219,25 @@ agent questions, over a quarter of the expected code missing from a response
 began one or two lines after a shown definition, and agents read on regardless,
 at a model turn each. A definition tied to neither stays out, so responses do
 not grow with unrelated neighbours.
+
+When the shown excerpts hold definitions with one name in different files and
+nearly the same code (comments aside), the answer begins with a line naming
+them, e.g. "`getFirstForwardedValue` is defined in 2 shown files with nearly
+the same code: …". An agent that edits the first excerpt it sees would
+otherwise change the copy the request did not mean.
+
+Parsed files are chunked along their definitions, and definitions shorter than
+20 lines share one ranked section, so Jev judges several of them at once. The
+answer then shows the definition in that section that holds most of the
+question: its words weighed by how few of the section's definitions share them,
+twice when they are in the definition's name. Import lines never decide what is
+shown; they name what a question asks about without doing it. A short
+neighbour in the same section, directly before or after, also comes with the
+match when its code (not its comments) does a part of the question the shown
+lines do not, such as the `begin` that resets a counter above the `finish` that
+records it. In 0.6.0 the line with the most question words chose the definition,
+earliest first; on replayed agent sessions that showed a constructor instead of
+the lookup the question described, and dropped such neighbours.
 
 Most responses use one or two of the three excerpt slots and a fraction of the
 response cap. A spare slot is given to a candidate Jev rated from 0.35 up to its
@@ -277,7 +296,8 @@ The cached TypeScript parser establishes function boundaries for union and
 structural return annotations; uncertain lexical-only boundaries use the fallback.
 
 Normal searches rank compact, line-labelled previews instead of full chunks.
-Preview size adapts to the existing 32,000-byte Jev request budget. Winner IDs
+Preview size adapts to the 48,000-byte Jev request budget; when not every
+candidate fits in full, the shortlist's first 15 get fuller previews. Winner IDs
 map back to original source, so preview markers are never mistaken for source.
 Previews prioritize declaration names, attached source annotations or comments,
 and implementation statements. Adjacent decorator context can be recovered from

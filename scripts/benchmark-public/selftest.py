@@ -116,6 +116,22 @@ class RunnerTests(unittest.TestCase):
             self.assertTrue((trial/'changes.patch').read_text())
             self.assertFalse((trial/'workspace').exists())
 
+    def test_finished_sessions_drop_scratch_and_keep_their_record(self):
+        with tempfile.TemporaryDirectory() as temp:
+            trial = Path(temp)
+            for name in r.SESSION_SCRATCH:
+                (trial / name / 'nested').mkdir(parents=True)
+                (trial / name / 'nested' / 'file').write_text('x')
+            for name in ('events.jsonl', 'oko-metrics.jsonl', 'result.json'):
+                (trial / name).write_text('{}')
+            r.discard_scratch(trial)
+            r.discard_scratch(trial)  # a second pass is harmless
+            self.assertEqual(sorted(p.name for p in trial.iterdir()),
+                             ['events.jsonl', 'oko-metrics.jsonl', 'result.json'])
+        with patch.object(r, 'MIN_FREE_BYTES', 1 << 62), tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(RuntimeError):
+                r.require_free_space(Path(temp))
+
     def test_cache_assignment_rejects_mismatched_metadata(self):
         disk = {'status':'disk','rebuiltFiles':0,'reusedFiles':10}
         self.assertTrue(r.check_cache('warm',[disk]))
