@@ -10,13 +10,14 @@ When you hand code search to a subagent, tell it to locate code with the Oko MCP
 
 Oko returns exact, current file contents with real line numbers: the same text a file read would print. Treat each excerpt as a file read you have already done. A `Files using X` or `Callers of X` listing is complete for the indexed code: cite its rows as they are and do not grep for the name again; it names what it cannot see.
 
-After an Oko search, if you can name the exact code to cite or change, act: answer or edit. If the excerpts show more than one definition that could be meant, such as copies of a helper in different packages, decide which one the request names before editing; the first result is the best match, not always the intended one. Usually that is one Oko call and at most one follow-up read. Search again only for a part of the task no excerpt shows; do not re-ask shown code through `questions` or `symbols`. Read only what Oko did not show: the rest of a `partial excerpt`, a path under `Other candidates`, or code the excerpts reference but do not include. A `possible match` was rated below the relevance cutoff.
+After an Oko search, if you can name the exact code to cite or change, act: answer or edit. If the excerpts show more than one definition that could be meant, such as copies of a helper in different packages, decide which one the request names before editing; the first result is the best match, not always the intended one. Usually that is one Oko call and at most one follow-up. Search again only for a part of the task no excerpt shows; do not re-ask shown code through `questions` or `symbols`. For code Oko did not show in full (the rest of a `partial excerpt`, the members of an `outline` or `body abridged` definition, or a definition the excerpts reference), ask Oko for it by name in `symbols`, several names in one call, instead of reading whole files. Read a file only for a line range Oko did not return, such as a path under `Other candidates`. A `possible match` was rated below the relevance cutoff.
 
 - Good: Oko search, then answer with the returned `path:line` ranges.
 - Good: Oko search, then edit the returned lines (drop the line-number prefix).
 - Bad: Oko search, then `sed`, `nl`, `cat`, or a read of the same range to verify it.
 - Bad: Oko search, then grep for a name the excerpts already show.
 - Bad: Oko search, then a second Oko call (`questions` or `symbols`) for code the first answer already shows.
+- Bad: Oko search, then a read of a whole file whose code the answer already showed.
 
 When you answer in prose from search results, say inside the answer what you did not check: a path you did not follow, a caller you did not read, a file the excerpts only referenced. Do not present a partial trace as complete. When the user asks for a fixed format (JSON, a single value, a patch), return exactly that and nothing after it.
 
