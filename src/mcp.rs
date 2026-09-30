@@ -627,11 +627,15 @@ impl OkoServer {
         let context = match self.prefetch_answer(client, session, &prompt, started, cancelled) {
             Ok(Prefetched::Context(context)) => Some(context),
             Ok(Prefetched::Nothing(reason)) => {
-                record_prefetch_skip(&prompt, reason, None, started);
+                record_prefetch_skip(&prompt, reason, None, None, started);
+                None
+            }
+            Ok(Prefetched::Rejected(retrieval)) => {
+                record_prefetch_skip(&prompt, "nothing relevant", None, retrieval, started);
                 None
             }
             Err(error) => {
-                record_prefetch_skip(&prompt, "error", Some(&error.to_string()), started);
+                record_prefetch_skip(&prompt, "error", Some(&error.to_string()), None, started);
                 None
             }
         };
@@ -777,7 +781,7 @@ impl OkoServer {
                     return Ok(Prefetched::Context(pointer));
                 }
             }
-            return Ok(Prefetched::Nothing("nothing relevant"));
+            return Ok(Prefetched::Rejected(found.retrieval.take()));
         }
         if cancelled() {
             return Ok(Prefetched::Nothing("cancelled"));
@@ -1088,6 +1092,7 @@ impl OkoServer {
                     } else {
                         jev_patience()
                     }),
+                    recover: !ask.lean,
                 }
             },
             input.intent.into(),
@@ -1252,6 +1257,7 @@ impl OkoServer {
                                 super::Reranker::Jev {
                                     key,
                                     patience: Some(jev_patience()),
+                                    recover: true,
                                 }
                             },
                             intent,
@@ -2006,13 +2012,21 @@ enum Prefetched {
     Context(String),
     /// Nothing, and why: the metrics count the reasons.
     Nothing(&'static str),
+    /// Ranked, and nothing was relevant: the ranking's calls are recorded.
+    Rejected(Option<Value>),
 }
 
 /// A prefetch that added nothing, for the metrics.
-fn record_prefetch_skip(prompt: &str, reason: &str, error: Option<&str>, started: Instant) {
+fn record_prefetch_skip(
+    prompt: &str,
+    reason: &str,
+    error: Option<&str>,
+    retrieval: Option<Value>,
+    started: Instant,
+) {
     record_metrics(
         &json!({"prefetch": {"decision": "skip", "reason": reason, "error": error},
-        "question": prefix(prompt.trim(), 512),
+        "question": prefix(prompt.trim(), 512), "retrieval": retrieval,
         "timings": {"totalMs": started.elapsed().as_millis() as u64}}),
     );
 }

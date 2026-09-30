@@ -80,6 +80,15 @@ const ACKNOWLEDGEMENTS: &[&str] = &[
     "next",
 ];
 
+/// A prompt that opens with one of these is an operation on the project, not
+/// a question about its code, unless it names a definition or a file:
+/// "run the linter and fix the formatting".
+const CHORE_VERBS: &[&str] = &[
+    "run", "rerun", "commit", "push", "pull", "merge", "rebase", "deploy", "install", "release",
+    "publish", "tag", "bump", "squash", "stash", "checkout", "revert", "reset", "open", "lint",
+    "format",
+];
+
 /// Words that make a prompt of six or more words a code question.
 const CODE_WORDS: &[&str] = &[
     "where",
@@ -165,8 +174,16 @@ pub fn read(prompt: &str) -> Result<Prompt, &'static str> {
     let names = code_names(text);
     let paths = path_tokens(text);
     let word_count = words(text).len();
-    if word_count <= 3 && names.is_empty() && paths.is_empty() {
-        return Err("few words");
+    if names.is_empty() && paths.is_empty() {
+        if word_count <= 3 {
+            return Err("few words");
+        }
+        if words(text)
+            .first()
+            .is_some_and(|word| CHORE_VERBS.contains(&word.as_str()))
+        {
+            return Err("chore");
+        }
     }
     let mut question = first_paragraph(text);
     let missing: Vec<&str> = names
@@ -370,6 +387,13 @@ mod tests {
         assert_eq!(read("/review this").unwrap_err(), "command");
         assert_eq!(read("sounds good").unwrap_err(), "short");
         assert_eq!(read("continue please now").unwrap_err(), "few words");
+        assert_eq!(
+            read("run the linter and fix the formatting").unwrap_err(),
+            "chore"
+        );
+        assert_eq!(read("commit this and push to main").unwrap_err(), "chore");
+        // Naming the code makes it a question about the code again.
+        assert!(read("run the parse_header tests and fix what fails").is_ok());
     }
 
     #[test]
