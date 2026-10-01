@@ -2194,6 +2194,11 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         started: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     prewarm(&server);
+    // The daily check for a newer release, for the session-start notice;
+    // local-only mode makes no network calls.
+    if !no_jev {
+        std::thread::spawn(|| crate::update::refresh(Duration::from_secs(5)));
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

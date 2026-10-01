@@ -19,7 +19,9 @@ Setup installs stable per-user copies of Oko and your available ripgrep binary,
 so deleting the original download does not break the connection. On macOS they
 live under `~/Library/Application Support/Oko/bin`; other Unix systems use
 `~/.local/share/oko/bin`. Setup requires ripgrep either beside the downloaded
-Oko binary or on PATH. It does not download dependencies yet.
+Oko binary or on PATH. It does not download dependencies yet. Setup lists the
+project, its tools and options in `projects.json` in that folder, so
+[`oko upgrade`](installation.md#upgrade) can refresh every project at once.
 
 For Jev, setup reuses the project's `.env` key or your saved OS credential. If a
 key is provided through the invoking shell, it saves that key in the OS credential

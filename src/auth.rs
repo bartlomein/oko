@@ -90,21 +90,26 @@ pub fn api_key(cwd: &Path) -> Result<Option<String>> {
 }
 
 /// Prepare credentials that remain available when a GUI launches Oko.
-pub(crate) fn setup(cwd: &Path) -> Result<()> {
+pub(crate) fn setup(cwd: &Path, quiet: bool) -> Result<()> {
+    let say = |text: &str| {
+        if !quiet {
+            println!("{text}");
+        }
+    };
     if let Some(credential) = overrides(cwd)? {
         let key = credential.key().context("An empty TYPESAFE_API_KEY override disables saved keys. Remove the empty override before setup.")?;
         if credential.source == "environment" {
             // GUI apps may not inherit the invoking terminal's environment.
             save(key, &OsStore)?;
-            println!("TypeSafe key saved securely for use from Codex.");
+            say("TypeSafe key saved securely for use from Codex.");
         } else {
-            println!("Using the project's .env key. Keep that file available and ignored by Git.");
+            say("Using the project's .env key. Keep that file available and ignored by Git.");
         }
     } else if OsStore
         .get()?
         .is_some_and(|key| !config::trim(&key).is_empty())
     {
-        println!("Using your saved TypeSafe key.");
+        say("Using your saved TypeSafe key.");
     } else {
         run(&["login".into()], cwd)?;
     }
