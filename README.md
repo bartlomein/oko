@@ -73,8 +73,15 @@ oko setup --client all        # all three
 Setup installs stable copies, connects the tool to Oko for this project, adds
 search guidance to the instructions that tool reads, and checks the connection.
 The guidance matters: in our benchmark it is what makes Codex and OpenCode
-sessions faster, not just cheaper. Start a new session afterwards (in Codex, trust
-the project if prompted). Repeat setup for each project.
+sessions faster, not just cheaper. Setup also adds a prompt hook: when you ask a
+code question, Oko's answer is in the agent's context before its first turn, so
+it skips a round of searching. Start a new session afterwards. Repeat setup for
+each project.
+
+**In Codex, approve the hook once.** Codex runs no hook you have not reviewed:
+open the project in Codex (trust the project if prompted), type `/hooks`, and
+trust Oko's prompt hook. Codex asks once per project, and again only if a later
+Oko release changes the hook. Claude Code and OpenCode need no extra step.
 
 For a key-free connection, add `--no-jev`. See [what setup changes](docs/mcp.md#set-up-a-project).
 The manual steps below do the same by hand, without the guidance.
