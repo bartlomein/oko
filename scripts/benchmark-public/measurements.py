@@ -71,8 +71,24 @@ def measurements(row):
     jev['seconds'] = summed([c.get('durationNs') for c in calls])
     if jev['seconds'] is not None:
         jev['seconds'] /= 1e9
-    if row.get('oko') and not metrics:
+    if row.get('oko') and not metrics and not row.get('prefetch'):
         jev = {key: None for key in jev}
+    # The prompt hook's searches (prefetch) belong to no agent tool call; their
+    # Jev usage is kept apart and added to the totals.
+    hook = row.get('prefetch') or []
+    jev['prefetchCalls'] = sum(p.get('jevCalls') or 0 for p in hook)
+    jev['prefetchInputTokens'] = sum(p.get('jevInputTokens') or 0 for p in hook)
+    jev['prefetchOutputTokens'] = sum(p.get('jevOutputTokens') or 0 for p in hook)
+    def plus(agent, extra):
+        # Unknown agent usage stays unknown unless the hook's is all there was.
+        if agent is None:
+            return extra if hook else None
+        return agent + extra
+    jev['totalCalls'] = plus(jev['calls'], jev['prefetchCalls'])
+    jev['totalInputTokens'] = plus(jev['inputTokens'], jev['prefetchInputTokens'])
+    jev['totalOutputTokens'] = plus(jev['outputTokens'], jev['prefetchOutputTokens'])
+    jev['totalTokens'] = (None if jev['totalInputTokens'] is None or jev['totalOutputTokens'] is None
+                          else jev['totalInputTokens'] + jev['totalOutputTokens'])
     events = []
     path = Path(row.get('artifact', '')) / 'events.jsonl'
     if path.is_file():

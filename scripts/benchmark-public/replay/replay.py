@@ -161,6 +161,27 @@ def profiler():
     return module
 
 
+@functools.cache
+def runner():
+    """The public runner, for the prompt each task's agent receives."""
+    sys.path.insert(0, str(ROOT))
+    spec = importlib.util.spec_from_file_location('public_runner', ROOT / 'runner.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def prompt_questions(tasks, repeats):
+    """What the prompt hook receives: each task's guided prompt, whole, once per
+    repeat in a session of its own so no repeat is taken for a resent prompt."""
+    questions = {}
+    for task, (_, definition) in tasks.items():
+        text = runner().prompt(dict(definition, cacheCondition=runner().GUIDED), True)
+        # Named as Claude Code's hook names itself: the most room for the answer.
+        questions[task] = [{'question': text, 'prefetch': f'claude:replay-{task}-{n}'} for n in range(repeats)]
+    return questions
+
+
 def env_pairs(items):
     """`--env KEY=VALUE` arguments as a dict; a malformed one stops the run."""
     pairs = {}
@@ -230,6 +251,10 @@ def replay_build(label, binary, workspaces, questions, tasks, live, timeout, pro
                         retrieval = packet.get('retrieval') or {}
                         timings = packet.get('timings') or {}
                         text = ''.join(b.get('text', '') for b in response.get('content', []))
+                        if 'prefetch' in query:
+                            decision = packet.get('prefetch') or {}
+                            row.update(prefetch=decision.get('decision'), prefetchReason=decision.get('reason'),
+                                       question=packet.get('question'))
                         row.update(score(packet, anchors(tasks[task][1]), query.get('directory')),
                                    ranking=packet.get('ranking'),
                                    # Ranges only, never source: enough to see how a miss happened.
@@ -380,6 +405,9 @@ def main(argv=None):
                         help='Free and offline: keyword ranking only. Checks packaging, not relevance.')
     parser.add_argument('--execute', action='store_true', help='Make the paid Jev calls')
     parser.add_argument('--timeout', type=float, default=60)
+    parser.add_argument('--from-prompt', type=int, metavar='REPEATS', default=0,
+                        help='Replay each task\'s whole guided prompt through the prompt hook (prefetch), '
+                             'REPEATS times, instead of the questions agents asked')
     args = parser.parse_args(argv)
 
     # LABEL=PATH, optionally followed by ,KEY=VALUE switches for that build only.
@@ -406,7 +434,7 @@ def main(argv=None):
     reports = args.report or sorted(BRANCH_STATE.glob('results-*/report.json'))
     if not reports:
         parser.error('No branch-suite report.json found; pass --report')
-    questions = collect_questions(reports, tasks)
+    questions = prompt_questions(tasks, args.from_prompt) if args.from_prompt else collect_questions(reports, tasks)
     if args.limit:
         questions = {task: queries[:args.limit] for task, queries in questions.items()}
     total = sum(len(q) for q in questions.values())
@@ -443,7 +471,7 @@ def main(argv=None):
                                  args.timeout, progress, build_env.get(label))
     labels = [label for label, _ in builds]
     summary = summarize(rows, labels)
-    note = (f"{total} real agent questions, replayed against each build"
+    note = (f"{total} {'task prompts through the prompt hook' if args.from_prompt else 'real agent questions'}, replayed against each build"
             + (' with keyword ranking only (--no-jev): this checks packaging, not relevance.' if args.no_jev
                else f' with Jev ({JEV_MODEL}).')
             + ' No agent sessions: this measures what Oko returns, not how an agent reacts.')

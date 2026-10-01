@@ -256,10 +256,18 @@ fn opencode_setup_merges_the_connection_and_is_repeatable() {
     );
     assert!(!root.join(".codex").exists());
     assert!(!root.join("CLAUDE.md").exists());
-    // A file that was already there may be shared, so it is not ignored.
-    assert_eq!(
-        fs::read_to_string(root.join(".gitignore")).unwrap(),
-        "/.env\n"
+    // A file that was already there may be shared, so it is not ignored;
+    // the prompt hook plugin holds this machine's paths, so it is.
+    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(
+        !ignore.lines().any(|line| line == "/opencode.json"),
+        "{ignore}"
+    );
+    assert!(
+        ignore
+            .lines()
+            .any(|line| line == "/.opencode/plugins/oko-prefetch.js"),
+        "{ignore}"
     );
     assert_ok(&setup(
         executable(),
@@ -550,7 +558,10 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
     fs::create_dir_all(root.join(".claude")).unwrap();
     let theirs = serde_json::json!({
         "model": "sonnet",
-        "hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "./lint.sh"}]}]},
+        "hooks": {
+            "PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "./lint.sh"}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "./ticket.sh"}]}]
+        },
         "permissions": {"allow": ["Bash(npm test)"]}
     });
     fs::write(
@@ -587,6 +598,22 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
     for event in ["SessionStart", "SubagentStart"] {
         assert_eq!(commands(event).len(), 1, "{event}");
     }
+    // The prompt hook calls the running server, beside the user's own.
+    let prompt: Vec<&serde_json::Value> = settings["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+        .collect();
+    assert_eq!(prompt.len(), 2, "{prompt:?}");
+    assert_eq!(prompt[0]["command"], "./ticket.sh");
+    assert_eq!(prompt[1]["type"], "mcp_tool");
+    assert_eq!(prompt[1]["server"], "oko");
+    assert_eq!(prompt[1]["tool"], "search");
+    assert_eq!(
+        prompt[1]["input"],
+        serde_json::json!({"question": "${prompt}", "prefetch": "claude:${session_id}"})
+    );
     let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
     assert!(
         ignore
@@ -629,6 +656,63 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
             .contains("mcp__oko__search")
     );
 }
+#[test]
+fn codex_prompt_hook_goes_with_no_prefetch_or_no_hooks() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let install = temp.path().join("bin");
+    fs::create_dir(&root).unwrap();
+    let config = root.join(".codex/config.toml");
+    for flag in ["--no-prefetch", "--no-hooks"] {
+        assert_ok(&setup(executable(), &root, &install, &["--no-jev"]));
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.contains("[[hooks.UserPromptSubmit]]"), "{text}");
+        assert_ok(&setup(executable(), &root, &install, &["--no-jev", flag]));
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(!text.contains("hooks"), "{flag}: {text}");
+    }
+}
+#[cfg(unix)]
+#[test]
+fn claude_prefetch_can_be_turned_off_and_leaves_the_other_hooks() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let claude = fake_claude(temp.path(), None);
+    let install = temp.path().join("bin");
+    assert_ok(&setup_claude(&root, &install, &claude));
+    let output = Command::new(executable())
+        .args([
+            "setup",
+            "--no-jev",
+            "--no-prefetch",
+            "--client",
+            "claude",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--install-dir")
+        .arg(&install)
+        .env("OKO_CLAUDE", &claude)
+        .output()
+        .unwrap();
+    assert_ok(&output);
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join(".claude/settings.local.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        settings["hooks"].get("UserPromptSubmit").is_none(),
+        "{settings}"
+    );
+    for event in ["SessionStart", "SubagentStart", "PreToolUse"] {
+        assert_eq!(
+            settings["hooks"][event].as_array().unwrap().len(),
+            1,
+            "{event}"
+        );
+    }
+}
 #[cfg(unix)]
 #[test]
 fn claude_hooks_can_be_skipped_and_a_malformed_settings_file_is_left_alone() {
@@ -663,4 +747,134 @@ fn claude_hooks_can_be_skipped_and_a_malformed_settings_file_is_left_alone() {
         fs::read_to_string(root.join(".claude/settings.local.json")).unwrap(),
         "{ not json"
     );
+}
+
+#[test]
+fn opencode_gets_a_prompt_hook_plugin_that_setup_can_remove() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let install = temp.path().join("bin");
+    fs::create_dir(&root).unwrap();
+    let plugin = root.join(".opencode/plugins/oko-prefetch.js");
+    for _ in 0..2 {
+        assert_ok(&setup(
+            executable(),
+            &root,
+            &install,
+            &["--no-jev", "--client", "opencode"],
+        ));
+    }
+    let text = fs::read_to_string(&plugin).unwrap();
+    assert!(text.starts_with("// Managed by oko setup"));
+    assert!(
+        text.contains("\"--no-jev\""),
+        "the plugin's Oko runs like the MCP server"
+    );
+    assert!(!text.contains("__OKO_"), "every placeholder is filled");
+    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert_eq!(
+        ignore
+            .lines()
+            .filter(|line| *line == "/.opencode/plugins/oko-prefetch.js")
+            .count(),
+        1
+    );
+    // Turned off, or every hook skipped: setup's plugin goes.
+    for flag in ["--no-prefetch", "--no-hooks"] {
+        assert_ok(&setup(
+            executable(),
+            &root,
+            &install,
+            &["--no-jev", "--client", "opencode"],
+        ));
+        assert!(plugin.exists());
+        assert_ok(&setup(
+            executable(),
+            &root,
+            &install,
+            &["--no-jev", flag, "--client", "opencode"],
+        ));
+        assert!(!plugin.exists(), "{flag}");
+    }
+    // A file of that name setup did not write is neither replaced nor removed.
+    fs::write(&plugin, "export const Mine = async () => ({});\n").unwrap();
+    let output = setup(
+        executable(),
+        &root,
+        &install,
+        &["--no-jev", "--client", "opencode"],
+    );
+    assert!(!output.status.success());
+    assert_ok(&setup(
+        executable(),
+        &root,
+        &install,
+        &["--no-jev", "--no-prefetch", "--client", "opencode"],
+    ));
+    assert_eq!(
+        fs::read_to_string(&plugin).unwrap(),
+        "export const Mine = async () => ({});\n"
+    );
+}
+
+/// The plugin, run the way OpenCode runs it: `chat.message` with the user's
+/// parts. Needs Node or Bun; skipped without either.
+#[test]
+fn the_opencode_plugin_adds_oko_s_answer_to_a_code_prompt_only() {
+    let Some(runtime) = ["node", "bun"].into_iter().find(|name| {
+        Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }) else {
+        eprintln!("skipped: neither node nor bun is installed");
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("uploads.rs"),
+        "pub fn retry_upload(job: &Job) -> Result<(), Error> {\n    send(job)\n}\n",
+    )
+    .unwrap();
+    assert_ok(&setup(
+        executable(),
+        &root,
+        &temp.path().join("bin"),
+        &["--no-jev", "--client", "opencode"],
+    ));
+    let plugin = root.join(".opencode/plugins/oko-prefetch.js");
+    let script = temp.path().join("run.mjs");
+    fs::write(
+        &script,
+        format!(
+            r#"const {{ OkoPrefetch }} = await import({plugin:?});
+const hooks = await OkoPrefetch({{}});
+const results = [];
+for (const text of ["Explain how retry_upload gives up", "commit this and push"]) {{
+  const output = {{ message: {{ id: "msg_1" }}, parts: [{{ type: "text", text }}] }};
+  await hooks["chat.message"]({{ sessionID: "ses_1" }}, output);
+  results.push(output.parts.slice(1));
+}}
+console.log(JSON.stringify(results));
+process.exit(0);
+"#,
+            plugin = plugin.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let output = Command::new(runtime).arg(&script).output().unwrap();
+    assert_ok(&output);
+    let results: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let added = &results[0][0];
+    assert!(added["id"].as_str().unwrap().starts_with("prt_"));
+    assert_eq!(added["type"], "text");
+    assert_eq!(added["synthetic"], true);
+    assert_eq!(added["sessionID"], "ses_1");
+    assert_eq!(added["messageID"], "msg_1");
+    let text = added["text"].as_str().unwrap();
+    assert!(text.starts_with("Oko answer for this prompt."), "{text}");
+    assert!(text.contains("pub fn retry_upload"), "{text}");
+    assert_eq!(results[1], serde_json::json!([]), "a chore gets nothing");
 }

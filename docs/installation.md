@@ -19,7 +19,7 @@ less install-oko.sh
 sh install-oko.sh
 ```
 
-The installer defaults to `v0.6.1`, including when that version is published as a
+The installer defaults to `v0.7.0`, including when that version is published as a
 prerelease. It does not rely on GitHub’s latest stable release endpoint. A draft
 or private release is not anonymously downloadable.
 
@@ -28,12 +28,12 @@ on the `sh` process (not on `curl`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh |
-  OKO_VERSION=v0.6.1 sh
+  OKO_VERSION=v0.7.0 sh
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKO_VERSION` | `v0.6.1` | Published release to download; the `v` prefix is optional. |
+| `OKO_VERSION` | `v0.7.0` | Published release to download; the `v` prefix is optional. |
 | `OKO_INSTALL_DIR` | `~/.local/share/oko` | Version directories containing binaries and license notices. |
 | `OKO_BIN_DIR` | `~/.local/bin` | Directory containing the `oko` symlink. |
 
@@ -64,7 +64,7 @@ Download the matching archive and `SHA256SUMS` from
 In the download directory, substitute your chosen filename:
 
 ```sh
-archive=oko-v0.6.1-aarch64-apple-darwin.tar.gz
+archive=oko-v0.7.0-aarch64-apple-darwin.tar.gz
 grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
 tar -xzf "$archive" &&
 "./${archive%.tar.gz}/oko" --version
@@ -106,6 +106,26 @@ Setup keeps its own stable copy: run the newly installed `oko setup` (with the s
 `--client`) in each configured project to update it. Start a new agent session so it launches the
 updated server. If your client keeps an old server running, reconnect its MCP
 connection or restart the client. Saved credentials are separate from the binary.
+
+### Prompt hook
+
+`oko setup` also installs a prompt hook (for OpenCode, a small plugin in
+`.opencode/plugins/`): when you ask a code question, Oko's answer is in the agent's
+context before its first turn, so it skips a round of searching. Other prompts get
+nothing. `--no-prefetch` leaves it out. See [the MCP guide](mcp.md) for how it
+decides.
+
+### Upgrading to 0.7.0
+
+Reinstall, then rerun `oko setup` in each project. Setup now adds the prompt
+hook described above, so a code question is answered before the agent's first
+turn. In Codex, the first session after setup shows **Hooks need review**:
+choose **Trust all and continue** (or use `/hooks` later); Codex asks once per
+project. For OpenCode, setup writes `.opencode/plugins/oko-prefetch.js` and adds
+it to `.gitignore`. Claude Code needs version 2.1.284 or later for the hook to
+run before the first turn of a `claude -p` session. `--no-prefetch` leaves the
+hook out. The guidance gains one line: an agent that already has Oko's answer
+starts from it instead of searching again.
 
 ### Upgrading to 0.6.1
 

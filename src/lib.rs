@@ -3,6 +3,7 @@ pub mod context;
 pub mod floor;
 pub mod investigate;
 pub mod navigation;
+pub mod prefetch;
 pub mod preview;
 pub mod rails;
 pub mod ranking;

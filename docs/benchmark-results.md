@@ -4,10 +4,11 @@
 
 Four benchmarks: two public retrieval benchmarks that score what Oko returns,
 our own agent benchmark that times whole coding sessions, and Sense's agent
-benchmark, run against Sense on the same day. Raw per-task results are in
-[`benchmarks/published/0.6.1/`](../benchmarks/published/0.6.1/) (and
-[`0.6.0/`](../benchmarks/published/0.6.0/) and [`0.5.0/`](../benchmarks/published/0.5.0/)
-for earlier releases; Sense's paired run is in `0.6.0/`); the
+benchmark, run against Sense on the same evening. Raw per-task results are in
+[`benchmarks/published/0.7.0/`](../benchmarks/published/0.7.0/) (and
+[`0.6.1/`](../benchmarks/published/0.6.1/), [`0.6.0/`](../benchmarks/published/0.6.0/)
+and [`0.5.0/`](../benchmarks/published/0.5.0/) for earlier releases; Sense's
+earlier paired run is in `0.6.0/`); the
 harnesses and commands are in [the runner README](../scripts/benchmark-public/README.md#retrieval-benchmarks).
 
 ## Agent Retrieval Bench
@@ -69,17 +70,25 @@ won back part of the failing-test loss (0.86 → 0.88 in one run) but left the
 overall figure near 0.685 and made agents' first answers slightly worse, so
 0.6.1 does not include it.
 
-**Stability.** The 0.6.1 numbers are the mean of three runs of commit
-`5f3afad` on all 345 tasks with `jev-1.13.0` (the release commit after it
-changes only version numbers and docs). The runs agree within 0.010 on every
-ranking metric and 0.004 on BCY@8k. The 0.6.0 rows are the mean of three runs
-of commit `3f7809b`, and the 0.5.0 rows of that release's three runs.
+**Since 0.6.1.** Nothing in 0.7.0 changes how a search ranks: the prompt hook
+is a separate path, and these tasks are single searches. The three 0.7.0 runs
+match 0.6.1 within run-to-run variation. The largest difference is Recall@5 on
+the 58 edit-ripple tasks (0.32 → 0.29); BCY@8k is 0.494 against 0.501, with the
+0.7.0 runs between 0.489 and 0.502.
+
+**Stability.** The 0.7.0 numbers are the mean of three runs of commit
+`da83b98` on all 345 tasks with `jev-1.13.0` (later commits change only setup,
+metrics, docs and version numbers). The runs agree within 0.007 on every
+ranking metric and 0.013 on BCY@8k. The 0.6.1 rows are the mean of three runs
+of commit `5f3afad`, the 0.6.0 rows of commit `3f7809b`, and the 0.5.0 rows of
+that release's three runs.
 
 ### All 345 tasks
 
 | Method | Recall@5 | Recall@20 | MRR | BCY@8k |
 | --- | ---: | ---: | ---: | ---: |
-| **Oko 0.6.1** | 0.45 | 0.68 | 0.37 | **0.50** |
+| **Oko 0.7.0** | 0.44 | 0.68 | 0.37 | 0.49 |
+| Oko 0.6.1 | 0.45 | 0.68 | 0.37 | **0.50** |
 | Oko 0.6.0 | **0.46** | **0.70** | 0.37 | **0.50** |
 | Oko 0.5.0 | 0.45 | 0.64 | **0.39** | 0.48 |
 | Qwen3-Embedding-8B (published) | | **0.70** | 0.23 | 0.37 |
@@ -95,9 +104,9 @@ Recall@k is the share of a task's needed files among the first k ranked. MRR is
 the reciprocal rank of the first needed file (1.0 = always first). BCY@8k is the
 benchmark's budgeted context yield: the share of needed files whose text fits
 when ranked files are packed into 8,000 tokens, computed with the benchmark's
-`report-bcy-curve`; Oko 0.6.1 leads it at every budget (4k: 0.38 against
-RepoMap's 0.20; 16k: 0.60 against 0.53; 32k: 0.68 against 0.63; 0.6.0: 0.62
-and 0.69 at 16k and 32k).
+`report-bcy-curve`; Oko 0.7.0 leads it at every budget (4k: 0.39 against
+RepoMap's 0.20; 16k: 0.60 against 0.53; 32k: 0.68 against 0.63; 0.6.1: 0.38,
+0.60 and 0.68; 0.6.0: 0.62 and 0.69 at 16k and 32k).
 
 What changed from 0.5.0 to 0.6.0: the shortlist Oko ranks grew from 30 to 60
 candidates, so a needed file reaches ranking more often (0.72 → 0.82 of them)
@@ -106,7 +115,8 @@ MRR fell from 0.39 to 0.37, almost all of it on review comments (0.32 → 0.24),
 where the right file is still near the top but less often first. 0.6.0 showed
 an excerpt on 90% of tasks (0.5.0: about two thirds; 0.6.1: 89%).
 
-Against RepoMap on the same 345 tasks, Oko 0.6.1's MRR lead is +0.16 with a
+Against RepoMap on the same 345 tasks (measured on the 0.6.1 runs, which 0.7.0
+matches), Oko's MRR lead is +0.16 with a
 95% bootstrap range of [+0.12, +0.20] by task and [+0.05, +0.26] with each
 repository treated as one unit; Recall@5 +0.13, [+0.07, +0.19] by task;
 Recall@20 +0.04, [−0.01, +0.09] by task and [−0.07, +0.15] by repository, so
@@ -115,18 +125,18 @@ task).
 
 ### By task type, and by split
 
-Oko 0.6.1, with 0.6.0 in brackets:
+Oko 0.7.0, with 0.6.1 in brackets:
 
 | Task | n | Oko R@5 | RepoMap R@5 | Oko R@20 | RepoMap R@20 | Oko MRR | RepoMap MRR |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Failing test → broken file | 101 | 0.79 (0.78) | 0.46 | 0.86 (0.90) | 0.85 | 0.70 (0.69) | 0.27 |
-| Review comment → context | 80 | 0.25 (0.26) | 0.19 | 0.55 (0.53) | 0.50 | 0.24 (0.24) | 0.16 |
-| Pull request → tests to update | 106 | 0.35 (0.38) | 0.26 | 0.65 (0.66) | 0.56 | 0.25 (0.26) | 0.20 |
-| Edit → files it ripples into | 58 | 0.32 (0.29) | 0.36 | 0.60 (0.65) | 0.60 | 0.21 (0.19) | 0.23 |
-| All 345 | 345 | 0.45 (0.46) | 0.32 | 0.68 (0.70) | 0.64 | 0.37 (0.37) | 0.22 |
-| Held-out half | 181 | 0.42 (0.43) | 0.34 | 0.66 (0.68) | 0.64 | 0.33 (0.33) | 0.21 |
-| Dev half | 164 | 0.48 (0.48) | 0.30 | 0.70 (0.72) | 0.63 | 0.43 (0.41) | 0.22 |
-| Without gin-gonic/gin | 257 | 0.34 (0.35) | 0.27 | 0.59 (0.61) | 0.55 | 0.27 (0.27) | 0.19 |
+| Failing test → broken file | 101 | 0.78 (0.79) | 0.46 | 0.87 (0.86) | 0.85 | 0.70 (0.70) | 0.27 |
+| Review comment → context | 80 | 0.24 (0.25) | 0.19 | 0.54 (0.55) | 0.50 | 0.24 (0.24) | 0.16 |
+| Pull request → tests to update | 106 | 0.36 (0.35) | 0.26 | 0.64 (0.65) | 0.56 | 0.25 (0.25) | 0.20 |
+| Edit → files it ripples into | 58 | 0.29 (0.32) | 0.36 | 0.61 (0.60) | 0.60 | 0.20 (0.21) | 0.23 |
+| All 345 | 345 | 0.44 (0.45) | 0.32 | 0.68 (0.68) | 0.64 | 0.37 (0.37) | 0.22 |
+| Held-out half | 181 | 0.42 (0.42) | 0.34 | 0.67 (0.66) | 0.64 | 0.33 (0.33) | 0.21 |
+| Dev half | 164 | 0.47 (0.48) | 0.30 | 0.69 (0.70) | 0.63 | 0.42 (0.43) | 0.22 |
+| Without gin-gonic/gin | 257 | 0.33 (0.34) | 0.27 | 0.59 (0.59) | 0.55 | 0.27 (0.27) | 0.19 |
 
 Oko is strongest when the signal is an error message and weakest on the ripple
 task, where RepoMap's import graph helps and Oko's one-hop links do not reach
@@ -150,8 +160,8 @@ SWE-bench Multilingual (182), across 64 repositories in ten languages. The
 answer for each issue is the code that successful agents read while fixing it,
 as line regions (4.3 files and 4.7 regions per issue on average), and an
 explorer returns five ranked regions. We ran the benchmark's scorer at commit
-`5602f031` once per release (0.6.1: commit `5f3afad` with `jev-1.13.0`, all 848
-answered; 0.6.0: commit `3f7809b`, 847 of 848 answered, the one failure hit the
+`5602f031` once per release (0.7.0: commit `da83b98` with `jev-1.13.0`, all 848
+answered; 0.6.1: commit `5f3afad`, all 848 answered; 0.6.0: commit `3f7809b`, 847 of 848 answered, the one failure hit the
 response-size cap, fixed in the next commit), and its own BM25 and TF-IDF explorers
 on the same inputs; ours match the paper's Table 6 within 0.01. Agent rows are
 the paper's. Nothing was tuned on this benchmark.
@@ -162,7 +172,8 @@ the paper's. Nothing was tuned on this benchmark.
 | Mini-SWE-Agent (agent, published) | 0.64 | | 0.53 | | 0.89 | |
 | LocAgent (agent, published) | 0.54 | | 0.64 | | 0.95 | |
 | CoSIL (agent, published) | 0.54 | | 0.58 | | 0.82 | |
-| **Oko 0.6.1, one call** | 0.40 | 0.34 | 0.56 | 0.18 | 0.81 | 0.89 |
+| **Oko 0.7.0, one call** | 0.40 | 0.34 | 0.56 | 0.18 | 0.82 | 0.89 |
+| Oko 0.6.1, one call | 0.40 | 0.34 | 0.56 | 0.18 | 0.81 | 0.89 |
 | Oko 0.6.0, one call | 0.40 | 0.35 | 0.56 | 0.17 | 0.81 | 0.89 |
 | Oko 0.5.0, one call | 0.41 | 0.34 | 0.52 | 0.15 | 0.81 | 0.84 |
 | AutoCodeRover (agent, published) | 0.28 | | 0.68 | | 0.72 | |
@@ -176,7 +187,8 @@ precision Oko sits in the agents' tier; on covering all of an issue's files it
 does not, because five regions from one call cannot reach 4.3 files. In 0.6.0
 its first region was in a right file 87% of the time (0.5.0: 83%). 0.6.1
 matches 0.6.0 within 0.01 on every measure (line recall 0.172 → 0.177, context
-efficiency 0.70 → 0.71). Ordering the five
+efficiency 0.70 → 0.71), and 0.7.0 matches 0.6.1 within 0.01 on every measure
+(nDCG 0.809 → 0.816, first useful hit 0.887 → 0.895). Ordering the five
 slots so that each names a different file raised "right file" to 0.50 on 0.5.0
 but halved precision, since the second to fifth files are usually wrong; we
 report the by-score ordering. From 0.5.0 to 0.6.0, precision, recall and the
@@ -188,8 +200,10 @@ and TF-IDF score near zero there, because their chunker stops at 3,000 chunks
 per repository); Pro 0.26, level with 0.5.0 on precision (0.55) but lower on
 right file (0.29) and context efficiency (0.78 → 0.72). 0.6.1 by source:
 Verified 0.46 right file with precision 0.60, Pro 0.26 with 0.54, Multilingual
-0.41 with 0.50.
+0.41 with 0.50; 0.7.0 by source: Verified 0.46 with 0.59, Pro 0.26 with 0.54,
+Multilingual 0.41 with 0.52.
 Raw rows are in
+[`benchmarks/published/0.7.0/swe-explore/`](../benchmarks/published/0.7.0/swe-explore/),
 [`benchmarks/published/0.6.1/swe-explore/`](../benchmarks/published/0.6.1/swe-explore/),
 [`benchmarks/published/0.6.0/swe-explore/`](../benchmarks/published/0.6.0/swe-explore/)
 and, for 0.5.0 and the baselines,
@@ -200,12 +214,57 @@ and, for 0.5.0 and the baselines,
 [Sense](https://github.com/luuuc/sense) is a code-search MCP server with its own
 public agent benchmark: six multi-step tasks on Axum, Discourse, Flask, Gin,
 Javalin and Next.js, each answered by Claude Opus 4.7 with a budget and a time
-limit ($1.00–2.25, 320–720 s). We ran it at Sense's commit `a678631` with both
+limit ($1.00–2.25, 320–720 s). Scoring and the Opus 4.7 judge are the harness's.
+
+### Latest run: Oko 0.7.0, Oko 0.6.1 and Sense (September 2026)
+
+The README reports this run. On 30 September we ran the harness at Sense's
+commit `a678631` with three setups in turn, task by task, five runs per task
+each (90 sessions): Oko with the prompt hook (commit `ecb006a`; later commits
+change only setup, metrics, docs and benchmark scripts), the Oko 0.6.1 release binary,
+both installed in the image with `oko setup --client claude`, and Sense's own
+image. All three ran on the harness's base image updated to Claude Code
+2.1.286, which waits for MCP servers before running the first prompt's hook.
+
+| | Oko 0.7.0 | Oko 0.6.1 | Sense |
+| --- | ---: | ---: | ---: |
+| **Cited recall** (the harness's headline) | **0.883** | 0.683 | 0.625 |
+| **B-score** (0.55 cited + 0.25 related + 0.20 grounded) | **0.922** | 0.764 | 0.727 |
+| Related (relation stated correctly) | **0.943** | 0.752 | 0.733 |
+| Grounded precision (no false claims) | 1.000 | 1.000 | 1.000 |
+| Sessions finished within budget and time | **30** | 28 | 21 |
+| Model cost, 30 sessions | **$25.19** | $27.67 | $50.55 |
+| Mean time per session | **161 s** | 170 s | 212 s |
+| Tool calls per session | **6.7** | 9.0 | 32.1 |
+| Whole-file reads per session | **0.7** | 1.6 | 12.5 |
+| Model input tokens, 30 sessions (cache reads included) | **8.99M** | 11.96M | 28.84M |
+| Model output tokens, 30 sessions | 382k | 340k | **314k** |
+| Billed tokens per session (the harness's: uncached input and output) | 12,760 | 11,348 | **10,512** |
+
+Cited recall and related come from the Discourse task alone (24 locations),
+five runs each. Per run, Oko scored 0.88, 0.88, 0.83, 0.96 and 0.88; 0.6.1
+scored 0.88, 0.88, 0.83, 0.83 and one session that ran to the time limit and
+scored 0; Sense scored 0.79, 0.83, 0.62 and 0.88 (three of them over budget)
+and one session that ran to the time limit. Most of the new build's lead over
+0.6.1 is that one session: counting finished sessions only, it is 0.883 against
+0.854. Across all six tasks Sense went over its budget in 8 of 30 sessions and
+ran to the time limit in one; the harness scores what those sessions wrote.
+
+Oko's agent wrote longer answers (more output tokens, so more billed tokens by
+the harness's count) and read far less: 7.8M cache-read tokens against Sense's
+27.1M. Jev usage was not recorded in this run; from the searches made it was
+about $0.31 for Oko 0.7.0 and $0.34 for 0.6.1 at TypeSafe's listed $42 per
+billion input tokens. Later runs record it. The transcripts do not show a
+prompt hook's context, so we checked separately, with a stand-in model API in
+the same image, that the first model request carries Oko's answer.
+
+### Previous paired run: Oko 0.6.0 and Sense (September 2026)
+
+We ran it at Sense's commit `a678631` with both
 tools on the same day, five runs per task each (60 sessions, the harness's own
 protocol), with Oko 0.6.0 (commit `3f7809b` with the Claude Code hooks that
 0.6.0 ships, installed with `oko setup`'s guidance; the response-size fix came
-one commit later) and Sense's own image. Scoring and the
-Opus 4.7 judge are the harness's.
+one commit later) and Sense's own image.
 
 | | Oko 0.6.0 | Sense |
 | --- | ---: | ---: |
@@ -238,7 +297,8 @@ of every dependent with `path:line`, which Sense answered with its call graph.
 Sense's authors have since frozen this benchmark in favour of an internal one
 that is not public.
 
-**0.6.1.** We did not rerun the comparison against Sense. On two of the six
+**0.6.1, two tasks.** Before the latest run above, 0.6.1 was compared only with
+the 0.6.0 build. On two of the six
 tasks (Axum and Discourse, five runs each, the harness's image with Claude Code
 2.1.281), 0.6.1 (`5f3afad`) and the build of the paired run above ran
 alternately the same evening. On Discourse, counting the sessions that finished
@@ -251,9 +311,66 @@ lot, which is why the table above stays as it was measured.
 
 ## Agent sessions
 
-## Latest run: 243 sessions, Oko 0.6.1 (September 2026)
+## Latest run: 324 sessions, Oko 0.7.0 (September 2026)
 
-The README reports this run. Same tasks, clients, models, repeats and three
+The README reports this run. Same tasks, clients, models and repeats as before,
+with four setups: **without Oko**, **Oko**, **Oko with the guidance `oko setup`
+installs**, and **Oko with that guidance and setup's prompt hook**, which is
+what `oko setup` now installs (the other Claude Code hooks are not part of
+these sessions). The README compares the first and the last. A warm disk index
+is excluded from timing. Claude Code and Codex ran on 30 September on commit
+`498dd4e` (216 sessions, Claude Code 2.1.285, Codex CLI 0.155.0); OpenCode ran
+the same day on commit `ecb006a` (108 sessions, OpenCode 1.18.31), which adds
+OpenCode's prompt hook. Later commits change only setup, metrics, docs and
+benchmark scripts.
+
+Pass rates (without Oko, Oko, guidance, prompt hook): Codex 26/27, 26/27, 27/27,
+27/27; OpenCode 27/27 in all four; Claude Code 26/27, 24/27, 24/27, 25/27. The
+eleven failures: eight astro-forwarded-empty edits that also changed the
+duplicate definition in `validate-headers.ts` (Codex once without Oko; Claude
+Code twice with Oko, three times with guidance and twice with the prompt hook),
+one Claude Code edit with Oko that also changed `crates/matcher/src/lib.rs`
+(ripgrep-capture-hyphen), one Codex answer with Oko that missed one of three
+locations (ripgrep-printed-bytes), and one Claude Code answer without Oko citing
+a line past the end of a file.
+
+Mean seconds, agent tokens, and tool calls per session (27 sessions per cell):
+
+| Client | Without Oko | Oko | Oko + guidance | Oko + guidance + prompt hook |
+| --- | --- | --- | --- | --- |
+| Codex — seconds | 48.2 | 40.8 | 34.4 | 25.8 |
+| Codex — agent tokens | 72,247 | 49,558 | 48,019 | 28,751 |
+| Codex — tool calls | 3.52 | 2.07 | 1.70 | 0.89 |
+| OpenCode — seconds | 25.7 | 21.7 | 18.3 | 13.1 |
+| OpenCode — agent tokens | 28,513 | 17,915 | 16,341 | 10,624 |
+| OpenCode — tool calls | 5.48 | 2.74 | 1.85 | 0.74 |
+| Claude Code — seconds | 12.0 | 8.1 | 7.1 | 5.0 |
+| Claude Code — agent tokens | 56,513 | 35,751 | 36,406 | 22,008 |
+| Claude Code — tool calls | 4.44 | 2.15 | 1.85 | 0.67 |
+
+What the prompt hook changed:
+
+- **The first model round already has the code.** The hook answered every
+  prompt in these sessions (81 of 81), in about 0.4 s at the median, with one
+  Jev request of about 13,800 input tokens. Against guidance alone, model
+  rounds per session fell from 2.85 to 1.67 for Claude Code and from 2.85 to
+  1.74 for OpenCode, and the agent's own Oko searches from 1.22 to 0.07 per
+  session (Claude Code), 1.22 to 0.37 (Codex) and 1.30 to 0.30 (OpenCode).
+  63 of the 81 sessions made no Oko call.
+- **Tokens fell a further 35–40%** against guidance alone (Claude Code −40%,
+  Codex −40%, OpenCode −35%), and time 25–30%. Each model round re-reads the
+  conversation so far, so one round fewer saves a large share of a session's
+  tokens.
+- **Not every task gained.** Against guidance alone, tokens rose on four
+  task–tool pairs: ripgrep-printed-bytes for Claude Code (+18%) and OpenCode
+  (+9%), astro-image-probe-authorization for Codex (+12%) and
+  ripgrep-capture-expansion for Codex (+7%, and 18% slower).
+- **Codex sessions without Oko took longer** than in the 0.6.1 run (48.2 s,
+  against 25.1 s), so compare setups within a run, not across runs.
+
+## Previous run: 243 sessions, Oko 0.6.1 (September 2026)
+
+The 0.6.1 release reported this run. Same tasks, clients, models, repeats and three
 setups as before: **without Oko**, **Oko**, and **Oko with the guidance `oko
 setup` installs** (the Claude Code hooks are not part of these sessions), with
 a warm disk index excluded from timing. Measured on commit `5f3afad` (the

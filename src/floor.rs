@@ -450,7 +450,7 @@ pub fn identifiers(question: &str) -> Vec<String> {
     found
 }
 
-const FILE_EXTENSIONS: &[&str] = &[
+pub const FILE_EXTENSIONS: &[&str] = &[
     "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "rs", "go", "java", "kt", "cs", "php",
     "swift", "scala", "json", "md", "yml", "yaml", "toml", "html", "css", "scss", "vue", "svelte",
 ];

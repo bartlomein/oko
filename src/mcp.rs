@@ -34,6 +34,16 @@ const JEV_PATIENCE: Duration = Duration::from_secs(4);
 // of those it did not accept costs a line each and lets an agent that needs
 // more open the right file instead of starting a blind search.
 const OTHER_CANDIDATES: usize = 6;
+/// A prefetch runs while the user waits for the agent to start.
+const PREFETCH_PATIENCE: Duration = Duration::from_millis(2_500);
+/// Room kept beside the answer for the header and its tags.
+const PREFETCH_WRAPPING_CHARS: usize = 40;
+/// A prompt that names code the ranker rejected still gets a pointer to
+/// candidates it rated at least this high.
+const PREFETCH_NEAR: f64 = 0.35;
+/// A name defined in more places than this is too common to stand for the
+/// prompt's subject ("config", "handler").
+const PREFETCH_MAX_DEFINITIONS: usize = 3;
 // Below this Jev considers a candidate irrelevant; listing it would mislead.
 const OTHER_CANDIDATE_FLOOR: f64 = 0.2;
 
@@ -135,6 +145,12 @@ struct SearchInput {
     deep: bool,
     /// Deep only: 1-5 steps, default 5.
     max_steps: Option<usize>,
+    /// Set only by the prompt-submit hook, to the client's session id: the
+    /// question is the user's prompt, answered as hook context before the
+    /// agent's first turn. Left out of the schema the agent sees.
+    #[serde(default)]
+    #[schemars(skip)]
+    prefetch: Option<String>,
 }
 
 /// What this server has already sent in the session, so a repeat can be a
@@ -157,6 +173,11 @@ struct Memory {
     excerpts: std::collections::HashMap<(String, usize, usize, u64), (usize, usize)>,
     /// Listing key (`listing:Upload`, `usedby:Upload`) → `(bytes, calls)`.
     listings: std::collections::HashMap<String, (usize, usize)>,
+    /// The client session the prompt-submit hook last named: a new one
+    /// (after `/clear`) starts from nothing.
+    session: Option<String>,
+    /// The last prompt prefetched, hashed: a resent prompt is not searched twice.
+    last_prefetch: Option<u64>,
 }
 /// Output after which an earlier answer may no longer be in the agent's
 /// context (about 30,000 tokens; OpenCode keeps the last 40,000 tokens of tool
@@ -449,6 +470,9 @@ impl OkoServer {
     }
 
     fn search(&self, input: SearchInput, cancelled: impl Fn() -> bool) -> Result<CallToolResult> {
+        if input.prefetch.is_some() {
+            return Ok(self.prefetch(input, &cancelled));
+        }
         let flight = Flight::begin(&self.in_flight, &self.started);
         let started = Instant::now();
         let (input, early_notes) = normalize(input);
@@ -519,6 +543,8 @@ impl OkoServer {
             key,
             flight: &flight,
             cancelled: &cancelled,
+            lean: false,
+            names: None,
         };
         let mut found = match Route::of(&input, &questions, &symbols, question) {
             Route::Deep => self.deep(&ask)?,
@@ -588,6 +614,227 @@ impl OkoServer {
             explicit,
             found.pending,
         )
+    }
+
+    /// The prompt-submit hook's call: the user's prompt answered before the
+    /// agent's first turn, as hook JSON. Never an error: a prefetch that
+    /// cannot help adds nothing, and the agent searches as it would have.
+    fn prefetch(&self, mut input: SearchInput, cancelled: &dyn Fn() -> bool) -> CallToolResult {
+        let started = Instant::now();
+        let value = input.prefetch.take().unwrap_or_default();
+        let (client, session) = oko::prefetch::client_session(&value);
+        let prompt = input.question.take().unwrap_or_default();
+        let context = match self.prefetch_answer(client, session, &prompt, started, cancelled) {
+            Ok(Prefetched::Context(context)) => Some(context),
+            Ok(Prefetched::Nothing(reason)) => {
+                record_prefetch_skip(&prompt, reason, None, None, started);
+                None
+            }
+            Ok(Prefetched::Rejected(retrieval)) => {
+                record_prefetch_skip(&prompt, "nothing relevant", None, retrieval, started);
+                None
+            }
+            Err(error) => {
+                record_prefetch_skip(&prompt, "error", Some(&error.to_string()), None, started);
+                None
+            }
+        };
+        CallToolResult::success(vec![ContentBlock::text(oko::prefetch::hook_json(
+            context.as_deref(),
+        ))])
+    }
+
+    fn prefetch_answer(
+        &self,
+        client: &str,
+        session: &str,
+        prompt: &str,
+        started: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Prefetched> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        prompt.trim().hash(&mut hasher);
+        let hash = hasher.finish();
+        {
+            let mut memory = lock_memory(&self.memory);
+            memory.expire();
+            if !session.is_empty() && memory.session.as_deref() != Some(session) {
+                if memory.session.is_some() {
+                    *memory = Memory::default();
+                }
+                memory.session = Some(session.to_owned());
+            }
+            if memory.last_prefetch == Some(hash) {
+                return Ok(Prefetched::Nothing("repeat"));
+            }
+            memory.last_prefetch = Some(hash);
+        }
+        let read = match oko::prefetch::read(prompt) {
+            Ok(read) => read,
+            Err(reason) => return Ok(Prefetched::Nothing(reason)),
+        };
+        let key = if self.no_jev {
+            None
+        } else {
+            match super::api_key(&self.root)? {
+                Some(key) => Some(key),
+                None => return Ok(Prefetched::Nothing("no key")),
+            }
+        };
+        let flight = Flight::begin(&self.in_flight, &self.started);
+        let wait_started = Instant::now();
+        let mut cache = self.cache.lock().map_err(|_| {
+            anyhow::anyhow!("Search cache worker failed. Restart the server and retry.")
+        })?;
+        let cache_wait_ms = wait_started.elapsed().as_millis() as u64;
+        let workspace = cache.load(&self.root)?;
+        drop(cache);
+        let snapshot = workspace.snapshot;
+        let corpus = snapshot.chunks();
+        // Names and paths the index knows make a prompt strong; a code
+        // question in words is judged by Jev alone. A name counts as written
+        // (`Client.send`, never any `send`) and only when it is not common.
+        let navigation = snapshot.navigation();
+        let names: Vec<String> = read
+            .names
+            .iter()
+            .filter(|name| {
+                let dotted = name.replace("::", ".").replace('#', ".");
+                (1..=PREFETCH_MAX_DEFINITIONS).contains(&navigation.lookup_qualified(&dotted).len())
+            })
+            .cloned()
+            .collect();
+        let named_pins = if names.is_empty() {
+            Vec::new()
+        } else {
+            oko::floor::pins_for_names(&names, navigation, corpus).pins
+        };
+        let names_file = read.paths.iter().any(|path| {
+            corpus
+                .iter()
+                .any(|chunk| chunk.path == *path || chunk.path.ends_with(&format!("/{path}")))
+        });
+        let strong = !named_pins.is_empty() || names_file;
+        if !(strong || read.code_shaped && !self.no_jev) {
+            return Ok(Prefetched::Nothing("not code"));
+        }
+        if cancelled() {
+            return Ok(Prefetched::Nothing("cancelled"));
+        }
+        let input = SearchInput {
+            question: Some(read.question.clone()),
+            symbols: None,
+            mode: None,
+            questions: None,
+            directory: None,
+            intent: Intent::default(),
+            deep: false,
+            max_steps: None,
+            prefetch: None,
+        };
+        let question = read.question.as_str();
+        let scans = oko::usages::Scans::new(corpus);
+        let ask = Ask {
+            input: &input,
+            question,
+            questions: &[],
+            symbols: &[],
+            scope: "the workspace",
+            directory: &self.root,
+            snapshot: &snapshot,
+            scans: &scans,
+            key,
+            flight: &flight,
+            cancelled,
+            lean: true,
+            names: Some(&names),
+        };
+        let route = Route::of(&input, &[], &[], question);
+        let mut found = self.single(&ask, route)?;
+        // Keyword order is not a judgement: without Jev's, only the
+        // definitions the prompt names are shown.
+        let judged = !self.no_jev && found.lexical_fallback.is_none();
+        if !judged {
+            found.winners.clear();
+        }
+        let answers = !found.winners.is_empty()
+            || !named_pins.is_empty()
+            || (found.direct.is_some() && strong);
+        if !answers {
+            if strong && judged {
+                let near: Vec<String> = found
+                    .runners_up
+                    .iter()
+                    .filter(|(_, score)| *score >= PREFETCH_NEAR)
+                    .take(3)
+                    .map(|(chunk, _)| {
+                        format!("`{}:{}-{}`", chunk.path, chunk.start_line, chunk.end_line)
+                    })
+                    .collect();
+                if !near.is_empty() {
+                    let pointer = oko::prefetch::pointer(&near);
+                    record_metrics(&json!({"prefetch": {"decision": "pointer",
+                        "client": client, "session": session,
+                        "injectedChars": pointer.chars().count()},
+                        "question": prefix(question, 512), "retrieval": found.retrieval.take(),
+                        "timings": {"totalMs": started.elapsed().as_millis() as u64}}));
+                    return Ok(Prefetched::Context(pointer));
+                }
+            }
+            return Ok(Prefetched::Rejected(found.retrieval.take()));
+        }
+        if cancelled() {
+            return Ok(Prefetched::Nothing("cancelled"));
+        }
+        let context_started = Instant::now();
+        let notes = self.notes(&ask, &mut found, &workspace.timings, None);
+        let metadata = json!({"question": prefix(question, 512), "directory": self.root,
+            "ranking": if judged {"jev"} else {"lexical"},
+            "prefetch": {"decision": "inject", "client": client, "session": session, "strong": strong},
+            "retrieval": found.retrieval, "floor": found.floor, "focused": found.focused,
+            "timings": {"cacheWaitMs": cache_wait_ms, "scanMs": workspace.timings.scan_ms,
+                "shortlistMs": found.shortlist_ms, "cache": workspace.timings}});
+        let (max_results, _) = budget(0, found.slim_single, found.pins.len());
+        if found.slim_single {
+            found.winners.truncate(1);
+        }
+        let packet = oko::context::build_packet_for_questions(
+            corpus,
+            &found.winners,
+            &found.pins,
+            &found.runners_up,
+            question,
+            snapshot.navigation(),
+            max_results,
+        );
+        let explicit = found.direct.is_some() || flight.overlapping();
+        let result = packet_result(
+            metadata,
+            packet,
+            &notes,
+            &found.candidates,
+            found.direct.is_some(),
+            // JSON bytes are never fewer than the text's characters.
+            oko::prefetch::max_context_chars(client)
+                - oko::prefetch::HEADER.chars().count()
+                - PREFETCH_WRAPPING_CHARS,
+            started,
+            context_started,
+            &self.memory,
+            explicit,
+            found.pending,
+        )?;
+        let answer: String = result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
+            .collect();
+        let context = oko::prefetch::wrap(&answer);
+        if context.chars().count() > oko::prefetch::max_context_chars(client) {
+            bail!("prefetched answer over the hook limit");
+        }
+        Ok(Prefetched::Context(context))
     }
 
     /// `deep`: Jev chooses further searches and reads.
@@ -684,10 +931,12 @@ impl OkoServer {
         };
         // Definitions the question names lead the shortlist and are shown
         // even if the ranker rejects them.
-        let named = if ask.symbols.is_empty() {
-            oko::floor::floor(ask.question, ask.snapshot.navigation(), ask.corpus())
-        } else {
+        let named = if !ask.symbols.is_empty() {
             oko::floor::pins_for_names(ask.symbols, ask.snapshot.navigation(), ask.corpus())
+        } else if let Some(names) = ask.names {
+            oko::floor::pins_for_names(names, ask.snapshot.navigation(), ask.corpus())
+        } else {
+            oko::floor::floor(ask.question, ask.snapshot.navigation(), ask.corpus())
         };
         if asks_unused(ask.input, ask.question) {
             // Uses are counted over the whole workspace; only the candidates
@@ -839,13 +1088,21 @@ impl OkoServer {
             } else {
                 super::Reranker::Jev {
                     key: ask.key.clone(),
-                    patience: Some(jev_patience()),
+                    patience: Some(if ask.lean {
+                        PREFETCH_PATIENCE
+                    } else {
+                        jev_patience()
+                    }),
+                    recover: !ask.lean,
                 }
             },
             input.intent.into(),
             || {
                 if (ask.cancelled)() {
                     bail!("Search cancelled.");
+                }
+                if ask.lean {
+                    return Ok(super::Further::default());
                 }
                 Ok(super::further_candidates(
                     ask.snapshot,
@@ -1001,6 +1258,7 @@ impl OkoServer {
                                 super::Reranker::Jev {
                                     key,
                                     patience: Some(jev_patience()),
+                                    recover: true,
                                 }
                             },
                             intent,
@@ -1240,6 +1498,12 @@ struct Ask<'a> {
     key: Option<String>,
     flight: &'a Flight,
     cancelled: &'a dyn Fn() -> bool,
+    /// A prefetch: one Jev request with a shorter patience, no side
+    /// requests for connected files and further keyword matches.
+    lean: bool,
+    /// A prefetch: the names pinned are the prompt's own, as written, not
+    /// every word of the question that happens to name a definition.
+    names: Option<&'a [String]>,
 }
 impl Ask<'_> {
     fn corpus(&self) -> &[search::Chunk] {
@@ -1741,6 +2005,30 @@ fn listing_stub(qualified: &str, files: usize) -> String {
         "Files using {qualified}: listed in an earlier answer ({files} files). Not repeated; ask \"who uses {}\" to list them again.\n",
         qualified.rsplit('.').next().unwrap_or(qualified)
     )
+}
+
+/// What a prefetch adds to the prompt.
+enum Prefetched {
+    Context(String),
+    /// Nothing, and why: the metrics count the reasons.
+    Nothing(&'static str),
+    /// Ranked, and nothing was relevant: the ranking's calls are recorded.
+    Rejected(Option<Value>),
+}
+
+/// A prefetch that added nothing, for the metrics.
+fn record_prefetch_skip(
+    prompt: &str,
+    reason: &str,
+    error: Option<&str>,
+    retrieval: Option<Value>,
+    started: Instant,
+) {
+    record_metrics(
+        &json!({"prefetch": {"decision": "skip", "reason": reason, "error": error},
+        "question": prefix(prompt.trim(), 512), "retrieval": retrieval,
+        "timings": {"totalMs": started.elapsed().as_millis() as u64}}),
+    );
 }
 
 /// Append this search's metadata and structured packet as one JSON line.

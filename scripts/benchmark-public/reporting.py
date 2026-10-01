@@ -20,19 +20,24 @@ def render(data, clients, conditions):
             rows=[r for r in runs if r['client']==c and r['condition']==condition]
             if rows:lines.append(f"| {c} | {condition} | {passed(rows)}/{len(rows)} | {statistics.median(r['seconds'] for r in rows):.2f} | {summed(rows,'agentTokens','total')} |")
     lines+=['','All attempts, including failed grades, remain in timings. Compare within each client: models differ across clients.',
-            'Agent token totals are derived from recorded components, including provider cache reads/writes. Raw provider totals remain separate. Jev usage is additional and excluded from agent totals. These are not cost estimates.',
+            'Agent token totals are derived from recorded components, including provider cache reads/writes. Raw provider totals remain separate. Jev usage is additional and excluded from agent totals; the Components table gives it in full (requests, input, output, total), including the prompt hook\'s. These are not cost estimates.',
             'Fresh checkout and conversation per session; provider prompt caches are not cleared. Warm means a prebuilt disk index, not cached answers or a persistent MCP process. Offline warm-up is excluded from agent latency.',
             'Focused module checks do not establish full application correctness. Repeated trials are paired by task and repetition; task diversity is still limited.','',
             '## Components','',
-            '| Client | Condition | Uncached input | Cache reads | Cache writes | Output | Jev input / output | Median tools | Median model rounds | Median Oko seconds |',
-            '|---|---|---:|---:|---:|---:|---|---:|---:|---:|']
+            '| Client | Condition | Uncached input | Cache reads | Cache writes | Model input | Model output | Model total | Jev calls | Jev input | Jev output | Jev total | Median tools | Median model rounds | Median Oko seconds |',
+            '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     for c in clients:
         for condition in conditions:
             rows=[r for r in runs if r['client']==c and r['condition']==condition]
             if not rows:continue
-            tokens=[summed(rows,'agentTokens',k) for k in ('uncachedInput','cacheRead','cacheWrite','output')]
-            jev=[summed(rows,'jev',k) for k in ('inputTokens','outputTokens')]
-            lines.append(f"| {c} | {condition} | {' | '.join(map(str,tokens))} | {jev[0]} / {jev[1]} | {median(rows,'toolCalls')} | {median(rows,'modelRounds')} | {median(rows,'okoSearchSeconds')} |")
+            uncached,read,write,output,total=[summed(rows,'agentTokens',k) for k in ('uncachedInput','cacheRead','cacheWrite','output','total')]
+            model_input=uncached+read+write if all(isinstance(v,int) for v in (uncached,read,write)) else 'unavailable'
+            # Jev totals include the prompt hook's requests (prefetch), which belong to no tool call.
+            jev=[summed(rows,'jev',k) for k in ('totalCalls','totalInputTokens','totalOutputTokens','totalTokens')]
+            if all(v=='unavailable' for v in jev):
+                jev=[summed(rows,'jev',k) for k in ('calls','inputTokens','outputTokens')]+['unavailable']
+            cells=[uncached,read,write,model_input,output,total,*jev]
+            lines.append(f"| {c} | {condition} | {' | '.join(map(str,cells))} | {median(rows,'toolCalls')} | {median(rows,'modelRounds')} | {median(rows,'okoSearchSeconds')} |")
     lines+=['','Oko and Jev durations are nested work, not additive to agent wall time. Startup preparation, Jev durations, and offline warm-up are separate fields in JSON. Unknowns remain unavailable; Codex turn events do not expose model-round counts.','',
             '## Per-task medians','',f"| Repository | Task | Client | {' | '.join(conditions)} | Passed/attempted |",'|---|---|---|'+'---:|'*len(conditions)+'---:|']
     for name,task,client in dict.fromkeys((r['repository'],r['id'],r['client']) for r in runs):

@@ -258,6 +258,7 @@ fn provider_unavailable(calls: &[JevCallStats]) -> Option<&'static str> {
 /// reach the excerpts, the possible matches or the recovery call: what the
 /// agent is shown is decided by the shortlist alone. The ones Jev rates
 /// relevant are named in the list of other files.
+#[derive(Default)]
 pub(crate) struct Further {
     /// Files one hop from the strongest matches: tests, callers, definitions.
     pub connected: Vec<search::Chunk>,
@@ -358,6 +359,9 @@ pub(crate) enum Reranker {
         /// instead. `None` waits the default timeout and reports provider
         /// failures, so measurements never mistake keyword order for Jev's.
         patience: Option<std::time::Duration>,
+        /// When nothing passes, judge the first candidates again with fuller
+        /// previews. A prefetch skips it: the agent searches itself anyway.
+        recover: bool,
     },
 }
 
@@ -369,9 +373,13 @@ pub(crate) fn rank_code_with_stats(
     intent: RankingIntent,
     further: impl FnOnce() -> Result<Further>,
 ) -> Result<(Vec<CodeResult>, CodeRankingStats)> {
-    let (no_jev, key, patience) = match reranker {
-        Reranker::Lexical => (true, None, None),
-        Reranker::Jev { key, patience } => (false, key, patience),
+    let (no_jev, key, patience, recover) = match reranker {
+        Reranker::Lexical => (true, None, None, false),
+        Reranker::Jev {
+            key,
+            patience,
+            recover,
+        } => (false, key, patience, recover),
     };
     if !no_jev
         && key
@@ -502,7 +510,7 @@ pub(crate) fn rank_code_with_stats(
                 .iter()
                 .map(|(index, score)| listed(&further.keywords[*index], *score, false)),
         );
-        if ranking.results.is_empty() && !items.is_empty() {
+        if ranking.results.is_empty() && !items.is_empty() && recover {
             let recovery_started = Instant::now();
             let mut recovery: Vec<_> = chunks.iter().take(8).cloned().collect();
             recovery.extend(further.keywords.iter().take(8).cloned());
@@ -820,6 +828,7 @@ fn run() -> Result<()> {
                     Reranker::Jev {
                         key,
                         patience: None,
+                        recover: true,
                     }
                 },
                 parsed.intent,
