@@ -78,10 +78,11 @@ code question, Oko's answer is in the agent's context before its first turn, so
 it skips a round of searching. Start a new session afterwards. Repeat setup for
 each project.
 
-**In Codex, approve the hook once.** Codex runs no hook you have not reviewed:
-open the project in Codex (trust the project if prompted), type `/hooks`, and
-trust Oko's prompt hook. Codex asks once per project, and again only if a later
-Oko release changes the hook. Claude Code and OpenCode need no extra step.
+**In Codex, approve the hook once.** Codex runs no hook you have not reviewed.
+The first time you open the project after setup, it shows **Hooks need review**:
+choose **Trust all and continue** (or **Review hooks** to read Oko's first). It asks
+once per project, and again only if a later Oko release changes the hook. If you
+skipped it, `/hooks` brings it back. Claude Code and OpenCode need no extra step.
 
 For a key-free connection, add `--no-jev`. See [what setup changes](docs/mcp.md#set-up-a-project).
 The manual steps below do the same by hand, without the guidance.

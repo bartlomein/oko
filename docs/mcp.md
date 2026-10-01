@@ -88,7 +88,9 @@ mentioned later in the prompt. The added block is at most 8,000 characters, says
 it is Oko's answer to the prompt, and is remembered like any answer, so a later
 search stubs code it already showed. Claude Code and Codex call the running
 server from a hook in their settings; in Claude Code it reaches the main agent,
-not subagents, and in Codex you trust it once in `/hooks`. OpenCode has no prompt
+not subagents. Codex runs no hook you have not reviewed: the first session
+after setup shows **Hooks need review**, where **Trust all and continue** (or
+`/hooks` later) approves it once per project. OpenCode has no prompt
 hook in its configuration, so setup writes a small plugin,
 `.opencode/plugins/oko-prefetch.js` (gitignored), that keeps one Oko process of its
 own and gives up after 5 seconds; it also answers subagents' tasks. `--no-prefetch`

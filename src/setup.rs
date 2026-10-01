@@ -1012,7 +1012,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             "{}",
             match client {
                 Client::Codex =>
-                    "Codex project configuration saved. Open this project in Codex, trust it if prompted, and start a new session. Use /mcp to check the connection, and /hooks to trust Oko's prompt hook once.",
+                    "Codex project configuration saved. Open this project in Codex, trust it if prompted, and start a new session. When Codex shows \"Hooks need review\", choose \"Trust all and continue\" to turn on Oko's prompt hook (or use /hooks later). Use /mcp to check the connection.",
                 Client::Claude =>
                     "Claude Code connection added for this project and user, with its hooks and permission in .claude/settings.local.json. Start a new session and use /mcp to check it.",
                 Client::OpenCode =>
