@@ -170,18 +170,17 @@ pub fn read(prompt: &str) -> Result<Prompt, &'static str> {
     if text.chars().count() < MIN_PROMPT_CHARS {
         return Err("short");
     }
-    let plain = words(text).join(" ");
-    if ACKNOWLEDGEMENTS.contains(&plain.as_str()) {
+    let words = words(text);
+    if ACKNOWLEDGEMENTS.contains(&words.join(" ").as_str()) {
         return Err("acknowledgement");
     }
     let names = code_names(text);
     let paths = path_tokens(text);
-    let word_count = words(text).len();
     if names.is_empty() && paths.is_empty() {
-        if word_count <= 3 {
+        if words.len() <= 3 {
             return Err("few words");
         }
-        if words(text)
+        if words
             .first()
             .is_some_and(|word| CHORE_VERBS.contains(&word.as_str()))
         {
@@ -199,10 +198,8 @@ pub fn read(prompt: &str) -> Result<Prompt, &'static str> {
         question.push('\n');
         question.push_str(&missing.join(", "));
     }
-    let code_shaped = word_count >= CODE_SHAPED_WORDS
-        && words(text)
-            .iter()
-            .any(|word| CODE_WORDS.contains(&word.as_str()));
+    let code_shaped = words.len() >= CODE_SHAPED_WORDS
+        && words.iter().any(|word| CODE_WORDS.contains(&word.as_str()));
     Ok(Prompt {
         question,
         names,

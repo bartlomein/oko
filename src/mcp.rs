@@ -775,8 +775,9 @@ impl OkoServer {
                 if !near.is_empty() {
                     let pointer = oko::prefetch::pointer(&near);
                     record_metrics(&json!({"prefetch": {"decision": "pointer",
-                        "session": session, "injectedChars": pointer.chars().count()},
-                        "question": prefix(question, 512),
+                        "client": client, "session": session,
+                        "injectedChars": pointer.chars().count()},
+                        "question": prefix(question, 512), "retrieval": found.retrieval.take(),
                         "timings": {"totalMs": started.elapsed().as_millis() as u64}}));
                     return Ok(Prefetched::Context(pointer));
                 }
@@ -2006,7 +2007,6 @@ fn listing_stub(qualified: &str, files: usize) -> String {
     )
 }
 
-/// Append this search's metadata and structured packet as one JSON line.
 /// What a prefetch adds to the prompt.
 enum Prefetched {
     Context(String),
@@ -2031,6 +2031,7 @@ fn record_prefetch_skip(
     );
 }
 
+/// Append this search's metadata and structured packet as one JSON line.
 fn record_search(mut metadata: Value, packet: &oko::context::ContextPacket) {
     match serde_json::to_value(packet) {
         Ok(packet) => {

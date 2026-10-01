@@ -830,7 +830,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             &options.root,
             &rg,
             options.offline,
-            options.prefetch,
+            options.hooks && options.prefetch,
         )?;
         edits.push(Edit {
             path,

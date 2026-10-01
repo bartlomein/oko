@@ -656,6 +656,22 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
             .contains("mcp__oko__search")
     );
 }
+#[test]
+fn codex_prompt_hook_goes_with_no_prefetch_or_no_hooks() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let install = temp.path().join("bin");
+    fs::create_dir(&root).unwrap();
+    let config = root.join(".codex/config.toml");
+    for flag in ["--no-prefetch", "--no-hooks"] {
+        assert_ok(&setup(executable(), &root, &install, &["--no-jev"]));
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.contains("[[hooks.UserPromptSubmit]]"), "{text}");
+        assert_ok(&setup(executable(), &root, &install, &["--no-jev", flag]));
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(!text.contains("hooks"), "{flag}: {text}");
+    }
+}
 #[cfg(unix)]
 #[test]
 fn claude_prefetch_can_be_turned_off_and_leaves_the_other_hooks() {
