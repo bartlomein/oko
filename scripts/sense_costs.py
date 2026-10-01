@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Token and cost breakdown of a Sense-harness run, per column.
 
-  sense_costs.py LABEL=RESULTS_DIR [LABEL=RESULTS_DIR ...] [--jev-usd-per-million 0.042] [--json OUT]
+  sense_costs.py LABEL=RESULTS_DIR [LABEL=RESULTS_DIR ...] [--jev-usd-per-million 0.042]
+                 [--jev-output-usd-per-million 0] [--json OUT]
 
 For each session (RESULTS_DIR/<tool>/<repo>/run-N/) it reads:
 - transcript.json (Claude Code stream-json): the model's tokens from the final
@@ -12,8 +13,9 @@ For each session (RESULTS_DIR/<tool>/<repo>/run-N/) it reads:
   request with its input and output tokens; the prompt hook's (prefetch) apart.
 
 The harness's own report gives only the model's dollar cost; Jev is not in it.
-Jev cost uses the rate given (default: TypeSafe's list price as of 2026-09,
-about $42 per billion tokens). Sense makes no paid calls of its own.
+Jev cost uses the rates given. Defaults: TypeSafe's homepage price, $42 per
+billion input tokens (checked 2026-10-01); output is not priced there and
+reported free elsewhere. Sense makes no paid calls of its own.
 """
 import argparse
 import glob
@@ -95,7 +97,7 @@ def column(results_dir):
     return sessions
 
 
-def summarize(sessions, jev_rate):
+def summarize(sessions, jev_rate, jev_output_rate):
     def total(key):
         return sum(s['usage'][key] for s in sessions)
     uncached, write, read, output = (total(k) for k in (
@@ -106,7 +108,7 @@ def summarize(sessions, jev_rate):
     jev_in = jev['agentInput'] + jev['hookInput']
     jev_out = jev['agentOutput'] + jev['hookOutput']
     model_cost = sum(s['cost'] or 0 for s in sessions)
-    jev_cost = (jev_in + jev_out) / 1e6 * jev_rate
+    jev_cost = jev_in / 1e6 * jev_rate + jev_out / 1e6 * jev_output_rate
     return {
         'sessions': len(sessions), 'estimatedSessions': sum(s['estimated'] for s in sessions),
         'model': {'uncachedInput': uncached, 'cacheWrite': write, 'cacheRead': read,
@@ -149,19 +151,22 @@ def render(columns):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('columns', nargs='+', metavar='LABEL=RESULTS_DIR')
-    parser.add_argument('--jev-usd-per-million', type=float, default=0.042)
+    parser.add_argument('--jev-usd-per-million', type=float, default=0.042, help='Jev input price')
+    parser.add_argument('--jev-output-usd-per-million', type=float, default=0.0, help='Jev output price')
     parser.add_argument('--json', help='Also write the per-session and summary numbers here')
     args = parser.parse_args(argv)
     sessions, columns = {}, {}
     for item in args.columns:
         label, _, path = item.partition('=')
         sessions[label] = column(path)
-        columns[label] = summarize(sessions[label], args.jev_usd_per_million)
+        columns[label] = summarize(sessions[label], args.jev_usd_per_million, args.jev_output_usd_per_million)
     print(render(columns))
-    print(f'\nJev cost at ${args.jev_usd_per_million} per million tokens. Model cost is what Claude Code reports;'
+    print(f'\nJev cost at ${args.jev_usd_per_million} per million input tokens and '
+          f'${args.jev_output_usd_per_million} per million output tokens. Model cost is what Claude Code reports;'
           ' for a session killed before reporting it, the harness\'s estimate from its tokens.')
     if args.json:
-        json.dump({'columns': columns, 'sessions': sessions, 'jevUsdPerMillion': args.jev_usd_per_million},
+        json.dump({'columns': columns, 'sessions': sessions, 'jevUsdPerMillion': args.jev_usd_per_million,
+                   'jevOutputUsdPerMillion': args.jev_output_usd_per_million},
                   open(args.json, 'w'), indent=1)
     return 0
 
