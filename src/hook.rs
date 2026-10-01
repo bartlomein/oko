@@ -36,7 +36,15 @@ pub fn run(args: &[String]) -> Result<()> {
     };
     let mut input = String::new();
     let _ = std::io::stdin().take(1 << 20).read_to_string(&mut input);
-    let answer = respond(event, &input, &state_directory()).unwrap_or(None);
+    let mut answer = respond(event, &input, &state_directory()).unwrap_or(None);
+    // Shown to the user, not the agent: a newer Oko, from the daily check.
+    if event == "session-start"
+        && let Some(notice) = crate::update::notice()
+    {
+        let mut value = answer.unwrap_or_else(|| json!({}));
+        value["systemMessage"] = json!(notice);
+        answer = Some(value);
+    }
     println!("{}", answer.unwrap_or_else(|| json!({})));
     Ok(())
 }

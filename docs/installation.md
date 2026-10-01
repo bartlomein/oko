@@ -4,8 +4,6 @@
 
 ## Install script
 
-Once the repository and release are public:
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -19,21 +17,20 @@ less install-oko.sh
 sh install-oko.sh
 ```
 
-The installer defaults to `v0.7.0`, including when that version is published as a
-prerelease. It does not rely on GitHub’s latest stable release endpoint. A draft
-or private release is not anonymously downloadable.
+The installer defaults to `v0.7.1`, the release it was published with. A draft or
+private release is not anonymously downloadable.
 
 To select a version or custom absolute installation paths, set these variables
 on the `sh` process (not on `curl`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh |
-  OKO_VERSION=v0.7.0 sh
+  OKO_VERSION=v0.7.1 sh
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKO_VERSION` | `v0.7.0` | Published release to download; the `v` prefix is optional. |
+| `OKO_VERSION` | `v0.7.1` | Published release to download; the `v` prefix is optional. |
 | `OKO_INSTALL_DIR` | `~/.local/share/oko` | Version directories containing binaries and license notices. |
 | `OKO_BIN_DIR` | `~/.local/bin` | Directory containing the `oko` symlink. |
 
@@ -64,7 +61,7 @@ Download the matching archive and `SHA256SUMS` from
 In the download directory, substitute your chosen filename:
 
 ```sh
-archive=oko-v0.7.0-aarch64-apple-darwin.tar.gz
+archive=oko-v0.7.1-aarch64-apple-darwin.tar.gz
 grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
 tar -xzf "$archive" &&
 "./${archive%.tar.gz}/oko" --version
@@ -98,14 +95,42 @@ Return to [connect your coding tool](../README.md#connect-your-coding-tool).
 
 ## Upgrade
 
-Rerun the installer with `OKO_VERSION` set to the new published version. For a
-manual installation, download and verify the new archive. For a source
-installation, update your checkout and rerun `cargo install`.
+```sh
+oko upgrade
+```
 
-Setup keeps its own stable copy: run the newly installed `oko setup` (with the same
-`--client`) in each configured project to update it. Start a new agent session so it launches the
-updated server. If your client keeps an old server running, reconnect its MCP
-connection or restart the client. Saved credentials are separate from the binary.
+`oko upgrade` finds the latest release on GitHub, downloads it, and checks it
+the way the install script does (the archive against the release's
+`SHA256SUMS`, no paths outside its folder, the right version). Then it:
+
+1. points the `oko` command the install script put on your PATH at the new
+   release (other installations are left for you to update the way you
+   installed them);
+2. replaces the copy `oko setup` installed, which every connected project runs,
+   so they all use the new version from their next session;
+3. reruns the new version's setup, quietly, on every project set up with that
+   copy, with the same tools and options, so new hooks and guidance reach them.
+   Setup lists each project it sets up in `projects.json` beside that copy; a
+   project whose folder is gone is dropped from the list.
+
+Start new agent sessions afterwards; open ones keep the old version until
+restarted. On macOS, the first run of the new copy may ask to read your saved
+TypeSafe key: choose **Always Allow**. Saved credentials are separate from the
+binary. Projects set up before 0.7.1 are not on the list: they use the new copy
+anyway, but rerun `oko setup` in each once so later upgrades refresh them too.
+For a copy set up with `--install-dir`, run `oko upgrade --install-dir` with the
+same directory.
+
+**Update notice.** At most once a day, Oko asks GitHub for the latest release
+number, nothing else, and says when a newer one is out: after a command you
+run in a terminal, and in Claude Code at the start of a session. A failed check
+stays silent. There is no check in CI, with `--no-jev`, or with
+`OKO_NO_UPDATE_CHECK=1`.
+
+Without `oko upgrade` (before 0.7.1, or for a manual installation): rerun the
+install script, then run `oko setup` (with the same `--client`) in each
+configured project. For a source installation, update your checkout, rerun
+`cargo install`, then rerun setup.
 
 ### Prompt hook
 
@@ -114,6 +139,12 @@ connection or restart the client. Saved credentials are separate from the binary
 context before its first turn, so it skips a round of searching. Other prompts get
 nothing. `--no-prefetch` leaves it out. See [the MCP guide](mcp.md) for how it
 decides.
+
+### Upgrading to 0.7.1
+
+Reinstall once with the install script, then rerun `oko setup` in each project:
+that lists the project for `oko upgrade`, which from now on does both steps in
+one command. Nothing else changes in your configuration.
 
 ### Upgrading to 0.7.0
 

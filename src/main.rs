@@ -4,6 +4,7 @@ mod config;
 mod hook;
 mod mcp;
 mod setup;
+mod update;
 
 use anyhow::{Context, Result, bail};
 use oko::ranking::{self, JevCallStats};
@@ -12,7 +13,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::{env, fs::File, io::Read, path::Path, time::Instant};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY] [--no-jev]\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general|callers] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY] [--no-jev]\n       oko upgrade\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general|callers] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -671,6 +672,9 @@ fn run() -> Result<()> {
     if args.first().is_some_and(|arg| arg == "hook") {
         return hook::run(&args[1..]);
     }
+    if args.first().is_some_and(|arg| arg == "upgrade") {
+        return update::run(&args[1..]);
+    }
     let parsed = parse_arguments(&args).map_err(|error| anyhow::anyhow!("{error}\n\n{USAGE}"))?;
     let key = if parsed.no_jev { None } else { api_key(&cwd)? };
     if let Some(input) = parsed.input {
@@ -900,6 +904,29 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Error: {error:#}");
         std::process::exit(1);
+    }
+    update_notice(&env::args().skip(1).collect::<Vec<_>>());
+}
+
+/// After a command typed in a terminal: "Oko X is out" when a newer release
+/// exists, checked at most once a day. Never for the server, hooks or
+/// upgrade, whose output another program reads.
+fn update_notice(args: &[String]) {
+    use std::io::IsTerminal;
+    // Local-only mode makes no network calls.
+    let quiet = args
+        .iter()
+        .any(|arg| arg == "--quiet" || arg == "--json" || arg == "--no-jev");
+    let program = matches!(
+        args.first().map(String::as_str),
+        Some("mcp" | "hook" | "upgrade" | "benchmark" | "benchmark-items")
+    );
+    if quiet || program || !std::io::stderr().is_terminal() {
+        return;
+    }
+    update::refresh(std::time::Duration::from_millis(1500));
+    if let Some(notice) = update::notice() {
+        eprintln!("\n{notice}");
     }
 }
 

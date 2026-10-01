@@ -86,6 +86,10 @@ Set `OKO_JEV_TIMEOUT_MS` (500–10000, default 4000) to change how long an MCP
 search waits for Jev before returning labelled keyword matches instead; see the
 [MCP reference](mcp.md).
 
+Set `OKO_NO_UPDATE_CHECK=1` to stop the daily check for a newer release and its
+notice (see [upgrading](installation.md#upgrade)); CI environments and
+`--no-jev` never check.
+
 Set `OKO_METRICS_FILE` for an MCP server to append one JSON line per completed
 search with timings, retrieval metadata, and the structured result packet; see the
 [MCP reference](mcp.md#timings-and-retrieval-metadata). The agent-visible tool

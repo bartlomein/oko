@@ -11,7 +11,7 @@ use std::{
 };
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded.\nFor all three it adds a prompt hook through which Oko answers a code question\nbefore the agent's first turn (--no-prefetch skips that one; --no-hooks skips\nevery hook).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY] [--quiet]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded.\nFor all three it adds a prompt hook through which Oko answers a code question\nbefore the agent's first turn (--no-prefetch skips that one; --no-hooks skips\nevery hook).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory; `oko upgrade`\nrefreshes every project set up with the copy there.\n--quiet prints only errors.";
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
@@ -34,6 +34,14 @@ enum Client {
 }
 impl Client {
     const ALL: [Client; 3] = [Client::Codex, Client::Claude, Client::OpenCode];
+    /// The `--client` name.
+    fn arg(self) -> &'static str {
+        match self {
+            Client::Codex => "codex",
+            Client::Claude => "claude",
+            Client::OpenCode => "opencode",
+        }
+    }
     fn name(self) -> &'static str {
         match self {
             Client::Codex => "Codex",
@@ -69,10 +77,13 @@ struct Options {
     hooks: bool,
     /// Oko answers a code question as the prompt is submitted.
     prefetch: bool,
+    /// Only errors are printed: `oko upgrade` refreshing its projects.
+    quiet: bool,
 }
 fn options(args: &[String], cwd: &Path) -> Result<Options> {
     let (mut root, mut install, mut offline, mut instructions, mut hooks, mut prefetch) =
         (None, None, false, true, true, true);
+    let mut quiet = false;
     let mut chosen = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -90,6 +101,7 @@ fn options(args: &[String], cwd: &Path) -> Result<Options> {
             "--no-instructions" if instructions => instructions = false,
             "--no-hooks" if hooks => hooks = false,
             "--no-prefetch" if prefetch => prefetch = false,
+            "--quiet" if !quiet => quiet = true,
             _ => bail!("Invalid setup arguments.\n{USAGE}"),
         }
     }
@@ -102,16 +114,7 @@ fn options(args: &[String], cwd: &Path) -> Result<Options> {
     }
     let install = match install {
         Some(path) => cwd.join(path),
-        None => {
-            let home = PathBuf::from(
-                env::var_os("HOME").context("Cannot locate home directory; pass --install-dir")?,
-            );
-            if cfg!(target_os = "macos") {
-                home.join("Library/Application Support/Oko/bin")
-            } else {
-                home.join(".local/share/oko/bin")
-            }
-        }
+        None => default_install_dir()?,
     };
     Ok(Options {
         clients: chosen.unwrap_or_else(|| vec![Client::Codex]),
@@ -121,7 +124,137 @@ fn options(args: &[String], cwd: &Path) -> Result<Options> {
         instructions,
         hooks,
         prefetch,
+        quiet,
     })
+}
+
+/// Where setup keeps the copy of Oko that projects run.
+pub(crate) fn default_install_dir() -> Result<PathBuf> {
+    let home = PathBuf::from(
+        env::var_os("HOME").context("Cannot locate home directory; pass --install-dir")?,
+    );
+    Ok(if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Oko/bin")
+    } else {
+        home.join(".local/share/oko/bin")
+    })
+}
+
+/// The projects set up with the copy in an install directory, kept beside it
+/// so `oko upgrade` can refresh each one with the same choices.
+pub(crate) const PROJECTS_FILE: &str = "projects.json";
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Project {
+    pub root: PathBuf,
+    pub clients: Vec<String>,
+    #[serde(default)]
+    pub no_jev: bool,
+    #[serde(default)]
+    pub no_instructions: bool,
+    #[serde(default)]
+    pub no_hooks: bool,
+    #[serde(default)]
+    pub no_prefetch: bool,
+}
+
+impl Project {
+    /// Setup's arguments for this project again.
+    pub(crate) fn setup_args(&self, install: &Path) -> Vec<std::ffi::OsString> {
+        let mut args: Vec<std::ffi::OsString> = vec![
+            "--root".into(),
+            self.root.clone().into(),
+            "--install-dir".into(),
+            install.into(),
+            "--client".into(),
+            self.clients.join(",").into(),
+        ];
+        for (set, flag) in [
+            (self.no_jev, "--no-jev"),
+            (self.no_instructions, "--no-instructions"),
+            (self.no_hooks, "--no-hooks"),
+            (self.no_prefetch, "--no-prefetch"),
+        ] {
+            if set {
+                args.push(flag.into());
+            }
+        }
+        args
+    }
+    pub(crate) fn client_names(&self) -> String {
+        clients(&self.clients.join(","))
+            .map(|chosen| {
+                chosen
+                    .iter()
+                    .map(|client| client.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|_| self.clients.join(", "))
+    }
+}
+
+/// The projects listed beside `install`; a missing or unreadable list is empty.
+pub(crate) fn projects(install: &Path) -> Vec<Project> {
+    fs::read(install.join(PROJECTS_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| serde_json::from_value(value["projects"].clone()).ok())
+        .unwrap_or_default()
+}
+
+fn save_projects(install: &Path, projects: &[Project]) -> Result<()> {
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "projects": projects }))?;
+    atomic(
+        &install.join(PROJECTS_FILE),
+        format!("{text}\n").as_bytes(),
+        false,
+    )
+}
+
+pub(crate) fn forget_projects(install: &Path, forget: impl Fn(&Project) -> bool) -> Result<()> {
+    let mut listed = projects(install);
+    listed.retain(|project| !forget(project));
+    save_projects(install, &listed)
+}
+
+/// Lists a project after a successful setup. Each tool keeps the options it
+/// was last set up with; tools with the same options share an entry.
+fn record_project(install: &Path, options: &Options) -> Result<()> {
+    let mut listed = projects(install);
+    let chosen: Vec<&str> = options.clients.iter().map(|client| client.arg()).collect();
+    for project in listed
+        .iter_mut()
+        .filter(|project| project.root == options.root)
+    {
+        project
+            .clients
+            .retain(|client| !chosen.contains(&client.as_str()));
+    }
+    listed.retain(|project| !project.clients.is_empty());
+    let entry = Project {
+        root: options.root.clone(),
+        clients: Vec::new(),
+        no_jev: options.offline,
+        no_instructions: !options.instructions,
+        no_hooks: !options.hooks,
+        no_prefetch: !options.prefetch,
+    };
+    let same = listed.iter().position(|project| {
+        Project {
+            clients: Vec::new(),
+            ..project.clone()
+        } == entry
+    });
+    let index = same.unwrap_or_else(|| {
+        listed.push(entry);
+        listed.len() - 1
+    });
+    let clients = &mut listed[index].clients;
+    clients.extend(chosen.iter().map(|client| (*client).to_owned()));
+    clients.sort_by_key(|name| Client::ALL.iter().position(|known| known.arg() == name));
+    save_projects(install, &listed)
 }
 fn executable_name(name: &str) -> String {
     if cfg!(windows) {
@@ -679,7 +812,7 @@ fn instructions(original: &str) -> Result<String> {
         _ => bail!("Oko instruction markers are incomplete or duplicated; nothing was overwritten"),
     }
 }
-fn atomic(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
+pub(crate) fn atomic(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
     let parent = path.parent().context("File has no parent directory")?;
     fs::create_dir_all(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -709,7 +842,7 @@ struct Edit {
     before: Option<String>,
     after: String,
 }
-fn apply(edits: &[Edit], backups: &Path) -> Result<()> {
+fn apply(edits: &[Edit], backups: &Path, quiet: bool) -> Result<()> {
     // Detect intervening edits before writing; retain private backups outside the project.
     for edit in edits {
         if text(&edit.path)? != edit.before {
@@ -728,7 +861,9 @@ fn apply(edits: &[Edit], backups: &Path) -> Result<()> {
             backup.write_all(before.as_bytes())?;
             backup.as_file().sync_all()?;
             let (_, path) = backup.keep()?;
-            println!("Backup of {}: {}", edit.path.display(), path.display());
+            if !quiet {
+                println!("Backup of {}: {}", edit.path.display(), path.display());
+            }
         }
     }
     for (i, edit) in edits.iter().enumerate() {
@@ -983,9 +1118,11 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         .map(|client| client.name())
         .collect::<Vec<_>>()
         .join(", ");
-    println!("Setting up {names} for {}", options.root.display());
+    if !options.quiet {
+        println!("Setting up {names} for {}", options.root.display());
+    }
     if !options.offline {
-        crate::auth::setup(&options.root)?;
+        crate::auth::setup(&options.root, options.quiet)?;
     }
     // This copy can survive deletion of the download or development build.
     if source != executable {
@@ -999,9 +1136,13 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     if let Some((claude, replace)) = &claude {
         claude.connect(*replace, &executable, &rg, options.offline)?;
     }
-    apply(&edits, &install.join("setup-backups"))?;
+    apply(&edits, &install.join("setup-backups"), options.quiet)?;
     if let Some(plugin) = stale_plugin {
         fs::remove_file(&plugin).with_context(|| format!("Cannot remove {}", plugin.display()))?;
+    }
+    record_project(&install, &options)?;
+    if options.quiet {
+        return Ok(());
     }
     println!(
         "Oko installed: {}\nMCP startup and search-tool discovery verified.",
@@ -1134,7 +1275,7 @@ mod tests {
             before: Some("old".into()),
             after: "new".into(),
         };
-        assert!(apply(&[edit], &temp.path().join("backups")).is_err());
+        assert!(apply(&[edit], &temp.path().join("backups"), false).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "user changed this");
     }
 }

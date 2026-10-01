@@ -34,7 +34,7 @@ API key for Jev ranking; local keyword search also works without a key.
 
 ## Install
 
-Run this on macOS or Linux to install the current prerelease:
+Run this on macOS or Linux to install the latest release:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh | sh
@@ -49,6 +49,9 @@ terminals. Existing installations from other sources are left untouched.
 Supported downloads: macOS Apple Silicon and Intel; Linux ARM64 and x64 with
 glibc 2.35+ (Ubuntu 22.04 or newer). Alpine and Windows are not supported by the
 installer. macOS binaries are not yet signed or notarized.
+
+To upgrade later, run `oko upgrade`: it installs the latest release and
+refreshes every project you set up. Oko tells you when one is out.
 
 Prefer to inspect the script, install manually, or select a version?
 See [installation options](docs/installation.md).
@@ -292,7 +295,8 @@ cover the 4.3 files an issue needs on average. [Details](docs/benchmark-results.
 File discovery and initial search run locally. Jev ranking sends your question and
 selected source snippets to TypeSafe AI; with setup's prompt hook, a prompt that
 reads as a code question is searched as you send it, so its first paragraph is
-the question. Deep mode can send more snippets across
+the question. Once a day Oko asks GitHub for the latest release number, and
+nothing else; `--no-jev` and `OKO_NO_UPDATE_CHECK=1` turn that off. Deep mode can send more snippets across
 multiple requests. **Use `--no-jev` for local-only searches.** Oko does not edit your
 source files. Prepared search data is cached outside your repository;
 [configuration](docs/configuration.md) explains key storage and cache controls.

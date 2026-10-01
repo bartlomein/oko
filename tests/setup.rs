@@ -657,6 +657,61 @@ fn claude_setup_installs_hooks_and_permission_and_keeps_the_rest() {
     );
 }
 #[test]
+fn setup_lists_each_project_once_for_upgrade_and_can_be_quiet() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let install = temp.path().join("bin");
+    fs::create_dir(&root).unwrap();
+    assert_ok(&setup(executable(), &root, &install, &["--no-jev"]));
+    let output = setup(
+        executable(),
+        &root,
+        &install,
+        &[
+            "--no-jev",
+            "--no-prefetch",
+            "--client",
+            "opencode",
+            "--quiet",
+        ],
+    );
+    assert_ok(&output);
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let listed = || -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(install.join("projects.json")).unwrap()).unwrap()
+    };
+    let entry = |clients: &[&str], no_prefetch: bool| {
+        serde_json::json!({
+            "root": root.canonicalize().unwrap(),
+            "clients": clients,
+            "noJev": true,
+            "noInstructions": false,
+            "noHooks": false,
+            "noPrefetch": no_prefetch,
+        })
+    };
+    // Each tool keeps its own options.
+    assert_eq!(
+        listed(),
+        serde_json::json!({"projects": [entry(&["codex"], false), entry(&["opencode"], true)]})
+    );
+    // Set up again with the same options, tools share one entry.
+    assert_ok(&setup(
+        executable(),
+        &root,
+        &install,
+        &["--no-jev", "--no-prefetch", "--quiet"],
+    ));
+    assert_eq!(
+        listed(),
+        serde_json::json!({"projects": [entry(&["codex", "opencode"], true)]})
+    );
+}
+#[test]
 fn codex_prompt_hook_goes_with_no_prefetch_or_no_hooks() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project");
@@ -845,6 +900,15 @@ fn the_opencode_plugin_adds_oko_s_answer_to_a_code_prompt_only() {
         &["--no-jev", "--client", "opencode"],
     ));
     let plugin = root.join(".opencode/plugins/oko-prefetch.js");
+    // A first answer indexes the project; beside the other tests that can
+    // outlast the plugin's patience, which is not what this test is about.
+    let text = fs::read_to_string(&plugin).unwrap();
+    assert!(text.contains("const PATIENCE_MS = 5000;"));
+    fs::write(
+        &plugin,
+        text.replace("const PATIENCE_MS = 5000;", "const PATIENCE_MS = 60000;"),
+    )
+    .unwrap();
     let script = temp.path().join("run.mjs");
     fs::write(
         &script,
