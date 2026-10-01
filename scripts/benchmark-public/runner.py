@@ -116,9 +116,10 @@ def prefetch_lines(trial):
             continue
         if 'prefetch' in value:
             calls = (value.get('retrieval') or {}).get('jevCalls') or []
+            usage = lambda key: sum((c.get('usage') or {}).get(key) or 0 for c in calls)
             lines.append({**value['prefetch'], 'totalMs': (value.get('timings') or {}).get('totalMs'),
                           'responseBytes': value.get('responseBytes'), 'jevCalls': len(calls),
-                          'jevInputTokens': sum((c.get('usage') or {}).get('inputTokens') or 0 for c in calls)})
+                          'jevInputTokens': usage('inputTokens'), 'jevOutputTokens': usage('outputTokens')})
     return lines
 
 

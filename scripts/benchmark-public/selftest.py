@@ -539,8 +539,17 @@ class RunnerTests(unittest.TestCase):
                 +json.dumps({'prefetch':{'decision':'inject'},'timings':{'totalMs':900},
                              'retrieval':{'jevCalls':[{'usage':{'inputTokens':11000}}]}})+'\n')
             self.assertEqual(r.prefetch_lines(tmp),[{'decision':'inject','totalMs':900,'responseBytes':None,
-                                                     'jevCalls':1,'jevInputTokens':11000}])
+                                                     'jevCalls':1,'jevInputTokens':11000,'jevOutputTokens':0}])
             self.assertEqual(r.prewarm_observations(tmp),[{'status':'disk'}])
+
+    def test_prompt_hook_jev_usage_is_kept_apart_and_added_to_totals(self):
+        hook=[{'decision':'inject','jevCalls':1,'jevInputTokens':13800,'jevOutputTokens':900}]
+        # Answered from the prefetch alone: no Oko tool call, yet Jev was used.
+        jev=r.measurements({'oko':True,'tools':[],'prefetch':hook})['jev']
+        self.assertEqual((jev['calls'],jev['prefetchCalls'],jev['totalCalls']),(0,1,1))
+        self.assertEqual((jev['totalInputTokens'],jev['totalOutputTokens'],jev['totalTokens']),(13800,900,14700))
+        # Without the hook, unknown agent usage stays unknown.
+        self.assertIsNone(r.measurements({'oko':True})['jev']['totalTokens'])
 
     def test_report_includes_failed_attempts(self):
         with tempfile.TemporaryDirectory() as temp:
