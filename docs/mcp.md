@@ -10,6 +10,7 @@ From the project you want to search, run your Oko executable with `setup`:
 oko setup                          # Codex (the default)
 oko setup --client claude          # Claude Code
 oko setup --client opencode        # OpenCode 1.x
+oko setup --client pi              # Pi 1.0+
 oko setup --client claude,opencode # several, or: --client all
 # Or select a project explicitly:
 oko setup --root /absolute/path/to/project
@@ -36,6 +37,7 @@ What setup connects depends on the tool:
 | Codex | `.codex/config.toml` in the project | `AGENTS.md`, or `AGENTS.override.md` when present |
 | Claude Code | `claude mcp add-json --scope local` with `alwaysLoad`, stored by Claude Code for you and this project | `CLAUDE.md`, the file it links to inside the project, or `AGENTS.md` when `CLAUDE.md` imports `@AGENTS.md` |
 | OpenCode 1.x | `opencode.json` in the project | `AGENTS.md` |
+| Pi 1.0+ | `.pi/mcp.json` with direct tool exposure | `AGENTS.md`, or `AGENTS.override.md` when present |
 
 The guidance is a managed section between `oko:search` markers. Existing
 unrelated settings, comments, and instructions are preserved. Re-running setup
@@ -97,6 +99,21 @@ hook in its configuration, so setup writes a small plugin,
 `.opencode/plugins/oko-prefetch.js` (gitignored), that keeps one Oko process of its
 own and gives up after 5 seconds; it also answers subagents' tasks. `--no-prefetch`
 leaves the hook or plugin out; `--no-hooks` skips every hook.
+
+Pi setup writes `.pi/mcp.json` and, by default, a managed
+`.pi/extensions/oko-prefetch.js`. Trust the project in Pi and start a new session
+(or `/reload`); check `/mcp` for Oko. Pi's built-in MCP must be enabled, and a
+legacy MCP adapter extension must not replace it. Setup checks Oko's protocol,
+not the installed Pi version or extension loading. Pi 1.0+ is required.
+
+Pi's prompt extension waits at most five seconds and runs in interactive, print,
+JSON, and RPC modes. Like OpenCode, it uses a separate Oko process: prefetch and
+model-issued MCP searches have separate excerpt memory and may repeat context.
+It resets its process on session navigation and compaction, and kills pending
+work on cancellation, timeout, or shutdown. `--no-prefetch` and `--no-hooks`
+remove only setup's own extension. Existing user extensions are preserved.
+A newly created `.pi/mcp.json` and the managed extension are gitignored; an
+existing MCP file is left shared and gets a warning about machine-local paths.
 
 For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
 agent instruction files untouched, and `--install-dir DIRECTORY` to choose the

@@ -1,4 +1,4 @@
-//! Project-scoped setup for Codex, Claude Code and OpenCode. Never writes
+//! Project-scoped setup for Codex, Claude Code, OpenCode and Pi. Never writes
 //! credentials to configuration files.
 use anyhow::{Context, Result, bail};
 use rmcp::ServiceExt;
@@ -11,7 +11,7 @@ use std::{
 };
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY] [--quiet]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded.\nFor all three it adds a prompt hook through which Oko answers a code question\nbefore the agent's first turn (--no-prefetch skips that one; --no-hooks skips\nevery hook).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory; `oko upgrade`\nrefreshes every project set up with the copy there.\n--quiet prints only errors.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|pi|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY] [--quiet]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\n  pi        updates .pi/mcp.json (Pi 1.0+)\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded.\nFor all four it adds a prompt hook through which Oko answers a code question\nbefore the agent's first turn (--no-prefetch skips that one; --no-hooks skips\nevery hook).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory; `oko upgrade`\nrefreshes every project set up with the copy there.\n--quiet prints only errors.";
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
@@ -31,15 +31,17 @@ enum Client {
     Codex,
     Claude,
     OpenCode,
+    Pi,
 }
 impl Client {
-    const ALL: [Client; 3] = [Client::Codex, Client::Claude, Client::OpenCode];
+    const ALL: [Client; 4] = [Client::Codex, Client::Claude, Client::OpenCode, Client::Pi];
     /// The `--client` name.
     fn arg(self) -> &'static str {
         match self {
             Client::Codex => "codex",
             Client::Claude => "claude",
             Client::OpenCode => "opencode",
+            Client::Pi => "pi",
         }
     }
     fn name(self) -> &'static str {
@@ -47,6 +49,7 @@ impl Client {
             Client::Codex => "Codex",
             Client::Claude => "Claude Code",
             Client::OpenCode => "OpenCode",
+            Client::Pi => "Pi",
         }
     }
 }
@@ -56,7 +59,8 @@ fn clients(list: &str) -> Result<Vec<Client>> {
         let named = match name {
             "codex" => &Client::ALL[..1],
             "claude" => &Client::ALL[1..2],
-            "opencode" => &Client::ALL[2..],
+            "opencode" => &Client::ALL[2..3],
+            "pi" => &Client::ALL[3..4],
             "all" => &Client::ALL[..],
             _ => bail!("Unknown --client {name:?}.\n{USAGE}"),
         };
@@ -537,6 +541,94 @@ fn opencode(original: &str, exe: &Path, root: &Path, rg: &Path, offline: bool) -
     }
     Ok(serde_json::to_string_pretty(&doc)? + "\n")
 }
+const PI_PLUGIN: &str = include_str!("pi_prefetch.js");
+const PI_PLUGIN_PATH: &str = ".pi/extensions/oko-prefetch.js";
+const PI_PLUGIN_MARKER: &str = "// Managed by oko setup";
+fn pi_config(original: &str, exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<String> {
+    use serde_json::{Map, Value, json};
+    let before: Value = if original.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(original)
+            .context(".pi/mcp.json must be valid JSON; nothing was overwritten")?
+    };
+    let mut doc = before.clone();
+    let servers = doc
+        .as_object_mut()
+        .context(".pi/mcp.json must hold an object")?
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Pi mcpServers must be an object")?;
+    if let Some(existing) = servers.get("oko")
+        && !existing
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| {
+                launches_oko(
+                    command,
+                    existing
+                        .get("args")
+                        .and_then(Value::as_array)
+                        .and_then(|args| args.first())
+                        .and_then(Value::as_str),
+                )
+            })
+    {
+        bail!(
+            "An Oko MCP entry already exists in .pi/mcp.json and was not created by setup. Rename or remove it before continuing."
+        );
+    }
+    let server = servers
+        .entry("oko")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .context("Pi Oko entry must be an object")?;
+    server.insert("type".into(), json!("stdio"));
+    server.insert(
+        "command".into(),
+        json!(exe.to_str().context("Executable path must be UTF-8")?),
+    );
+    server.insert("args".into(), json!(server_args(root, offline)?));
+    server.insert("enabled".into(), json!(true));
+    server.insert("exposure".into(), json!("direct"));
+    // A per-tool override otherwise wins over the server's direct exposure.
+    if let Some(overrides) = server.get_mut("toolExposure") {
+        overrides
+            .as_object_mut()
+            .context("Pi toolExposure must be an object")?
+            .remove("search");
+    }
+    server.insert(
+        "description".into(),
+        json!("Find relevant code by intent and return bounded source excerpts."),
+    );
+    server
+        .entry("env")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Pi Oko env must be an object")?
+        .insert(
+            "OKO_RIPGREP".into(),
+            json!(rg.to_str().context("ripgrep path must be UTF-8")?),
+        );
+    if doc == before && !original.trim().is_empty() {
+        return Ok(original.into());
+    }
+    Ok(serde_json::to_string_pretty(&doc)? + "\n")
+}
+fn pi_plugin(exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<String> {
+    let mut command = vec![exe.to_str().context("Executable path must be UTF-8")?];
+    command.extend(server_args(root, offline)?);
+    Ok(PI_PLUGIN
+        .replace("__OKO_COMMAND__", &serde_json::to_string(&command)?)
+        .replace(
+            "__OKO_ENV__",
+            &serde_json::to_string(&serde_json::json!({
+                "OKO_RIPGREP": rg.to_str().context("ripgrep path must be UTF-8")?
+            }))?,
+        ))
+}
 /// Claude Code keeps per-project, per-user connections in its own settings
 /// file; its command line is the supported way to change them.
 struct Claude {
@@ -950,6 +1042,15 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     {
         bail!("Project .codex must be a real directory");
     }
+    if wants(Client::Pi) {
+        for relative in [".pi", ".pi/extensions"] {
+            if let Ok(meta) = fs::symlink_metadata(options.root.join(relative))
+                && (meta.file_type().is_symlink() || !meta.is_dir())
+            {
+                bail!("Project {relative} must be a real directory");
+            }
+        }
+    }
     fs::create_dir_all(&options.install)?;
     let install = options.install.canonicalize()?;
     let executable = install.join(executable_name("oko"));
@@ -979,7 +1080,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     }
     let mut shared_opencode = false;
     // Setup's own OpenCode prompt hook, removed when prefetch is turned off.
-    let mut stale_plugin = None;
+    let mut stale_plugins = Vec::new();
     if wants(Client::OpenCode) {
         if options.root.join("opencode.jsonc").exists() {
             bail!(
@@ -1027,7 +1128,52 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                 "# Oko: machine-local prompt hook for OpenCode",
             ));
         } else if managed {
-            stale_plugin = Some(plugin);
+            stale_plugins.push(plugin);
+        }
+    }
+    let mut shared_pi = false;
+    if wants(Client::Pi) {
+        let path = options.root.join(".pi/mcp.json");
+        let before = text(&path)?;
+        let after = pi_config(
+            before.as_deref().unwrap_or(""),
+            &executable,
+            &options.root,
+            &rg,
+            options.offline,
+        )?;
+        if before.is_none() {
+            ignored.push(("/.pi/mcp.json", "# Oko: machine-local Pi connection"));
+        } else {
+            shared_pi = before.as_deref() != Some(&after);
+        }
+        edits.push(Edit {
+            path,
+            before,
+            after,
+        });
+        let plugin = options.root.join(PI_PLUGIN_PATH);
+        let existing = text(&plugin)?;
+        let managed = existing
+            .as_deref()
+            .is_some_and(|text| text.starts_with(PI_PLUGIN_MARKER));
+        if options.hooks && options.prefetch {
+            if existing.is_some() && !managed {
+                bail!(
+                    "{PI_PLUGIN_PATH} exists and was not written by setup; rename it or run setup with --no-prefetch."
+                );
+            }
+            edits.push(Edit {
+                path: plugin,
+                before: existing,
+                after: pi_plugin(&executable, &options.root, &rg, options.offline)?,
+            });
+            ignored.push((
+                "/.pi/extensions/oko-prefetch.js",
+                "# Oko: machine-local prompt hook for Pi",
+            ));
+        } else if managed {
+            stale_plugins.push(plugin);
         }
     }
     let claude = if wants(Client::Claude) {
@@ -1056,13 +1202,13 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         ));
     }
     if options.instructions {
-        // Codex and OpenCode read AGENTS.md; Claude Code reads CLAUDE.md, which
+        // Codex, OpenCode and Pi read AGENTS.md; Claude Code reads CLAUDE.md, which
         // may itself import AGENTS.md.
         let agents = options.root.join("AGENTS.md");
         let mut paths = Vec::new();
         for client in &options.clients {
             let path = match client {
-                Client::Codex if options.root.join("AGENTS.override.md").exists() => {
+                Client::Codex | Client::Pi if options.root.join("AGENTS.override.md").exists() => {
                     options.root.join("AGENTS.override.md")
                 }
                 Client::Claude => {
@@ -1137,7 +1283,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         claude.connect(*replace, &executable, &rg, options.offline)?;
     }
     apply(&edits, &install.join("setup-backups"), options.quiet)?;
-    if let Some(plugin) = stale_plugin {
+    for plugin in stale_plugins {
         fs::remove_file(&plugin).with_context(|| format!("Cannot remove {}", plugin.display()))?;
     }
     record_project(&install, &options)?;
@@ -1156,12 +1302,19 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                     "Codex project configuration saved. Open this project in Codex, trust it if prompted, and start a new session. When Codex shows \"Hooks need review\", choose \"Trust all and continue\" to turn on Oko's prompt hook (or use /hooks later). Use /mcp to check the connection.",
                 Client::Claude =>
                     "Claude Code connection added for this project and user, with its hooks and permission in .claude/settings.local.json. Start a new session and use /mcp to check it.",
+                Client::Pi =>
+                    "Pi project configuration saved (requires Pi 1.0+). Start Pi, trust the project, and use /mcp to check Oko. Existing sessions need /reload. Built-in MCP must be enabled; legacy MCP adapter extensions can replace it.",
                 Client::OpenCode =>
                     "OpenCode project configuration saved, with Oko's prompt hook in .opencode/plugins/. Start a new session and run `opencode mcp list` to check the connection.",
             }
         );
     }
     println!("No Jev request was made; key validity and tool selection are not yet tested.");
+    if shared_pi {
+        println!(
+            ".pi/mcp.json already existed, so it was not added to .gitignore; it now holds paths for this machine. Keep that change out of shared commits."
+        );
+    }
     if shared_opencode {
         println!(
             "opencode.json already existed, so it was not added to .gitignore; it now holds paths for this machine. Keep that change out of shared commits."

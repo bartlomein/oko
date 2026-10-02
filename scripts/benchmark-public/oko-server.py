@@ -10,7 +10,7 @@ def main():
     results = (ROOT.parents[1]/'benchmarks/results').resolve()
     workspace = Path(sys.argv[1]).resolve()
     parts = workspace.relative_to(results).parts
-    if len(parts)!=6 or parts[0] not in ('public','public-branch','public-smoke') or parts[1] not in ('astro','httpx','ripgrep') or parts[-1]!='workspace':
+    if len(parts)!=6 or parts[0] not in ('public','public-branch','public-smoke','public-pi') or parts[1] not in ('astro','httpx','ripgrep') or parts[-1]!='workspace':
         raise ValueError('Unknown benchmark workspace')
     trial=workspace.parent
     if Path(sys.argv[2]).resolve()!=trial/'cache':

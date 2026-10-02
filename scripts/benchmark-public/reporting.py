@@ -68,6 +68,18 @@ def render(data, clients, conditions):
                 seconds=statistics.median(b['seconds']-a['seconds'] for a,b in guided)
                 percent=statistics.median(100*(b['seconds']/a['seconds']-1) for a,b in guided)
                 lines.append(f'| {c} | current -> guided | {len(guided)} | {seconds:+.2f} | {percent:+.1f}% |')
+    if data.get('suite') == 'pi':
+        native={(r['repository'],r['id'],r.get('repetition',1)):r for r in runs if r['condition']=='native'}
+        pairs=[(native[k],r) for r in runs for k in [(r['repository'],r['id'],r.get('repetition',1))]
+               if r['condition']=='prefetch' and k in native and native[k]['seconds']>0]
+        if pairs:
+            seconds=statistics.median(b['seconds']-a['seconds'] for a,b in pairs)
+            percent=statistics.median(100*(b['seconds']/a['seconds']-1) for a,b in pairs)
+            lines+=['','## Pi paired comparison','',
+                    f'{len(pairs)} task/repetition pairs: median time change {seconds:+.2f}s ({percent:+.1f}%).',
+                    'Baseline: native Pi. Oko: same model plus search guidance and prompt prefetch. Failed grades remain included.',
+                    'Pi input excludes cache reads/writes; output already includes reasoning tokens. Each completed assistant message is counted once.',
+                    'The working-tree Oko build and source snapshot are hashed in settings. No earlier published build is substituted.']
     leading=sum(bool(r.get('grade',{}).get('leadingText')) for r in runs)
     if leading or data.get('regraded'):
         lines.append('')

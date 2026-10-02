@@ -48,7 +48,7 @@ def memory_canary(r,settings,output,clients):
                 except (subprocess.TimeoutExpired,KeyboardInterrupt):
                     os.killpg(proc.pid,signal.SIGKILL);proc.wait();raise
             events=[]
-            for line in (trial/'events.jsonl').read_text().splitlines():
+            for line in (trial/'events.jsonl').read_text().split('\n'):
                 try:events.append(json.loads(line))
                 except ValueError:pass
             parsed=r.engine.parse_events(client,events)

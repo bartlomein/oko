@@ -328,3 +328,34 @@ python3 scripts/benchmark-public/replay/swe_explore.py --explorer bm25   # the b
 
 The baselines need `rank_bm25` and `scikit-learn` (a `uv venv` is enough).
 Our BM25 and TF-IDF runs match the paper's table within 0.01.
+
+## Pi: the branch tasks with and without Oko
+
+Pi 1.0+ supports the same nine tasks, independent edit graders, and three
+repetitions. `--suite pi` runs 54 timed sessions: native Pi versus Oko with
+setup guidance and prefetch. Two fresh-session memory canaries run first.
+It freezes the current working-tree Oko source and release binary without
+committing changes. Results live separately under `benchmarks/results/public-pi`.
+
+```sh
+python3 scripts/benchmark-public/runner.py --suite pi --prepare
+python3 scripts/benchmark-public/selftest.py
+python3 scripts/benchmark-public/runner.py --suite pi --check
+python3 scripts/benchmark-public/runner.py --suite pi --execute
+```
+
+Pi must be on PATH and authenticated. The model defaults to
+`openai/gpt-5.6-sol` with low thinking; override it with `--pi-model` before
+preparation. Use the same options for prepare/check/execute. Login state is
+linked into fresh per-session agent directories; no credential bytes are
+copied into artifacts. Skills, context-file discovery, unrelated extensions,
+and session persistence are disabled. Native read/grep/find/ls are available
+on both sides, with edit/write added only for edit tasks. No shell tool is
+exposed. This is configuration isolation, not an OS sandbox.
+
+Pi events are LF-delimited. Completion requires `agent_settled` and a successful
+final assistant message. Usage is summed once per assistant `message_end`,
+including cache reads/writes; reasoning is already included in output.
+Prefetch's Jev usage is counted separately from coding-agent tokens.
+The same public source is sent to the selected Pi provider; Oko additionally
+sends selected excerpts to TypeSafe/Jev. `--prepare` and `--check` make no paid calls.

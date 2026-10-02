@@ -31,7 +31,7 @@ pub fn max_context_chars(client: &str) -> usize {
 /// `codex:<id>`); any other value is a session id alone.
 pub fn client_session(value: &str) -> (&str, &str) {
     match value.split_once(':') {
-        Some((client, session)) if matches!(client, "claude" | "codex" | "opencode") => {
+        Some((client, session)) if matches!(client, "claude" | "codex" | "opencode" | "pi") => {
             (client, session)
         }
         _ => ("", value),
@@ -480,6 +480,8 @@ mod tests {
     fn the_hook_names_its_client_for_the_room_it_has() {
         assert_eq!(client_session("claude:abc-1"), ("claude", "abc-1"));
         assert_eq!(client_session("codex:t:1"), ("codex", "t:1"));
+        assert_eq!(client_session("pi:session:1"), ("pi", "session:1"));
+        assert_eq!(max_context_chars("pi"), MAX_CONTEXT_CHARS);
         assert_eq!(client_session("abc-1"), ("", "abc-1"));
         assert_eq!(client_session("other:x"), ("", "other:x"));
         assert!(max_context_chars("claude") < 10_000);
