@@ -254,6 +254,7 @@ fn opencode_setup_merges_the_connection_and_is_repeatable() {
             .unwrap()
             .contains("<!-- oko:search:start -->")
     );
+    assert!(!root.join(".pi").exists());
     assert!(!root.join(".codex").exists());
     assert!(!root.join("CLAUDE.md").exists());
     // A file that was already there may be shared, so it is not ignored;
@@ -478,6 +479,8 @@ fn all_clients_share_one_agents_file() {
     for file in [
         ".codex/config.toml",
         "opencode.json",
+        ".pi/mcp.json",
+        ".pi/extensions/oko-prefetch.js",
         "AGENTS.md",
         "CLAUDE.md",
     ] {
@@ -941,4 +944,254 @@ process.exit(0);
     assert!(text.starts_with("Oko answer for this prompt."), "{text}");
     assert!(text.contains("pub fn retry_upload"), "{text}");
     assert_eq!(results[1], serde_json::json!([]), "a chore gets nothing");
+}
+
+#[test]
+fn pi_setup_preserves_settings_and_tracks_upgrade_options() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project with spaces");
+    let install = temp.path().join("bin");
+    fs::create_dir_all(root.join(".pi")).unwrap();
+    fs::write(
+        root.join("AGENTS.override.md"),
+        "Keep override instructions\n",
+    )
+    .unwrap();
+    fs::write(root.join("AGENTS.md"), "Keep base instructions\n").unwrap();
+    fs::write(
+        root.join(".pi/mcp.json"),
+        r#"{"mcpServers":{"other":{"command":"other"},"oko":{"command":"/old/oko","args":["mcp"],"timeout":42,"env":{"CUSTOM":"keep"},"toolExposure":{"search":"hidden"}}}}"#,
+    )
+    .unwrap();
+    let args = ["--no-jev", "--client", "pi"];
+    assert_ok(&setup(executable(), &root, &install, &args));
+    let config_path = root.join(".pi/mcp.json");
+    let first = fs::read_to_string(&config_path).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(config["mcpServers"]["other"]["command"], "other");
+    let oko = &config["mcpServers"]["oko"];
+    assert_eq!(oko["exposure"], "direct");
+    assert_eq!(oko["timeout"], 42);
+    assert_eq!(oko["env"]["CUSTOM"], "keep");
+    assert!(oko["toolExposure"].get("search").is_none());
+    assert_eq!(oko["args"][3], "--no-jev");
+    assert_eq!(
+        oko["args"][2],
+        root.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert!(oko["env"]["OKO_RIPGREP"].as_str().unwrap().ends_with("rg"));
+    assert!(!first.contains("TYPESAFE_API_KEY"));
+    assert!(
+        fs::read_to_string(root.join("AGENTS.override.md"))
+            .unwrap()
+            .contains("oko:search:start")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "Keep base instructions\n"
+    );
+    assert!(!root.join("opencode.json").exists());
+    let plugin = root.join(".pi/extensions/oko-prefetch.js");
+    assert!(plugin.exists());
+    assert_ok(&setup(executable(), &root, &install, &args));
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), first);
+    let projects: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(install.join("projects.json")).unwrap()).unwrap();
+    assert_eq!(
+        projects["projects"][0]["clients"],
+        serde_json::json!(["pi"])
+    );
+    for flag in ["--no-hooks", "--no-prefetch"] {
+        assert_ok(&setup(executable(), &root, &install, &args));
+        assert_ok(&setup(
+            executable(),
+            &root,
+            &install,
+            &["--no-jev", "--client", "pi", flag],
+        ));
+        assert!(!plugin.exists());
+        assert!(config_path.exists());
+    }
+    fs::write(&plugin, "// User extension\n").unwrap();
+    assert!(!setup(executable(), &root, &install, &args).status.success());
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), first);
+    assert_ok(&setup(
+        executable(),
+        &root,
+        &install,
+        &["--no-jev", "--client", "pi", "--no-hooks"],
+    ));
+    assert_eq!(fs::read_to_string(plugin).unwrap(), "// User extension\n");
+}
+
+#[test]
+fn pi_setup_rejects_invalid_and_conflicting_config_before_project_edits() {
+    for original in [
+        "{broken",
+        "[]",
+        r#"{"mcpServers":[]}"#,
+        r#"{"mcpServers":{"oko":{"command":"custom"}}}"#,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir_all(root.join(".pi")).unwrap();
+        let path = root.join(".pi/mcp.json");
+        fs::write(&path, original).unwrap();
+        let result = setup(
+            executable(),
+            &root,
+            &temp.path().join("bin"),
+            &["--no-jev", "--client", "pi"],
+        );
+        assert!(!result.status.success());
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        assert!(!root.join("AGENTS.md").exists());
+        assert!(!root.join(".pi/extensions").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn pi_setup_rejects_symlinked_directories() {
+    for relative in [".pi", ".pi/extensions"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let link = root.join(relative);
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let result = setup(
+            executable(),
+            &root,
+            &temp.path().join("bin"),
+            &["--no-jev", "--client", "pi"],
+        );
+        assert!(!result.status.success());
+        assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn pi_prefetch_injects_context_and_resets_on_session_navigation() {
+    let Some(runtime) = ["node", "bun"].into_iter().find(|name| {
+        Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }) else {
+        eprintln!("skipped: neither node nor bun is installed");
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("uploads.rs"),
+        "pub fn retry_upload(job: &Job) -> Result<(), Error> {\n    send(job)\n}\n",
+    )
+    .unwrap();
+    assert_ok(&setup(
+        executable(),
+        &root,
+        &temp.path().join("bin"),
+        &["--no-jev", "--client", "pi"],
+    ));
+    let plugin = root.join(".pi/extensions/oko-prefetch.js");
+    let text = fs::read_to_string(&plugin).unwrap();
+    assert!(text.contains("const PATIENCE_MS = 5000;"));
+    fs::write(
+        &plugin,
+        text.replace("const PATIENCE_MS = 5000;", "const PATIENCE_MS = 60000;"),
+    )
+    .unwrap();
+    let script = temp.path().join("run.mjs");
+    fs::write(&script, format!(r#"
+import assert from 'node:assert/strict';
+const {{ default: extension }} = await import({plugin:?});
+const hooks = new Map();
+extension({{ on: (event, callback) => hooks.set(event, callback) }});
+const controller = new AbortController();
+const ctx = {{ sessionManager: {{ getSessionId: () => 'session-1' }}, signal: controller.signal }};
+const prompt = {{ prompt: 'Explain how retry_upload gives up' }};
+try {{
+  const answer = await hooks.get('before_agent_start')(prompt, ctx);
+  assert.equal(answer.message.customType, 'oko-prefetch');
+  assert.equal(answer.message.display, false);
+  assert.match(answer.message.content, /pub fn retry_upload/);
+  assert.equal(await hooks.get('before_agent_start')({{prompt: 'commit this and push'}}, ctx), undefined);
+  hooks.get('session_tree')();
+  const again = await hooks.get('before_agent_start')(prompt, ctx);
+  assert.match(again.message.content, /pub fn retry_upload/);
+  controller.abort();
+  assert.equal(await hooks.get('before_agent_start')(prompt, ctx), undefined);
+}} finally {{
+  hooks.get('session_shutdown')();
+  hooks.get('session_shutdown')();
+}}
+"#, plugin = plugin.to_str().unwrap())).unwrap();
+    // Natural process exit verifies that shutdown leaves no child or timer alive.
+    assert_ok(&Command::new(runtime).arg(script).output().unwrap());
+}
+
+#[test]
+fn pi_prefetch_fails_open_on_timeout_bad_replies_and_missing_server() {
+    let Some(runtime) = ["node", "bun"].into_iter().find(|name| {
+        Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }) else {
+        eprintln!("skipped: neither node nor bun is installed");
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("template.js"),
+        include_str!("../src/pi_prefetch.js"),
+    )
+    .unwrap();
+    fs::write(temp.path().join("server.mjs"), r#"
+import readline from 'node:readline';
+const mode = process.argv[2];
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  if (mode === 'hang') return;
+  if (mode === 'init-error') { console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: 'failed' } })); return; }
+  if (mode === 'malformed') { console.log('invalid json'); return; }
+  if (mode === 'exit') { process.exit(1); }
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} }));
+  } else if (request.method === 'tools/call') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'invalid json' }] } }));
+  }
+});
+"#).unwrap();
+    fs::write(temp.path().join("run.mjs"), r#"
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+const template = await readFile(new URL('./template.js', import.meta.url), 'utf8');
+const fixture = fileURLToPath(new URL('./server.mjs', import.meta.url));
+for (const mode of ['hang', 'malformed', 'init-error', 'exit', 'bad-content', 'missing', 'cancel']) {
+  const path = new URL(`./${mode}.mjs`, import.meta.url);
+  const command = mode === 'missing' ? ['/nonexistent/oko'] : [process.execPath, fixture, mode === 'cancel' ? 'hang' : mode];
+  await writeFile(path, template.replace('__OKO_COMMAND__', JSON.stringify(command)).replace('__OKO_ENV__', '{}').replace('const PATIENCE_MS = 5000;', 'const PATIENCE_MS = 500;'));
+  const { default: extension } = await import(path);
+  const hooks = new Map();
+  extension({ on: (event, callback) => hooks.set(event, callback) });
+  const controller = new AbortController();
+  const pending = hooks.get('before_agent_start')({ prompt: 'Explain how retry_upload works' }, { signal: controller.signal, sessionManager: { getSessionId: () => 'test' } });
+  if (mode === 'cancel') controller.abort();
+  assert.equal(await pending, undefined, mode);
+  hooks.get('session_shutdown')();
+}
+// No process.exit(): children, listeners, and timers must release naturally.
+"#).unwrap();
+    assert_ok(
+        &Command::new(runtime)
+            .arg(temp.path().join("run.mjs"))
+            .output()
+            .unwrap(),
+    );
 }

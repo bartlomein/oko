@@ -516,7 +516,7 @@ def run_one(task, client, condition, output, index):
         row['seconds'] = row['durationNs'] / 1_000_000_000
         row['exitCode'] = proc.returncode
         events = []
-        for line in (trial / 'events.jsonl').read_text().splitlines():
+        for line in (trial / 'events.jsonl').read_text().split('\n'):
             try:
                 events.append(json.loads(line))
             except ValueError:

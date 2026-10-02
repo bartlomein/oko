@@ -1,0 +1,42 @@
+{
+  "suite": "pi",
+  "model": "openai/gpt-5.6-sol",
+  "effort": "low",
+  "conditions": {
+    "native": {
+      "sessions": 27,
+      "passed": 25,
+      "medianSeconds": 29.71697625,
+      "meanSeconds": 31.382478814962962,
+      "agentTokens": 1130932,
+      "uncachedInput": 378984,
+      "cacheRead": 736512,
+      "output": 15436,
+      "toolCalls": 175,
+      "jevTokens": 0,
+      "jevCalls": 0,
+      "editsPassed": 9
+    },
+    "prefetch": {
+      "sessions": 27,
+      "passed": 25,
+      "medianSeconds": 13.973164375,
+      "meanSeconds": 15.002700637333334,
+      "agentTokens": 250043,
+      "uncachedInput": 146003,
+      "cacheRead": 97152,
+      "output": 6888,
+      "toolCalls": 30,
+      "jevTokens": 724939,
+      "jevCalls": 49,
+      "editsPassed": 9
+    }
+  },
+  "verified": {
+    "allRawModelIdentities": true,
+    "rawUsageMatchesTotals": true,
+    "sourceUnchanged": true,
+    "artifactsUnchanged": true,
+    "memoryCanaryPassed": true
+  }
+}

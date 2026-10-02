@@ -23,6 +23,7 @@ STATE = PROJECT / 'benchmarks/results/public'
 FIXTURE = ROOT / 'tasks.json'
 REPOSITORIES = json.loads(FIXTURE.read_text())['repositories']
 CLIENTS = ('codex', 'opencode', 'claude')
+SUPPORTED_CLIENTS = CLIENTS + ('pi',)
 CONDITIONS = ('native', 'cold', 'warm')
 ENGINE_CONDITIONS = {'native': 'native', 'cold': 'oko-cold', 'warm': 'oko-warm'}
 CACHE_POLICY = 'cold-vs-prebuilt-disk-v1'
@@ -39,7 +40,7 @@ SMOKE_TASKS = ('astro-image-probe-authorization', 'astro-action-key-guards',
 
 
 def compares_builds():
-    return SUITE in ('branch', 'smoke')
+    return SUITE in ('branch', 'smoke', 'pi')
 
 
 # Blank-slate sessions strip every project instruction, including the guidance
@@ -145,6 +146,17 @@ engine.ROOT = ROOT
 original_args = engine.args_for
 original_grade = engine.grade
 original_prompt = engine.prompt
+original_parse_events = engine.parse_events
+
+def parse_events(client, events):
+    if client == 'pi':
+        from pi import parse_events as parse_pi_events
+        return parse_pi_events(events)
+    return original_parse_events(client, events)
+
+engine.parse_events = parse_events
+engine.CUSTOM_DIRS.add('.pi')
+engine.CUSTOM_FILES.update({'AGENTS.MD', 'CLAUDE.MD'})
 
 
 def save(path, data):
@@ -179,7 +191,7 @@ def require_free_space(folder):
 
 
 def implementation_digest():
-    paths = sorted(ROOT.glob('*.py')) + [ROOT.parent / 'benchmark-twenty' / f for f in ('runner.py', 'oko-server.py', 'isolation-smoke.py')] + [ROOT.parent / 'benchmark_observability.py']
+    paths = sorted(ROOT.glob('*.py')) + [PROJECT / 'src/pi_prefetch.js'] + [ROOT.parent / 'benchmark-twenty' / f for f in ('runner.py', 'oko-server.py', 'isolation-smoke.py')] + [ROOT.parent / 'benchmark_observability.py']
     return hashlib.sha256(''.join(digest(p) for p in paths).encode()).hexdigest()
 
 
@@ -241,13 +253,21 @@ def fixture_check(repo, task):
 def prepare(args):
     if compares_builds():
         from builds import prepare_builds
-        builds = prepare_builds(PROJECT, BUILD_STATE, args.baseline_ref, args.current_ref)
+        if SUITE == 'pi':
+            from builds import prepare_working_build
+            builds = {'current': prepare_working_build(PROJECT, BUILD_STATE)}
+        else:
+            builds = prepare_builds(PROJECT, BUILD_STATE, args.baseline_ref, args.current_ref)
         args.oko = Path(builds['current']['path'])
         from isolation_check import check_isolation
-        isolation = check_isolation(ROOT, STATE)
-    clients = {c: shutil.which(c) for c in CLIENTS}
+        if SUITE == 'pi':
+            from pi import check_isolation as check_pi_isolation
+            isolation = check_pi_isolation(shutil.which('pi'), ROOT, STATE)
+        else:
+            isolation = check_isolation(ROOT, STATE)
+    clients = {c: shutil.which(c) for c in args.clients}
     if not all(clients.values()):
-        raise RuntimeError('Install the three clients before preparing')
+        raise RuntimeError('Install the selected clients before preparing')
     if not shutil.which('node') or not shutil.which('rustc') or not shutil.which('rg'):
         raise RuntimeError('Node 22+ with type stripping, rustc, and rg are required')
     versions = {c: subprocess.check_output([exe, '--version'], text=True).strip() for c, exe in clients.items()}
@@ -262,7 +282,7 @@ def prepare(args):
         archive = dest / 'baseline.tar'
         subprocess.run(['git', 'archive', '--format=tar', '--output', str(archive), item['commit']], cwd=repo, check=True)
         settings = dict(repository=str(repo), commit=item['commit'], clients=clients, versions=versions,
-                        models={'codex': args.codex_model, 'opencode': args.opencode_model, 'claude': args.claude_model},
+                        models={'codex': args.codex_model, 'opencode': args.opencode_model, 'claude': args.claude_model, 'pi': args.pi_model},
                         effort=args.effort, timeoutSeconds=args.timeout, oko=str(args.oko.resolve()),
                         rg=shutil.which('rg'), jevModel='jev-1.13.0', archiveSha256=digest(archive),
                         okoSha256=digest(args.oko), tasksSha256=digest(FIXTURE), implementationSha256=implementation_digest(),
@@ -282,7 +302,7 @@ def prepare(args):
         print(f"Prepared {item['name']}: {len(item['tasks'])} tasks; executable edit checks fail before/pass after", flush=True)
     save(STATE/'plan.json',{
         'suite':SUITE,'repeats':args.repeats,'cachePolicy':CACHE_POLICY,
-        'memoryCanarySessions':2*len(args.clients) if SUITE=='branch' else 0,
+        'memoryCanarySessions':2*len(args.clients) if SUITE in ('branch','pi') else 0,
         'sessions':[{'repository':name,'task':task['id'],'client':client,
                      'condition':condition,'repetition':task['repetition']}
                     for name,task,client,condition in plan(REPOSITORIES,args.clients,args.repeats)]})
@@ -302,7 +322,7 @@ def plan(repos, clients, repeats=1):
                 offset = (task_index + repo_index) % len(clients)
                 task_number = task_index * len(repos) + repo_index
                 for c in clients[offset:] + clients[:offset]:
-                    conditions = orders[(task_number + CLIENTS.index(c)) % len(orders)]
+                    conditions = orders[(task_number + SUPPORTED_CLIENTS.index(c)) % len(orders)]
                     shift = repeat % len(conditions)
                     conditions = conditions[shift:] + conditions[:shift]
                     for condition in conditions:
@@ -336,6 +356,10 @@ def prewarm(work, trial, settings):
 def args_for(task, client, condition, work, trial):
     # Pin the selected executable per session; never read mutable repo-wide settings.
     save(trial/'settings.json', engine.SETTINGS)
+    if client == 'pi':
+        from pi import args_for as pi_args
+        return pi_args(task, condition, work, trial, engine.SETTINGS,
+                       prompt(task, condition != 'native'), ROOT)
     args, env = original_args(task, client, condition, work, trial)
     env['OKO_PUBLIC_BENCH_REPO'] = task['repositoryName']
     if task.get('cacheCondition') in (GUIDED, PREFETCH):
@@ -499,7 +523,7 @@ engine.grade = grade
 def report(output, data):
     from reporting import render
     save(output / 'report.json', data)
-    (output / 'report.md').write_text(render(data, CLIENTS, CONDITIONS))
+    (output / 'report.md').write_text(render(data, SUPPORTED_CLIENTS, CONDITIONS))
 
 
 def verify_settings(args, schedule):
@@ -522,7 +546,8 @@ def verify_settings(args, schedule):
             if SUITE == 'smoke' and (s.get('suite') != SUITE or s.get('tasks') != selected):
                 raise RuntimeError('Frozen suite/task selection changed; prepare again')
             for build in s['builds'].values():
-                if digest(Path(build['path'])) != build['sha256']:
+                if (digest(Path(build['path'])) != build['sha256']
+                        or build.get('sourceArchive') and digest(Path(build['sourceArchive'])) != build['sourceArchiveSha256']):
                     raise RuntimeError('Frozen build changed; prepare again')
             if digest(BUILD_STATE/'libmemchr.rlib') != s['validatorLibrarySha256']:
                 raise RuntimeError('Validator dependency changed; prepare again')
@@ -557,7 +582,7 @@ def execute(args, schedule):
         data={'plan':ids,'settings':settings,'runs':[],'complete':False,'isolation':engine.ISOLATION_VERSION,'cachePolicy':CACHE_POLICY,'repeats':getattr(args,'repeats',1),'suite':SUITE}
     print('Results: '+str(output),flush=True)
     report(output,data)
-    if SUITE == 'branch' and not data.get('memoryCanary',{}).get('complete'):
+    if SUITE in ('branch', 'pi') and not data.get('memoryCanary',{}).get('complete'):
         if (output/'memory-canary').exists():
             raise RuntimeError('Incomplete memory canary exists; inspect before restarting paid calls')
         from isolation_check import memory_canary
@@ -605,12 +630,16 @@ def execute(args, schedule):
                 row['cacheCheckError']='Observed Oko cache did not match assigned condition'
                 row.setdefault('error', row['cacheCheckError'])
                 row['errorType']='infrastructure'
+            if row.get('exitCode') != 0 or not row.get('complete') or row.get('providerErrors'):
+                row['error']='Incomplete/failed client session; inspect logs'
+                row['errorType']='infrastructure'
             row['tokenBreakdown']=token_breakdown(row)
             row['measurements']=measurements(row)
             save(Path(row['artifact'])/'result.json',row)
             discard_scratch(row['artifact'])
             data['runs'].append(row)
             report(output,data)
+            print(f'DONE {i}/{len(schedule)} passed={row.get("grade",{}).get("passed")} seconds={row["seconds"]:.1f}',flush=True)
             if row.get('error') and row.get('errorType')!='answer':
                 raise RuntimeError(row['error'])
     finally:
@@ -685,9 +714,10 @@ def main():
     p.add_argument('--codex-model',default='gpt-5.6-sol')
     p.add_argument('--opencode-model',default='openai/gpt-5.6-sol')
     p.add_argument('--claude-model',default='claude-sonnet-5')
+    p.add_argument('--pi-model',default='openai/gpt-5.6-sol')
     p.add_argument('--effort',choices=('low','medium','high'),default='low')
     p.add_argument('--timeout',type=int,default=180)
-    p.add_argument('--suite', choices=('legacy','branch','smoke'), default='legacy',
+    p.add_argument('--suite', choices=('legacy','branch','smoke','pi'), default='legacy',
                    help='smoke: previous vs current build on a few branch tasks, minutes not hours; direction only')
     p.add_argument('--guided',action='store_true',
                    help='Branch/smoke: add a condition that is the current build plus the agent guidance oko setup installs')
@@ -702,7 +732,7 @@ def main():
     p.add_argument('--current-ref',default='HEAD')
     args=p.parse_args()
     SUITE=args.suite
-    args.clients=(args.clients or ('claude' if SUITE=='smoke' else ','.join(CLIENTS))).split(',')
+    args.clients=(args.clients or ('pi' if SUITE=='pi' else 'claude' if SUITE=='smoke' else ','.join(CLIENTS))).split(',')
     if args.tasks and SUITE!='smoke':p.error('--tasks requires --suite smoke')
     args.repeats=args.repeats if args.repeats is not None else (3 if compares_builds() else 1)
     if args.repeats<1:p.error('Repeats must be positive')
@@ -726,6 +756,15 @@ def main():
         CONDITIONS=('previous','current')
         ENGINE_CONDITIONS={'previous':'oko-'+args.cache_policy,'current':'oko-'+args.cache_policy}
         CACHE_POLICY=args.cache_policy
+    if SUITE == 'pi':
+        if args.clients != ['pi'] or args.guided or args.prefetch or args.skip_previous:
+            p.error('--suite pi runs only Pi: native versus guidance + prefetch')
+        STATE=PROJECT/'benchmarks/results/public-pi'
+        FIXTURE=ROOT/'tasks-branch.json'
+        REPOSITORIES=json.loads(FIXTURE.read_text())['repositories']
+        CONDITIONS=('native', PREFETCH)
+        ENGINE_CONDITIONS={'native':'native', PREFETCH:'oko-'+args.cache_policy}
+        CACHE_POLICY=args.cache_policy
     if args.guided:
         if not compares_builds():p.error('--guided requires --suite branch or smoke')
         CONDITIONS=CONDITIONS+(GUIDED,)
@@ -740,7 +779,7 @@ def main():
         if SUITE!='branch' or not args.guided:p.error('--skip-previous requires --suite branch --guided')
         CONDITIONS=tuple(c for c in CONDITIONS if c!='previous')
         ENGINE_CONDITIONS={c:v for c,v in ENGINE_CONDITIONS.items() if c!='previous'}
-    if not args.clients or len(set(args.clients))!=len(args.clients) or any(c not in CLIENTS for c in args.clients):p.error('Invalid clients')
+    if not args.clients or len(set(args.clients))!=len(args.clients) or any(c not in SUPPORTED_CLIENTS for c in args.clients):p.error('Invalid clients')
     if args.timeout<1:p.error('Timeout must be positive')
     if args.resume and not args.execute:p.error('--resume requires --execute')
     if args.prepare:
@@ -753,7 +792,7 @@ def main():
     if args.check:
         with suite_lock():
             verify_settings(args,schedule)
-            print(f'Ready: {len(schedule)} timed sessions; '+(f'{2*len(args.clients)} memory-canary sessions; ' if SUITE=='branch' else '')+'no model calls made.')
+            print(f'Ready: {len(schedule)} timed sessions; '+(f'{2*len(args.clients)} memory-canary sessions; ' if SUITE in ('branch','pi') else '')+'no model calls made.')
         return
     if args.execute:
         with suite_lock():execute(args,schedule)

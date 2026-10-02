@@ -71,7 +71,8 @@ cd /path/to/your/project
 oko setup                     # Codex app or CLI
 oko setup --client claude     # Claude Code
 oko setup --client opencode   # OpenCode 1.x
-oko setup --client all        # all three
+oko setup --client pi         # Pi 1.0+
+oko setup --client all        # all four
 ```
 
 Setup installs stable copies, connects the tool to Oko for this project, adds
@@ -87,6 +88,8 @@ The first time you open the project after setup, it shows **Hooks need review**:
 choose **Trust all and continue** (or **Review hooks** to read Oko's first). It asks
 once per project, and again only if a later Oko release changes the hook. If you
 skipped it, `/hooks` brings it back. Claude Code and OpenCode need no extra step.
+Pi requires project trust.
+See [Pi setup and requirements](docs/clients.md#pi-10-by-hand).
 
 For a key-free connection, add `--no-jev`. See [what setup changes](docs/mcp.md#set-up-a-project).
 The manual steps below do the same by hand, without the guidance.
@@ -205,6 +208,9 @@ own: 63 of the 81 sessions with Oko made no Oko call.
 | Claude Code | Time | 12.0 s | 5.0 s | **58% faster** | 84% faster |
 | | Tokens | 56,513 | 22,008 | **61% fewer** | 75% fewer |
 | | Tool calls | 4.4 | 0.7 | **85% fewer** | 100% fewer |
+| Pi | Time | 31.4 s | 15.0 s | **52% faster** | 73% faster |
+| | Tokens | 41,886 | 9,261 | **78% fewer** | 94% fewer |
+| | Tool calls | 6.5 | 1.1 | **83% fewer** | 100% fewer |
 
 With Oko, Codex passed 27 of 27, OpenCode 27 and Claude Code 25; without it,
 26, 27 and 26. Three of the four misses are one Astro edit task, where the agent
@@ -220,6 +226,18 @@ Codex CLI 0.155 and OpenCode 1.18 (`gpt-5.6-sol`) and Claude Code 2.1
 [Full results and methodology](docs/benchmark-results.md#agent-sessions), the
 [runner, tasks, and checks](scripts/benchmark-public/), and the
 [raw results](benchmarks/published/0.7.0/) are in this repository.
+
+Pi was measured separately on 2 October with the 0.7.2 development snapshot:
+**54 additional sessions**, Pi 1.0.0, `gpt-5.6-sol`, low thinking, the same nine
+tasks and three repeats. Both setups passed **25/27**, including all edits.
+Pi with Oko missed the final URL authorization location in the Astro task twice.
+The table uses means; median time was 29.72 s without Oko and 13.97 s with it.
+Agent tokens include cached input and exclude Jev. Oko added 724,939 Jev tokens;
+combined recorded tokens were 14% lower. At 2 October API list prices, the
+27 sessions cost an estimated $2.12 without Oko versus $0.79 with it, including
+$0.028 for Jev. These are API-equivalent estimates; Pi used ChatGPT OAuth.
+[Pi results and methodology](docs/benchmark-results.md#pi-54-sessions-october-2026)
+and [per-session data](benchmarks/published/0.7.2/agent-sessions/report-pi.json).
 
 ### Against Sense
 

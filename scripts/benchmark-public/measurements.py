@@ -16,7 +16,7 @@ def token_breakdown(row):
             if not all(number(v) for v in values) or values[1] > values[0]:
                 return None
             uncached, read, write, output = values[0] - values[1], values[1], 0, values[2]
-        elif client == 'claude':
+        elif client in ('claude', 'pi'):
             uncached, read, write, output = (t[k] for k in ('input', 'cacheRead', 'cacheWrite', 'output'))
         elif client == 'opencode':
             steps = t['steps']
@@ -92,7 +92,7 @@ def measurements(row):
     events = []
     path = Path(row.get('artifact', '')) / 'events.jsonl'
     if path.is_file():
-        for line in path.read_text().splitlines():
+        for line in path.read_text().split('\n'):
             try:
                 events.append(json.loads(line))
             except ValueError:
@@ -100,6 +100,8 @@ def measurements(row):
     client = row.get('client')
     if client == 'opencode':
         rounds = len([e for e in events if e.get('type') == 'step_finish']) or None
+    elif client == 'pi':
+        rounds = len([e for e in events if e.get('type') == 'message_end' and e.get('message', {}).get('role') == 'assistant']) or None
     elif client == 'claude':
         ids = {e.get('message', {}).get('id') for e in events if e.get('type') == 'assistant'} - {None}
         rounds = len(ids) or None

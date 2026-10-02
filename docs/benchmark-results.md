@@ -311,7 +311,84 @@ lot, which is why the table above stays as it was measured.
 
 ## Agent sessions
 
-## Latest run: 324 sessions, Oko 0.7.0 (September 2026)
+### Pi: 54 sessions (October 2026)
+
+Completed 54 timed sessions: nine tasks across Astro, HTTPX and ripgrep, three
+repetitions, two conditions. Two additional memory-canary sessions passed. Pi
+1.0.0; Node 24.21.0; OpenAI GPT-5.6 Sol with low thinking. All raw assistant
+events confirmed the requested model and their usage totals matched the report.
+
+| Metric | Pi native | Pi + Oko |
+|---|---:|---:|
+| Sessions | 27 | 27 |
+| Passed | 25 | 25 |
+| Median seconds | 29.72 | 13.97 |
+| Mean seconds | 31.38 | 15.00 |
+| Coding-agent tokens | 1,130,932 | 250,043 |
+| Uncached input tokens | 378,984 | 146,003 |
+| Cached input tokens | 736,512 | 97,152 |
+| Output tokens (includes reasoning) | 15,436 | 6,888 |
+| Agent tool calls | 175 | 30 |
+| Additional Jev tokens | 0 | 724,939 |
+| Jev calls | 0 | 49 |
+
+Oko reduced median session time by 53.0% and coding-agent tokens by 77.9% in
+this run. Agent tokens include cached input; cache-write tokens were zero.
+Additional Jev usage is reported separately. Combined recorded agent + Jev
+tokens were 974,982 with Oko versus 1,130,932 native, a 13.8% reduction. Token
+counts across different models are not billing estimates.
+
+#### Quality
+
+Both conditions passed 25/27 sessions, including every edit task (9/9 each).
+Native missed an anchor in ripgrep-printed-bytes (repeat 1) and returned an
+out-of-bounds line range in httpx-decoder-chain (repeat 3). Oko missed the final
+URL authorization anchor in astro-image-probe-authorization in repetitions 2 and
+3. All attempts are retained; failed answers were not retried. Equal aggregate
+pass counts do not establish general quality equivalence.
+
+#### Method
+
+Pi native uses built-in file tools. Pi + Oko adds setup guidance, native MCP and
+prefetch. Prefetch injected in all 27 enabled sessions. Enabled sessions use a
+prebuilt disk index; task-independent index warmup is excluded from session
+time. Each session starts with a fresh conversation, isolated client
+configuration and fresh Oko session state. Provider-side caches are not cleared.
+Timing includes the enabled prefetch work. Tool counts cover agent-issued calls;
+prefetch runs before the first model call.
+
+Isolation uses tool path guards and disabled shell tools, not an OS sandbox.
+Offline instruction/extension isolation probes passed. Memory canaries test the
+configured cross-session channel; they do not prove absence of every possible
+memory channel. Source and frozen build artifacts were unchanged.
+
+#### Build and reproduction
+
+Branch: codex/pi-harness-support (uncommitted working-tree snapshot). Base
+commit: cf59b521982926c26559e28afe88e6cc9e7d3728. Oko source SHA-256:
+5a0d0cb1c3beba64c333ae2de83ade440b33dc4cfe1b2b7825786a19e160aaee. Binary
+SHA-256: cf766f0afebf3df0bcea0e4987b0eb3c7198c9d0c9e0ab4935adb967668eadc3.
+
+Run with Pi installed and authenticated: `python3
+scripts/benchmark-public/runner.py --suite pi --prepare`, then `--suite pi
+--check`, then `--suite pi --execute`. Default model is openai/gpt-5.6-sol.
+Offline checks: public selftests 38 passed; shared selftests 24 passed;
+observability tests 14 passed.
+
+Sanitized [per-session
+results](../benchmarks/published/0.7.2/agent-sessions/report-pi.json) preserve
+every attempt without transcripts or local paths. This was measured before the
+version-only bump from 0.7.1 to 0.7.2.
+
+API-equivalent cost for 27 sessions per condition: $2.1193 native, $0.7606 agent
++ $0.0283 Jev = $0.7889 with Oko (62.8% lower). Rates checked 2 October:
+[GPT-5.6 Sol](https://developers.openai.com/api/docs/pricing) $4/M uncached
+input, $0.40/M cached input, $20/M output;
+[Jev](https://docs.typesafe.ai/models) $0.042/M input, free output. Pi used
+ChatGPT OAuth; estimates are not verified charges and exclude canaries and setup
+checks.
+
+## Previous run: 324 sessions, Oko 0.7.0 (September 2026)
 
 The README reports this run. Same tasks, clients, models and repeats as before,
 with four setups: **without Oko**, **Oko**, **Oko with the guidance `oko setup`

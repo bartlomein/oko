@@ -161,7 +161,7 @@ class RunnerTests(unittest.TestCase):
                     trial.mkdir()
                     if condition=='warm':
                         r.save(trial/'warmup.json',{'providerCalls':0,'seconds':0.1})
-                    return dict(id=task['id'],client=client,artifact=str(trial),seconds=1,
+                    return dict(id=task['id'],client=client,artifact=str(trial),seconds=1,complete=True,exitCode=0,
                                 grade={'passed':True},oko=condition!='native')
                 with patch.object(r,'STATE',root), patch.object(r.engine,'STATE',root), \
                      patch.object(r.engine,'SETTINGS',settings), patch.object(r,'digest',return_value='hash'), \
@@ -389,7 +389,7 @@ class RunnerTests(unittest.TestCase):
                 seen.append((condition,r.engine.SETTINGS['oko']))
                 trial=trials/f'{index:03}-task-{client}-{condition}';trial.mkdir()
                 if condition=='oko-warm':r.save(trial/'warmup.json',{'seconds':0.1})
-                return dict(id='task',client=client,artifact=str(trial),seconds=1,grade={'passed':True})
+                return dict(id='task',client=client,artifact=str(trial),seconds=1,complete=True,exitCode=0,grade={'passed':True})
             # Exercise the real execution loop. Frozen-state verification is tested separately.
             settings.update(repository='source',commit='commit',archiveSha256='hash',oko='current',okoSha256='hash',tasksSha256='hash')
             with patch.object(r,'SUITE','branch'),patch.object(r,'STATE',root), \
@@ -561,6 +561,67 @@ class RunnerTests(unittest.TestCase):
             self.assertIn('100.00',text)
             self.assertIn('0/1',text)
             self.assertIn('unavailable',text)
+
+
+class PiTests(unittest.TestCase):
+    def test_usage_counts_cache_once_and_requires_settled(self):
+        import pi
+        message = {'type':'message_end','message':{'role':'assistant','stopReason':'stop',
+                   'content':[{'type':'text','text':'READY'}],
+                   'usage':{'input':10,'cacheRead':20,'cacheWrite':3,'output':4,'totalTokens':37}}}
+        self.assertFalse(pi.parse_events([message])['complete'])
+        row = pi.parse_events([message, {'type':'agent_settled'}])
+        self.assertTrue(row['complete'])
+        self.assertEqual(row['final'], 'READY')
+        self.assertEqual(r.token_breakdown(dict(row, client='pi'))['total'], 37)
+        repeated = pi.parse_events([message,message,{'type':'agent_settled'}])
+        self.assertEqual(repeated['tokens']['total'],74)
+        failed = {**message, 'message':{**message['message'],'stopReason':'error'}}
+        self.assertFalse(pi.parse_events([failed,{'type':'agent_settled'}])['complete'])
+        self.assertTrue(pi.parse_events([failed])['providerErrors'])
+
+    def test_tools_are_counted_once_with_results(self):
+        import pi
+        row=pi.parse_events([
+            {'type':'tool_execution_start','toolCallId':'1','toolName':'mcp__oko__search','args':{'question':'where'}},
+            {'type':'tool_execution_update','toolCallId':'1'},
+            {'type':'tool_execution_end','toolCallId':'1','toolName':'mcp__oko__search','result':{'content':[]}}])
+        self.assertEqual(row['toolCalls'],1)
+        self.assertEqual(row['okoCalls'],1)
+        self.assertEqual(row['tools'][0]['input'],{'question':'where'})
+
+    def test_isolated_args_and_setup_prefetch(self):
+        import pi
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)
+            work=folder/'workspace';work.mkdir()
+            settings={'clients':{'pi':'pi'},'models':{'pi':'openai/gpt-5.6-sol'}}
+            for enabled in (False,True):
+                trial=folder/str(enabled);trial.mkdir()
+                task={'kind':'search','cacheCondition':'prefetch' if enabled else 'native'}
+                args,env=pi.args_for(task,'oko-warm' if enabled else 'native',work,trial,settings,'question',r.ROOT)
+                self.assertIn('--no-context-files',args)
+                self.assertIn('--no-session',args)
+                self.assertIn('--no-extensions',args)
+                self.assertNotIn('bash',args[args.index('--tools')+1].split(','))
+                agent=Path(env['PI_CODING_AGENT_DIR'])
+                self.assertEqual((agent/'mcp.json').exists(),enabled)
+                self.assertEqual((agent/'oko-prefetch.js').exists(),enabled)
+                self.assertEqual('builtin:mcp' in args,enabled)
+                self.assertEqual('--append-system-prompt' in args,enabled)
+                if enabled:
+                    config=json.loads((agent/'mcp.json').read_text())
+                    self.assertEqual(config['mcpServers']['oko']['exposure'],'direct')
+
+    def test_pi_plan_has_54_paired_sessions(self):
+        with patch.object(r,'CONDITIONS',('native','prefetch')):
+            repos=json.loads((r.ROOT/'tasks-branch.json').read_text())['repositories']
+            plan=r.plan(repos,['pi'],3)
+            self.assertEqual(len(plan),54)
+            keys={(name,t['id'],t['repetition']) for name,t,_,_ in plan}
+            self.assertEqual(len(keys),27)
+            for key in keys:
+                self.assertEqual({c for name,t,_,c in plan if (name,t['id'],t['repetition'])==key},{'native','prefetch'})
 
 
 if __name__=='__main__':

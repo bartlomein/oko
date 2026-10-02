@@ -17,6 +17,7 @@ cd /path/to/your/project
 oko setup                     # Codex
 oko setup --client claude     # Claude Code
 oko setup --client opencode   # OpenCode 1.x
+oko setup --client pi         # Pi 1.0+
 oko setup --client all
 ```
 
@@ -85,3 +86,38 @@ For local-only operation, append `--no-jev` to the server arguments. This needs 
 TypeSafe key and disables deep mode. For server environments without a credential
 store, put the key in the configured project root’s ignored `.env` or provide it
 in the process environment; do not embed it in shared MCP configuration.
+
+## Pi 1.0+ by hand
+
+Pi 1.0 uses built-in MCP. Install the current package
+`@earendil-works/pi-coding-agent` (Node 22.19+), then merge this entry into
+`.pi/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "oko": {
+      "command": "/absolute/path/to/oko",
+      "args": ["mcp", "--root", "/absolute/path/to/project"],
+      "description": "Find relevant code by intent and return bounded source excerpts.",
+      "exposure": "direct"
+    }
+  }
+}
+```
+
+`direct` declares `mcp__oko__search` to the model without discovery and also
+allows codemode calls. Trust the project when Pi asks, then check `/mcp`.
+Use `/reload` after editing configuration in an existing session.
+`pi mcp list` checks connectivity, but does not load extensions: an old
+`pi-mcp-adapter` extension can still replace built-in MCP inside a session.
+Remove that adapter or enable built-in MCP in `pi config` when needed.
+
+Manual configuration connects search only. `oko setup --client pi` also installs
+search guidance and the optional prefetch extension described in
+[setup details](mcp.md#set-up-a-project). Pi Durable is a separate experimental
+framework and is not covered by this integration.
+
+References: [Pi MCP](https://pi.dev/docs/latest/mcp),
+[extensions](https://pi.dev/docs/latest/extensions),
+[Pi 1.0 release](https://github.com/earendil-works/pi/releases/tag/v1.0.0).
