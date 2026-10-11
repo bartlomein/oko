@@ -323,13 +323,7 @@ fn stats_reports_logged_jev_requests_without_questions() {
     assert_eq!(stats["total"]["failed"], 0);
     assert_eq!(stats["total"]["inputTokens"], 1200);
     let workspace = temp.path().canonicalize().unwrap();
-    let workspaces = stats["workspaces"].as_object().unwrap();
-    assert!(
-        workspaces
-            .keys()
-            .any(|w| Path::new(w).canonicalize().ok().as_deref() == Some(workspace.as_path())),
-        "{workspaces:?}"
-    );
+    assert_eq!(stats["workspaces"][workspace.to_str().unwrap()]["calls"], 1);
 
     let off = tempfile::tempdir().unwrap();
     let mut cmd = command(temp.path());

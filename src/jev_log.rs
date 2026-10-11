@@ -5,7 +5,6 @@
 use crate::ranking::JevCallStats;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::{
     collections::BTreeMap,
     fs,
@@ -15,60 +14,47 @@ use std::{
 };
 
 /// TypeSafe's list price for Jev: input tokens only, output is free.
-pub const USD_PER_MILLION_INPUT: f64 = 0.042;
+const USD_PER_MILLION_INPUT: f64 = 0.042;
 
-const USAGE: &str = "Usage: oko stats [--days N] [--json]\n\nSummarises the Jev requests this machine made in the last N days (default 30):\ncalls, failures, input tokens and their cost at TypeSafe's list price, by day,\nphase and workspace. The log holds no questions, code or keys.\nOKO_JEV_LOG_DIR moves it; OKO_NO_JEV_LOG=1 turns logging off.";
+const USAGE: &str = "Usage: oko stats [--days N] [--json]\n\nSummarises the Jev requests this machine made in the last N days (default 30, UTC days):\ncalls, failures, input tokens and their cost at TypeSafe's list price, by day,\nphase and workspace. The log holds no questions, code or keys.\nOKO_JEV_LOG_DIR moves it; OKO_NO_JEV_LOG=1 turns logging off.";
 
 static WORKSPACE: OnceLock<String> = OnceLock::new();
 
-/// The workspace this process searches, for the log's per-workspace totals.
-/// The first call wins: a process serves one root.
+/// The workspace an MCP server searches, which `--root` can set apart from
+/// the current directory. The first call wins.
 pub fn set_workspace(root: &Path) {
     let _ = WORKSPACE.set(root.display().to_string());
 }
 
-/// One logged request.
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Entry {
+struct Entry {
     /// UTC, RFC 3339 to the second.
-    pub at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<String>,
-    pub phase: String,
-    pub model: String,
-    pub ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    pub ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
+    at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<String>,
+    phase: String,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_tokens: Option<u64>,
 }
 
-fn disabled() -> bool {
-    std::env::var("OKO_NO_JEV_LOG").is_ok_and(|value| {
-        matches!(
-            value.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
-/// Where the log lives, or `None` when there is no cache directory.
-pub fn directory() -> Option<PathBuf> {
+fn directory() -> Option<PathBuf> {
     std::env::var_os("OKO_JEV_LOG_DIR")
-        .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .or_else(|| dirs::cache_dir().map(|path| path.join("oko").join("jev-log")))
 }
 
-/// Log one request. Logging must never fail a search: errors go to stderr.
-pub fn record(call: &JevCallStats, model: &str) {
-    if disabled() {
+/// Log one request. Logging never fails a search.
+pub fn record(call: &JevCallStats) {
+    if std::env::var_os("OKO_NO_JEV_LOG").is_some() {
         return;
     }
     let Some(dir) = directory() else {
@@ -76,9 +62,12 @@ pub fn record(call: &JevCallStats, model: &str) {
     };
     let entry = Entry {
         at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-        workspace: WORKSPACE.get().cloned(),
+        workspace: WORKSPACE.get().cloned().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|path| path.display().to_string())
+        }),
         phase: call.phase.clone(),
-        model: model.to_owned(),
         ok: call.success,
         status: call.http_status,
         error: call.error_class.clone(),
@@ -86,12 +75,7 @@ pub fn record(call: &JevCallStats, model: &str) {
         input_tokens: call.usage.as_ref().and_then(|usage| usage.input_tokens),
         output_tokens: call.usage.as_ref().and_then(|usage| usage.output_tokens),
     };
-    if let Err(error) = append(&dir, &entry) {
-        eprintln!(
-            "oko: cannot write the Jev log in {}: {error}",
-            dir.display()
-        );
-    }
+    let _ = append(&dir, &entry);
 }
 
 fn append(dir: &Path, entry: &Entry) -> Result<()> {
@@ -106,9 +90,9 @@ fn append(dir: &Path, entry: &Entry) -> Result<()> {
     Ok(())
 }
 
-/// Entries from `since` (a `YYYY-MM-DD` UTC date) on, oldest file first.
-/// Unreadable lines are skipped: the log is advisory.
-pub fn read(dir: &Path, since: &str) -> Result<Vec<Entry>> {
+/// Entries from `since` (a `YYYY-MM-DD` UTC date) on. Unreadable lines are
+/// skipped: the log is advisory.
+fn read(dir: &Path, since: &str) -> Result<Vec<Entry>> {
     let mut files: Vec<PathBuf> = match fs::read_dir(dir) {
         Ok(entries) => entries
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
@@ -116,7 +100,7 @@ pub fn read(dir: &Path, since: &str) -> Result<Vec<Entry>> {
                 path.file_name()
                     .and_then(|name| name.to_str())
                     .and_then(|name| name.strip_suffix(".jsonl"))
-                    // A month file can hold entries from `since` on.
+                    // Files are named YYYY-MM, so comparing strings compares months.
                     .is_some_and(|month| month.len() == 7 && month >= &since[..7])
             })
             .collect(),
@@ -137,15 +121,14 @@ pub fn read(dir: &Path, since: &str) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
-/// Calls, failures and tokens for one group of entries.
-#[derive(Debug, Default, PartialEq, Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Totals {
-    pub calls: u64,
-    pub failed: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub usd: f64,
+struct Totals {
+    calls: u64,
+    failed: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    usd: f64,
 }
 
 impl Totals {
@@ -156,23 +139,29 @@ impl Totals {
         self.output_tokens += entry.output_tokens.unwrap_or(0);
         self.usd = self.input_tokens as f64 * USD_PER_MILLION_INPUT / 1e6;
     }
+
+    fn failed(&self) -> String {
+        if self.failed > 0 {
+            format!(", {} failed", self.failed)
+        } else {
+            String::new()
+        }
+    }
 }
 
-#[derive(Debug, Default, PartialEq, Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Summary {
-    pub since: String,
-    pub usd_per_million_input_tokens: f64,
-    pub total: Totals,
-    pub days: BTreeMap<String, Totals>,
-    pub phases: BTreeMap<String, Totals>,
-    pub workspaces: BTreeMap<String, Totals>,
+struct Summary {
+    since: String,
+    total: Totals,
+    days: BTreeMap<String, Totals>,
+    phases: BTreeMap<String, Totals>,
+    workspaces: BTreeMap<String, Totals>,
 }
 
-pub fn summarize(entries: &[Entry], since: &str) -> Summary {
+fn summarize(entries: &[Entry], since: &str) -> Summary {
     let mut summary = Summary {
         since: since.to_owned(),
-        usd_per_million_input_tokens: USD_PER_MILLION_INPUT,
         ..Summary::default()
     };
     for entry in entries {
@@ -204,62 +193,41 @@ fn tokens(n: u64) -> String {
     }
 }
 
-/// Totals, then `label`: a day, phase or workspace path.
-fn line(t: &Totals, label: &str) -> String {
-    let failed = if t.failed > 0 {
-        format!(" ({} failed)", t.failed)
-    } else {
-        String::new()
-    };
-    format!(
-        "  {:>6} calls  {:>7} tokens  ${:.4}  {label}{failed}",
-        t.calls,
-        tokens(t.input_tokens),
-        t.usd
-    )
-}
-
-pub fn render(summary: &Summary, dir: &Path) -> String {
-    let mut out = String::new();
+fn render(summary: &Summary) -> String {
     let t = &summary.total;
     if t.calls == 0 {
-        out.push_str(&format!("No Jev requests since {}.\n", summary.since));
-    } else {
-        out.push_str(&format!(
-            "Jev since {}: {} calls, {} input tokens, ${:.4} at ${} per million input tokens{}.\n",
-            summary.since,
-            t.calls,
-            tokens(t.input_tokens),
-            t.usd,
-            summary.usd_per_million_input_tokens,
-            if t.failed > 0 {
-                format!(", {} failed", t.failed)
-            } else {
-                String::new()
-            }
-        ));
-        for (title, groups) in [
-            ("By day", &summary.days),
-            ("By phase", &summary.phases),
-            ("By workspace", &summary.workspaces),
-        ] {
-            out.push_str(&format!("\n{title}:\n"));
-            for (label, totals) in groups {
-                out.push_str(&line(totals, label));
-                out.push('\n');
-            }
+        return format!("No Jev requests since {}.\n", summary.since);
+    }
+    let mut out = format!(
+        "Jev since {}: {} calls, {} input tokens, ${:.4} at ${USD_PER_MILLION_INPUT} per million input tokens{}.\n",
+        summary.since,
+        t.calls,
+        tokens(t.input_tokens),
+        t.usd,
+        t.failed()
+    );
+    for (title, groups) in [
+        ("By day", &summary.days),
+        ("By phase", &summary.phases),
+        ("By workspace", &summary.workspaces),
+    ] {
+        out.push_str(&format!("\n{title}:\n"));
+        for (label, t) in groups {
+            out.push_str(&format!(
+                "  {:>6} calls  {:>7} tokens  ${:.4}  {label}{}\n",
+                t.calls,
+                tokens(t.input_tokens),
+                t.usd,
+                t.failed()
+            ));
         }
     }
-    out.push_str(&format!(
-        "\nLog: {} (no questions or code; OKO_NO_JEV_LOG=1 turns it off)\n",
-        dir.display()
-    ));
     out
 }
 
 /// `oko stats [--days N] [--json]`.
 pub fn run(args: &[String]) -> Result<()> {
-    let mut days: i64 = 30;
+    let mut days: u16 = 30;
     let mut as_json = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -270,9 +238,9 @@ pub fn run(args: &[String]) -> Result<()> {
                     .next()
                     .and_then(|value| value.parse().ok())
                     .filter(|value| *value >= 1)
-                    .context(format!(
-                        "--days needs a whole number of at least 1.\n\n{USAGE}"
-                    ))?;
+                    .with_context(|| {
+                        format!("--days needs a whole number from 1 to 65535.\n\n{USAGE}")
+                    })?;
             }
             "--help" | "-h" => {
                 println!("{USAGE}");
@@ -282,14 +250,18 @@ pub fn run(args: &[String]) -> Result<()> {
         }
     }
     let dir = directory().context("No user cache directory for the Jev log.")?;
-    let since = (chrono::Utc::now() - chrono::Duration::days(days - 1))
+    let since = (chrono::Utc::now() - chrono::Duration::days(i64::from(days) - 1))
         .format("%Y-%m-%d")
         .to_string();
     let summary = summarize(&read(&dir, &since)?, &since);
     if as_json {
-        println!("{}", json!(summary));
+        println!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
-        print!("{}", render(&summary, &dir));
+        print!("{}", render(&summary));
+        println!(
+            "\nLog: {} (no questions or code; OKO_NO_JEV_LOG=1 turns it off)",
+            dir.display()
+        );
     }
     Ok(())
 }
@@ -303,7 +275,6 @@ mod tests {
             at: at.into(),
             workspace: Some("/w".into()),
             phase: phase.into(),
-            model: "jev-latest".into(),
             ok,
             status: Some(if ok { 200 } else { 500 }),
             input_tokens: input,
@@ -329,8 +300,7 @@ mod tests {
             .write_all(b"not json\n")
             .unwrap();
         assert!(temp.path().join("2026-09.jsonl").exists());
-        let all = read(temp.path(), "2026-09-01").unwrap();
-        assert_eq!(all.len(), 3);
+        assert_eq!(read(temp.path(), "2026-09-01").unwrap().len(), 3);
         let october = read(temp.path(), "2026-10-01").unwrap();
         assert_eq!(
             october.iter().map(|e| e.input_tokens).collect::<Vec<_>>(),
@@ -358,12 +328,13 @@ mod tests {
         assert_eq!(summary.days["2026-10-01"].calls, 2);
         assert_eq!(summary.phases["normal"].calls, 2);
         assert_eq!(summary.workspaces["/w"].calls, 3);
-        let text = render(&summary, Path::new("/log"));
-        assert!(text.starts_with("Jev since 2026-10-01: 3 calls, 750k input tokens, $0.0315"));
-        assert!(text.contains("1 failed"));
-        assert!(
-            render(&summarize(&[], "2026-10-01"), Path::new("/log"))
-                .starts_with("No Jev requests since 2026-10-01.")
+        let text = render(&summary);
+        assert!(text.starts_with(
+            "Jev since 2026-10-01: 3 calls, 750k input tokens, $0.0315 at $0.042 per million input tokens, 1 failed."
+        ));
+        assert_eq!(
+            render(&summarize(&[], "2026-10-01")),
+            "No Jev requests since 2026-10-01.\n"
         );
     }
 
@@ -378,7 +349,6 @@ mod tests {
             [
                 "at",
                 "inputTokens",
-                "model",
                 "ms",
                 "ok",
                 "phase",

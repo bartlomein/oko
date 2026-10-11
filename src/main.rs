@@ -678,7 +678,6 @@ fn run() -> Result<()> {
     if args.first().is_some_and(|arg| arg == "stats") {
         return oko::jev_log::run(&args[1..]);
     }
-    oko::jev_log::set_workspace(&cwd);
     let parsed = parse_arguments(&args).map_err(|error| anyhow::anyhow!("{error}\n\n{USAGE}"))?;
     let key = if parsed.no_jev { None } else { api_key(&cwd)? };
     if let Some(input) = parsed.input {

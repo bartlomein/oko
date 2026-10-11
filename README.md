@@ -182,7 +182,7 @@ Jev requests and can take longer. `--no-jev` uses local keyword ranking only.
 To replace, check, or remove your saved key, use `oko auth login`,
 `oko auth status`, or `oko auth logout`. `oko stats` shows what Jev ranking has
 cost: requests, input tokens and their price over the last 30 days, by day,
-phase and project.
+phase and workspace.
 
 ## Benchmarks
 
@@ -317,9 +317,9 @@ selected source snippets to TypeSafe AI; with setup's prompt hook, a prompt that
 reads as a code question is searched as you send it, so its first paragraph is
 the question. Once a day Oko asks GitHub for the latest release number, and
 nothing else; `--no-jev` and `OKO_NO_UPDATE_CHECK=1` turn that off. Deep mode can send more snippets across
-multiple requests. **Use `--no-jev` for local-only searches.** For `oko stats`, each
-Jev request's time, project path, phase and token counts are logged in the user
-cache directory, never the question or code; `OKO_NO_JEV_LOG=1` turns that off. Oko does not edit your
+multiple requests. **Use `--no-jev` for local-only searches.** Each Jev request's
+time, workspace path, phase and token counts are logged locally for `oko stats`,
+never the question or code; `OKO_NO_JEV_LOG=1` turns that off. Oko does not edit your
 source files. Prepared search data is cached outside your repository;
 [configuration](docs/configuration.md) explains key storage and cache controls.
 

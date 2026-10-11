@@ -439,9 +439,8 @@ pub fn call_jev_observed_within(
 ) -> Result<Value> {
     let before = observations.len();
     let result = send_observed(request, api_key, phase, observations, timeout);
-    let model = env_value("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| "jev-latest".into());
     for call in &observations[before..] {
-        crate::jev_log::record(call, &model);
+        crate::jev_log::record(call);
     }
     result
 }
