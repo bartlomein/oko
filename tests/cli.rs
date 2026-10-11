@@ -36,6 +36,8 @@ fn command(cwd: &Path) -> TestCommand {
         .current_dir(cwd)
         .env("OKO_CACHE_DIR", cache.path())
         .env("OKO_NO_CACHE", "0")
+        .env("OKO_JEV_LOG_DIR", cache.path().join("jev-log"))
+        .env_remove("OKO_NO_JEV_LOG")
         .env_remove("TYPESAFE_API_KEY")
         .env_remove("TYPESAFE_DEFAULT_MODEL")
         .env("TYPESAFE_BASE_URL", "http://127.0.0.1:1");
@@ -280,6 +282,64 @@ fn invalid_provider_scores_fail_instead_of_succeeding() {
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("candidate_1"));
     }
+}
+
+#[test]
+fn stats_reports_logged_jev_requests_without_questions() {
+    let temp = tempfile::tempdir().unwrap();
+    let log = tempfile::tempdir().unwrap();
+    input(temp.path());
+    let mut cmd = command(temp.path());
+    cmd.env("TYPESAFE_API_KEY", "fake-key")
+        .env("OKO_JEV_LOG_DIR", log.path())
+        .args([
+            "rank",
+            "--input",
+            "items.json",
+            "--json",
+            "secret refund question",
+        ]);
+    let (output, _, _) = mock_run(&mut cmd, |request| {
+        let mut response = relevance_response(request, |_| 0.9);
+        response["usage"] = json!({"input_tokens": 1200, "output_tokens": 30});
+        response
+    });
+    success(output);
+    let logged = fs::read_dir(log.path())
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert_eq!(logged.lines().count(), 1);
+    assert!(!logged.contains("refund") && !logged.contains("fake-key"));
+
+    let stats = success(
+        command(temp.path())
+            .env("OKO_JEV_LOG_DIR", log.path())
+            .args(["stats", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(stats["total"]["calls"], 1);
+    assert_eq!(stats["total"]["failed"], 0);
+    assert_eq!(stats["total"]["inputTokens"], 1200);
+    let workspace = temp.path().canonicalize().unwrap();
+    let workspaces = stats["workspaces"].as_object().unwrap();
+    assert!(
+        workspaces
+            .keys()
+            .any(|w| Path::new(w).canonicalize().ok().as_deref() == Some(workspace.as_path())),
+        "{workspaces:?}"
+    );
+
+    let off = tempfile::tempdir().unwrap();
+    let mut cmd = command(temp.path());
+    cmd.env("TYPESAFE_API_KEY", "fake-key")
+        .env("OKO_JEV_LOG_DIR", off.path())
+        .env("OKO_NO_JEV_LOG", "1")
+        .args(["rank", "--input", "items.json", "--json", "refund"]);
+    let (output, _, _) = mock_run(&mut cmd, |request| relevance_response(request, |_| 0.9));
+    success(output);
+    assert_eq!(fs::read_dir(off.path()).unwrap().count(), 0);
 }
 
 #[test]

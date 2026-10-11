@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::{env, fs::File, io::Read, path::Path, time::Instant};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|pi|all] [--root DIRECTORY] [--no-jev]\n       oko upgrade\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general|callers] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|pi|all] [--root DIRECTORY] [--no-jev]\n       oko upgrade\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general|callers] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko stats [--days N] [--json]\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -675,6 +675,10 @@ fn run() -> Result<()> {
     if args.first().is_some_and(|arg| arg == "upgrade") {
         return update::run(&args[1..]);
     }
+    if args.first().is_some_and(|arg| arg == "stats") {
+        return oko::jev_log::run(&args[1..]);
+    }
+    oko::jev_log::set_workspace(&cwd);
     let parsed = parse_arguments(&args).map_err(|error| anyhow::anyhow!("{error}\n\n{USAGE}"))?;
     let key = if parsed.no_jev { None } else { api_key(&cwd)? };
     if let Some(input) = parsed.input {

@@ -2,6 +2,7 @@ pub mod connected;
 pub mod context;
 pub mod floor;
 pub mod investigate;
+pub mod jev_log;
 pub mod navigation;
 pub mod prefetch;
 pub mod preview;

@@ -40,6 +40,7 @@ impl Client {
         cmd.args(["mcp", "--root"])
             .arg(root)
             .env("OKO_METRICS_FILE", metrics.path().join("metrics.jsonl"))
+            .env("OKO_JEV_LOG_DIR", metrics.path().join("jev-log"))
             .env("OKO_CACHE_DIR", cache)
             .env("OKO_NO_CACHE", "0")
             .env("TYPESAFE_API_KEY", "")

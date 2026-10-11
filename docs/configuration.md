@@ -90,6 +90,15 @@ Set `OKO_NO_UPDATE_CHECK=1` to stop the daily check for a newer release and its
 notice (see [upgrading](installation.md#upgrade)); CI environments and
 `--no-jev` never check.
 
+Every Jev request is logged for `oko stats [--days N] [--json]`, which sums
+requests, failures and input tokens by day, phase and workspace and prices them at
+TypeSafe's list price ($0.042 per million input tokens; output is free). Each
+line holds the time, workspace path, phase, model, status, duration and token
+counts, never the question, source or key. The log is one JSON Lines file per
+month in `jev-log` under the user-cache directory's `oko` folder; set
+`OKO_JEV_LOG_DIR` to move it or `OKO_NO_JEV_LOG=1` to turn it off. A write failure
+is reported on stderr without failing the search.
+
 Set `OKO_METRICS_FILE` for an MCP server to append one JSON line per completed
 search with timings, retrieval metadata, and the structured result packet; see the
 [MCP reference](mcp.md#timings-and-retrieval-metadata). The agent-visible tool

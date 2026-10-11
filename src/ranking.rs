@@ -428,8 +428,25 @@ pub fn call_jev_observed(
 }
 
 /// As `call_jev_observed`, for a caller that can do without the provider
-/// sooner than the default timeout.
+/// sooner than the default timeout. Every request made is also added to the
+/// local Jev log (`crate::jev_log`) that `oko stats` reads.
 pub fn call_jev_observed_within(
+    request: &Value,
+    api_key: &str,
+    phase: &str,
+    observations: &mut Vec<JevCallStats>,
+    timeout: Duration,
+) -> Result<Value> {
+    let before = observations.len();
+    let result = send_observed(request, api_key, phase, observations, timeout);
+    let model = env_value("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| "jev-latest".into());
+    for call in &observations[before..] {
+        crate::jev_log::record(call, &model);
+    }
+    result
+}
+
+fn send_observed(
     request: &Value,
     api_key: &str,
     phase: &str,
@@ -1215,6 +1232,7 @@ mod tests {
         command
             .args(["--exact", "ranking::tests::http_child", "--nocapture"])
             .env("OKO_HTTP_TEST_CHILD", "1")
+            .env("OKO_NO_JEV_LOG", "1")
             .env("TYPESAFE_BASE_URL", format!(" http://{address}/// "))
             .env_remove("TYPESAFE_DEFAULT_MODEL")
             .env_remove("OKO_HTTP_NO_USAGE")
