@@ -20,7 +20,10 @@ nonempty. `source` is optional. Unknown fields are discarded.
 
 Results preserve IDs and sources, and return up to five items with relevance
 scores above `0.5`. Each candidate gets an independent yes/no relevance judgment
-using TypeSafe's Noul primitive; all judgments share one request. Several items
+using TypeSafe's Noul primitive; all judgments share one request. With
+`OKO_RANKER=nimble`, [Nimble](configuration.md#rank-with-a-local-nimble) judges
+each item in a request of its own, so each item and the question must fit its
+8,192-token prompt. Several items
 can score highly at once, and the scores do not need to sum to one. The `0.5`
 cutoff is an initial decision threshold, not a calibrated accuracy guarantee.
 These scores are not comparable with older versions' Choice scores.
@@ -60,3 +63,6 @@ fn main() -> anyhow::Result<()> {
 The library is synchronous and returns `Result`; async callers should run it on
 a blocking worker. It does not load `.env` or the OS credential store itself; pass `api_key` explicitly. Use `no_jev: true` to preserve
 input order without a request. `parse_items` validates unknown JSON first.
+To rank with Nimble instead, set `provider: oko::Provider::Nimble` (with the
+longer `Provider::Nimble.timeout()`) and no key; `Provider::from_env()` reads
+`OKO_RANKER` as the CLI does.
