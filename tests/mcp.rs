@@ -44,6 +44,7 @@ impl Client {
             .env("OKO_NO_CACHE", "0")
             .env("TYPESAFE_API_KEY", "")
             .env_remove("TYPESAFE_DEFAULT_MODEL")
+            .env_remove("OKO_RANKER")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -528,6 +529,123 @@ fn a_slow_overloaded_or_unreachable_ranker_yields_labelled_keyword_matches() {
         if let Some(server) = server {
             server.join().unwrap();
         }
+    }
+}
+
+#[test]
+fn a_nimble_server_needs_no_key_judges_each_candidate_alone_and_leaves_deep_to_jev() {
+    use std::{
+        io::Read,
+        net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+    let root = fixture();
+    fs::write(root.path().join("notes.rs"), "fn note() {}\n").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let done = Arc::new(AtomicBool::new(false));
+    let server_done = done.clone();
+    let server = thread::spawn(move || {
+        let mut requests = Vec::new();
+        while !server_done.load(Ordering::Acquire) {
+            let mut stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(error) => panic!("mock provider failed: {error}"),
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 4096];
+            let (headers, request): (String, Value) = loop {
+                let n = stream.read(&mut buffer).unwrap();
+                assert!(n > 0, "incomplete provider request");
+                bytes.extend_from_slice(&buffer[..n]);
+                if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                    let len: usize = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if bytes.len() >= end + 4 + len {
+                        break (headers, serde_json::from_slice(&bytes[end + 4..]).unwrap());
+                    }
+                }
+            };
+            let source = request["state"]["candidates"][0]["source"]
+                .as_str()
+                .unwrap_or("");
+            let noul = if source.starts_with("auth.rs:") {
+                0.9
+            } else {
+                0.1
+            };
+            let body = json!({"answers": {"candidate_1": {"type": "noul", "noul": noul}},
+                "usage": {"input_tokens": 10, "output_tokens": 1}})
+            .to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            requests.push((headers, request));
+        }
+        requests
+    });
+    let cache = tempfile::tempdir().unwrap();
+    // No endpoint: the client's empty TYPESAFE_API_KEY leaves no key at all.
+    let mut client = Client::start_with_env(
+        root.path(),
+        false,
+        None,
+        cache.path(),
+        &[("OKO_RANKER", "nimble"), ("OKO_NIMBLE_URL", &endpoint)],
+    );
+    client.initialize();
+    let response = client.search(json!({"question":"where is the token validated?"}));
+    let packet = assert_packet_envelope(&response);
+    assert_eq!(packet["ranking"], "nimble");
+    assert_eq!(packet["results"][0]["path"], "auth.rs");
+    // One call per judgment, however many requests it took.
+    let calls = packet["retrieval"]["jevCalls"].as_array().unwrap();
+    assert_eq!(
+        calls.last().unwrap()["phase"],
+        "normal",
+        "{}",
+        packet["retrieval"]
+    );
+    assert!(calls.iter().all(|call| call["success"] == true));
+    let deep = client.search(json!({"question":"authentication","deep":true}));
+    assert_eq!(deep["result"]["isError"], true);
+    assert!(
+        deep["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Deep search requires Jev; this server ranks with Nimble.")
+    );
+    drop(client);
+    done.store(true, Ordering::Release);
+    let requests = server.join().unwrap();
+    let judged: u64 = calls
+        .iter()
+        .map(|call| call["usage"]["inputTokens"].as_u64().unwrap() / 10)
+        .sum();
+    assert_eq!(
+        requests.len() as u64,
+        judged,
+        "each request is one candidate"
+    );
+    for (headers, request) in &requests {
+        assert!(!headers.contains("authorization:"));
+        assert_eq!(request["model"], "nimble");
+        assert_eq!(request["state"]["candidates"].as_array().unwrap().len(), 1);
     }
 }
 

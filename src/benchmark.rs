@@ -404,7 +404,10 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<()> {
         (Some(path), Some(before)) => Some(baseline(path, before, &fixture)?),
         _ => None,
     };
-    let key = if options.no_jev {
+    // Searches are ranked by whichever model OKO_RANKER selects.
+    let provider = oko::ranking::Provider::from_env()?;
+    let model = provider.name();
+    let key = if options.no_jev || !provider.needs_key() {
         None
     } else {
         Some(super::api_key(cwd)?.context("Run `oko auth login` or add TYPESAFE_API_KEY to the environment or current directory .env before benchmarking.")?)
@@ -421,7 +424,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<()> {
         fs::write(&input, serde_json::to_vec_pretty(&fixture.items)?)?;
     }
     println!(
-        "Testing {} questions, {} repeat(s); at most {} Jev requests.",
+        "Testing {} questions, {} repeat(s); at most {} {provider} rankings.",
         fixture.cases.len(),
         options.repeats,
         if options.no_jev {
@@ -437,9 +440,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<()> {
             let modes = if options.no_jev {
                 vec![local_mode]
             } else if (index + repeat) % 2 == 0 {
-                vec![local_mode, "jev"]
+                vec![local_mode, model]
             } else {
-                vec!["jev", local_mode]
+                vec![model, local_mode]
             };
             for mode in modes {
                 let mut command = vec![
@@ -450,7 +453,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<()> {
                 if options.items {
                     command.extend(["--input".into(), input.to_string_lossy().into_owned()]);
                 }
-                if mode != "jev" {
+                if mode != model {
                     command.push("--no-jev".into());
                 }
                 let start = Instant::now();
@@ -506,7 +509,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<()> {
     let modes = if options.no_jev {
         vec![local_mode]
     } else {
-        vec![local_mode, "jev"]
+        vec![local_mode, model]
     };
     let summary = summarize(&runs, &modes);
     let report = json!({"metricVersion":2,"implementation":"rust","version":env!("CARGO_PKG_VERSION"),"timingScope":"end-to-end CLI including startup; build excluded","startedAt":started_at,"repo":repo,"repository":before,"repositoryUnchanged":unchanged,"baseline":baseline,"repeats":options.repeats,"fixture":fixture_value,"summary":summary,"runs":runs,"okoCommit":git(cwd,&["rev-parse","HEAD"]).ok(),"okoStatus":git(cwd,&["status","--porcelain"]).ok()});
@@ -515,7 +518,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<()> {
         format!("{}\n", serde_json::to_string_pretty(&report)?),
     )?;
     let mut markdown = format!(
-        "# Oko Rust {} benchmark\n\n{} fixed questions, {} repeat(s). Smoke tests, not a general accuracy estimate.\n\nTimes are end-to-end CLI including startup, file loading/search, and Jev requests; build time is excluded. No warm-up; mode order alternates. Errors count as misses and are excluded from median time.\n\nRepository unchanged: {unchanged}.\n\n",
+        "# Oko Rust {} benchmark\n\n{} fixed questions, {} repeat(s). Smoke tests, not a general accuracy estimate.\n\nTimes are end-to-end CLI including startup, file loading/search, and {provider} requests; build time is excluded. No warm-up; mode order alternates. Errors count as misses and are excluded from median time.\n\nRepository unchanged: {unchanged}.\n\n",
         if options.items {
             "support-ticket"
         } else {

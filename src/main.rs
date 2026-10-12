@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::{env, fs::File, io::Read, path::Path, time::Instant};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|pi|all] [--root DIRECTORY] [--no-jev]\n       oko upgrade\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general|callers] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|pi|all] [--root DIRECTORY] [--no-jev]\n       oko upgrade\n       oko mcp [--root DIRECTORY] [--no-jev]\n       oko auth login|status|logout\n       oko ask [--deep [--max-steps N]] [--intent implementation|explanation|general|callers] [--json] [--no-jev] \"question\"\n       oko rank --input items.json [--intent general|implementation|explanation] [--json] [--no-jev] \"question\"\n       oko benchmark --repo /path/to/repository [--repeats 1]\n       oko benchmark-items [--repeats 1]\n\nNormal ranking requires a TypeSafe key: run `oko auth login`, set TYPESAFE_API_KEY, or use .env.\nOKO_RANKER=nimble ranks with Nimble on a local Ollama instead, without a key.\n--intent defaults to implementation for ask, general for rank.\n--deep lets Jev choose further searches and reads; --max-steps optionally caps local actions.\n--no-jev skips intent-based reranking and uses lexical code search or preserves supplied item order.";
 
 #[derive(Debug, PartialEq)]
 struct Arguments {
@@ -300,30 +300,17 @@ fn judge_beside(
     question: &str,
     chunks: &[search::Chunk],
     corpus: &[search::Chunk],
-    key: Option<&str>,
-    intent: RankingIntent,
-    timeout: std::time::Duration,
+    options: &RankOptions,
     phase: &'static str,
 ) -> (Vec<(usize, f64)>, Vec<JevCallStats>) {
     let mut calls = Vec::new();
     if chunks.is_empty() {
         return (Vec::new(), calls);
     }
+    let intent = options.intent;
     let judged = oko::preview::listing_previews_with_context(question, chunks, corpus, intent)
         .and_then(|items| {
-            ranking::rank_items_with_stats(
-                question,
-                &items,
-                &RankOptions {
-                    api_key: key.map(str::to_owned),
-                    limit: ranking::MAX_ITEMS,
-                    no_jev: false,
-                    intent,
-                    timeout,
-                },
-                phase,
-                &mut calls,
-            )
+            ranking::rank_items_with_stats(question, &items, options, phase, &mut calls)
         })
         .map(|ranking| {
             ranking
@@ -354,7 +341,9 @@ fn lexical_results(chunks: &[search::Chunk]) -> Vec<CodeResult> {
 pub(crate) enum Reranker {
     /// Keyword order only (`--no-jev`).
     Lexical,
+    /// Jev's judgment, or Nimble's when `provider` says so.
     Jev {
+        provider: ranking::Provider,
         key: Option<String>,
         /// How long to wait for each request before ranking by keywords
         /// instead. `None` waits the default timeout and reports provider
@@ -374,15 +363,17 @@ pub(crate) fn rank_code_with_stats(
     intent: RankingIntent,
     further: impl FnOnce() -> Result<Further>,
 ) -> Result<(Vec<CodeResult>, CodeRankingStats)> {
-    let (no_jev, key, patience, recover) = match reranker {
-        Reranker::Lexical => (true, None, None, false),
+    let (no_jev, provider, key, patience, recover) = match reranker {
+        Reranker::Lexical => (true, ranking::Provider::Jev, None, None, false),
         Reranker::Jev {
+            provider,
             key,
             patience,
             recover,
-        } => (false, key, patience, recover),
+        } => (false, provider, key, patience, recover),
     };
     if !no_jev
+        && provider.needs_key()
         && key
             .as_deref()
             .is_none_or(|key| config::trim(key).is_empty())
@@ -411,46 +402,33 @@ pub(crate) fn rank_code_with_stats(
         }
         stats.preview_ms = preview_started.elapsed().as_millis() as u64;
         let rerank_started = Instant::now();
-        let timeout = patience.unwrap_or(ranking::JEV_TIMEOUT);
+        let options = RankOptions {
+            api_key: key,
+            limit: ranking::MAX_ITEMS,
+            no_jev: false,
+            intent,
+            timeout: patience.unwrap_or(provider.timeout()),
+            provider,
+        };
         let further = further()?;
         let (beside_connected, beside_keywords) = (&further.connected, &further.keywords);
         let (first, beside) = std::thread::scope(|scope| {
-            let key = key.as_deref();
+            let options = &options;
             let connected = scope.spawn(move || {
                 // The implementation criteria exclude tests and callers by
                 // design; those are what a connection finds.
-                let intent = RankingIntent::Related;
-                judge_beside(
-                    question,
-                    beside_connected,
-                    corpus,
-                    key,
-                    intent,
-                    timeout,
-                    "connected",
-                )
+                let options = RankOptions {
+                    intent: RankingIntent::Related,
+                    ..options.clone()
+                };
+                judge_beside(question, beside_connected, corpus, &options, "connected")
             });
-            let keywords = scope.spawn(move || {
-                judge_beside(
-                    question,
-                    beside_keywords,
-                    corpus,
-                    key,
-                    intent,
-                    timeout,
-                    "further",
-                )
-            });
+            let keywords = scope
+                .spawn(move || judge_beside(question, beside_keywords, corpus, options, "further"));
             let first = ranking::rank_items_with_stats(
                 question,
                 &items,
-                &RankOptions {
-                    api_key: key.map(str::to_owned),
-                    limit: ranking::MAX_ITEMS,
-                    no_jev: false,
-                    intent,
-                    timeout,
-                },
+                options,
                 "normal",
                 &mut stats.jev_calls,
             );
@@ -533,13 +511,7 @@ pub(crate) fn rank_code_with_stats(
                 let recovered = ranking::rank_items_with_stats(
                     question,
                     &recovery_items,
-                    &RankOptions {
-                        api_key: key,
-                        limit: ranking::MAX_ITEMS,
-                        no_jev: false,
-                        intent,
-                        timeout,
-                    },
+                    &options,
                     "recovery",
                     &mut stats.jev_calls,
                 );
@@ -676,7 +648,12 @@ fn run() -> Result<()> {
         return update::run(&args[1..]);
     }
     let parsed = parse_arguments(&args).map_err(|error| anyhow::anyhow!("{error}\n\n{USAGE}"))?;
-    let key = if parsed.no_jev { None } else { api_key(&cwd)? };
+    let provider = ranking::Provider::from_env()?;
+    let key = if parsed.no_jev || !provider.needs_key() {
+        None
+    } else {
+        api_key(&cwd)?
+    };
     if let Some(input) = parsed.input {
         let items = read_items(&cwd.join(input))?;
         let ranking = rank_items(
@@ -686,6 +663,8 @@ fn run() -> Result<()> {
                 api_key: key,
                 no_jev: parsed.no_jev,
                 intent: parsed.intent,
+                timeout: provider.timeout(),
+                provider,
                 ..Default::default()
             },
         )?;
@@ -708,7 +687,7 @@ fn run() -> Result<()> {
                 if ranking.method == "input" {
                     "input-order (--no-jev)"
                 } else {
-                    "jev"
+                    provider.name()
                 },
                 parsed.question
             );
@@ -733,6 +712,10 @@ fn run() -> Result<()> {
             }
         }
     } else {
+        // Its action choices hold more than one Nimble prompt can.
+        if parsed.deep && !provider.needs_key() {
+            bail!("--deep requires Jev; OKO_RANKER selects {provider}.");
+        }
         if parsed.deep && key.is_none() {
             bail!("TYPESAFE_API_KEY is required for --deep investigation.");
         }
@@ -830,6 +813,7 @@ fn run() -> Result<()> {
                     Reranker::Lexical
                 } else {
                     Reranker::Jev {
+                        provider,
                         key,
                         patience: None,
                         recover: true,
@@ -852,7 +836,7 @@ fn run() -> Result<()> {
             eprintln!("Notice: {notice}");
         }
         if parsed.json {
-            let mut output = serde_json::json!({"question": parsed.question, "ranking": if parsed.no_jev { "lexical" } else { "jev" }, "results": results});
+            let mut output = serde_json::json!({"question": parsed.question, "ranking": if parsed.no_jev { "lexical" } else { provider.name() }, "results": results});
             output["cache"] = serde_json::to_value(workspace.timings)?;
             if let Some(metadata) = investigation {
                 output["investigation"] = metadata;
@@ -874,7 +858,7 @@ fn run() -> Result<()> {
                 if parsed.no_jev {
                     "lexical-only (--no-jev)"
                 } else {
-                    "jev"
+                    provider.name()
                 },
                 parsed.question
             );

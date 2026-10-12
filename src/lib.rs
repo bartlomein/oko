@@ -13,6 +13,6 @@ pub mod stemmer;
 pub mod usages;
 
 pub use ranking::{
-    ItemRanking, JevCallStats, JevUsage, RankItem, RankOptions, RankedItem, RankingIntent,
-    parse_items, rank_items,
+    ItemRanking, JevCallStats, JevUsage, Provider, RankItem, RankOptions, RankedItem,
+    RankingIntent, parse_items, rank_items,
 };
