@@ -300,7 +300,13 @@ id (we tuned on `dev` only).
 python3 scripts/benchmark-public/replay/arb.py --fetch            # free
 python3 scripts/benchmark-public/replay/arb.py --split all         # keyword ranking only, free
 python3 scripts/benchmark-public/replay/arb.py --split all --jev   # paid: 345 Jev calls, about 11 minutes
+python3 scripts/benchmark-public/replay/arb.py --split all --nimble   # free on a local Ollama with Nimble; slower
 ```
+
+`--nimble` ranks with [Nimble](../../docs/configuration.md#rank-with-a-local-nimble)
+(`OKO_RANKER=nimble`) at `http://127.0.0.1:11434`; pass
+`--env OKO_NIMBLE_URL=http://host:port` for another server, since the harness
+gives Oko none of the shell's `OKO_` settings.
 
 The benchmark's RepoMap, lexical, and BM25 baselines run locally with its own
 CLI (`arb eval-repomap`, `arb eval-baseline --ranker bm25|lexical`); its
