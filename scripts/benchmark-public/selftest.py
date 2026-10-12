@@ -329,6 +329,47 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'Memory canary failed'):
             run('CANARY_leaked_from_previous_session')
 
+    def test_rankers_suite_runs_native_jev_and_nimble_on_every_client(self):
+        import subprocess
+        import sys
+        listed=subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','rankers'],capture_output=True,text=True)
+        self.assertIn("324 sessions; suite=rankers; repeats=3; conditions=('native', 'jev', 'nimble')",listed.stdout)
+        self.assertEqual({line.split()[-2] for line in listed.stdout.splitlines()[1:]},{'codex','opencode','claude','pi'})
+        self.assertNotEqual(subprocess.run([sys.executable,str(r.ROOT/'runner.py'),'--suite','rankers','--guided'],
+                                           capture_output=True).returncode,0)
+        # Both rankers get exactly what the prefetch condition gets.
+        self.assertEqual([r.setup_condition(c) for c in ('native','jev','nimble')],['native','prefetch','prefetch'])
+
+    def test_launcher_gives_a_nimble_session_its_ranker_and_no_key(self):
+        import os
+        import subprocess
+        import sys
+        state=r.PROJECT/'benchmarks/results/public-rankers/astro'
+        state.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='results-launcher-',dir=state) as tmp:
+            seen={}
+            for condition,ranker in (('jev',{}),('nimble',{'ranker':'nimble','nimbleUrl':'http://127.0.0.1:9'})):
+                trial=Path(tmp)/condition/'trial';work=trial/'workspace';work.mkdir(parents=True)
+                binary=trial/'fake-oko'
+                binary.write_text('#!'+sys.executable+'\nimport json,os\nprint(json.dumps({k:os.environ.get(k) for k in '
+                                  '("TYPESAFE_API_KEY","OKO_RANKER","OKO_NIMBLE_URL")}))\n')
+                binary.chmod(0o700)
+                r.save(trial/'settings.json',dict(oko=str(binary),rg='rg',jevModel='offline',**ranker))
+                result=subprocess.run([sys.executable,str(r.ROOT/'oko-server.py'),str(work),str(trial/'cache')],
+                                      env=dict(os.environ,TYPESAFE_API_KEY='offline-test'),capture_output=True,text=True,check=True)
+                seen[condition]=json.loads(result.stdout)
+        self.assertEqual(seen['jev'],{'TYPESAFE_API_KEY':'offline-test','OKO_RANKER':None,'OKO_NIMBLE_URL':None})
+        self.assertEqual(seen['nimble'],{'TYPESAFE_API_KEY':None,'OKO_RANKER':'nimble','OKO_NIMBLE_URL':'http://127.0.0.1:9'})
+
+    def test_rankers_report_pairs_each_ranker_with_native_and_the_other(self):
+        from reporting import render
+        rows=[dict(client='pi',condition=c,repository='astro',id='t',repetition=1,seconds=s,grade={'passed':True})
+              for c,s in (('native',40),('jev',20),('nimble',30))]
+        text=render(dict(runs=rows,plan=rows,complete=True,suite='rankers',repeats=1),['pi'],['native','jev','nimble'])
+        self.assertIn('| pi | without Oko -> Jev | 1 | -20.00 | -50.0% |',text)
+        self.assertIn('| pi | without Oko -> Nimble | 1 | -10.00 | -25.0% |',text)
+        self.assertIn('| pi | Jev -> Nimble | 1 | +10.00 | +50.0% |',text)
+
     def test_launcher_uses_trial_binary_not_repository_settings(self):
         import os
         import subprocess

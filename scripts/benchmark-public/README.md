@@ -365,3 +365,27 @@ including cache reads/writes; reasoning is already included in output.
 Prefetch's Jev usage is counted separately from coding-agent tokens.
 The same public source is sent to the selected Pi provider; Oko additionally
 sends selected excerpts to TypeSafe/Jev. `--prepare` and `--check` make no paid calls.
+
+## Rankers: Jev against Nimble in agent sessions
+
+`--suite rankers` runs the nine branch tasks with three repetitions in three
+conditions: native, and Oko as `oko setup` installs it (guidance and prompt
+hook) twice, ranking with Jev (`jev`) or with Nimble on a local Ollama
+(`nimble`). All four clients by default, 324 timed sessions, plus two
+memory-canary sessions per client. Results live under
+`benchmarks/results/public-rankers`.
+
+```sh
+python3 scripts/benchmark-public/runner.py --suite rankers --prepare
+python3 scripts/benchmark-public/runner.py --suite rankers --check
+python3 scripts/benchmark-public/runner.py --suite rankers --execute
+```
+
+Like the Pi suite, it freezes the working-tree build without committing it.
+Preparation records the Ollama version and the digest of `nimble:latest` at
+`--nimble-url` (default `http://127.0.0.1:11434`); checks and execution stop if
+either changes. A Nimble session's Oko gets `OKO_RANKER=nimble` from the
+launcher and no TypeSafe key. To run one client with another model, prepare
+again with `--clients` and that client's `--*-model`; each run keeps its own
+settings in its report. Nimble shares one GPU with nothing else in the run, but
+keep other work off that GPU while it runs: its sessions' times are its speed.
