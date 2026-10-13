@@ -3059,6 +3059,67 @@ fn a_code_prompt_is_answered_before_the_first_turn_and_other_prompts_are_not() {
 }
 
 #[test]
+fn a_nimble_prefetch_judges_the_first_twenty_candidates_and_names_a_missing_ranker() {
+    let root = upload_fixture();
+    // More keyword matches than a Nimble prefetch judges.
+    for n in 0..30 {
+        fs::write(
+            root.path().join(format!("upload_{n:02}.rs")),
+            format!("pub fn upload_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    let (endpoint, phases, done) = session_provider(|candidate| {
+        if candidate["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("retry_upload")
+        {
+            0.9
+        } else {
+            0.1
+        }
+    });
+    let prompt =
+        "Where does the uploader retry a failed upload after a timeout?\n\nAnswer in JSON.";
+    let cache = tempfile::tempdir().unwrap();
+    let mut client = Client::start_with_env(
+        root.path(),
+        false,
+        None,
+        cache.path(),
+        &[("OKO_RANKER", "nimble"), ("OKO_NIMBLE_URL", &endpoint)],
+    );
+    client.initialize();
+    let response = client.search(json!({"question": prompt, "prefetch": "s1"}));
+    assert!(
+        hook_context(&response)
+            .expect("a code prompt is answered")
+            .contains("pub fn retry_upload")
+    );
+    // A request per candidate, for the first twenty only.
+    assert_eq!(*phases.lock().unwrap(), vec!["normal"; 20]);
+    done.store(true, std::sync::atomic::Ordering::Release);
+
+    // Keyword order is no judgment; the skip says the ranker gave none.
+    let cache = tempfile::tempdir().unwrap();
+    let mut client = Client::start_with_env(
+        root.path(),
+        false,
+        None,
+        cache.path(),
+        &[
+            ("OKO_RANKER", "nimble"),
+            ("OKO_NIMBLE_URL", "http://127.0.0.1:1"),
+        ],
+    );
+    client.initialize();
+    let response = client.search(json!({"question": prompt, "prefetch": "s1"}));
+    assert_eq!(hook_context(&response), None);
+    assert_eq!(response["metrics"]["prefetch"]["reason"], "unreachable");
+}
+
+#[test]
 fn without_jev_a_prefetch_shows_only_definitions_the_prompt_names() {
     let root = upload_fixture();
     let mut client = Client::start(root.path(), true, None);

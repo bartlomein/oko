@@ -135,9 +135,10 @@ Nimble scores each question in a prompt of its own that holds the whole request,
 up to 8,192 tokens, so Oko sends each candidate in a request of its own, eight at
 a time. A search judges about 150 candidates, so its speed depends on your GPU.
 A Nimble judgment may take up to 60 seconds (Jev: 10), and an MCP search waits
-for all of it unless `OKO_JEV_TIMEOUT_MS` is set lower; the prompt hook still
-waits at most 2.5 seconds, after which it shows only the definitions a prompt
-names. Deep mode needs Jev: its choice between actions holds more than one
+for all of it unless `OKO_JEV_TIMEOUT_MS` is set lower. The prompt hook still
+waits at most 2.5 seconds, so with Nimble it judges only the first 20
+candidates: on an RTX 5090 that took 1.3 seconds, and the whole shortlist more
+than 2.5. Deep mode needs Jev: its choice between actions holds more than one
 Nimble prompt can.
 
 `oko setup` does not set these variables. A coding tool started from a terminal

@@ -36,6 +36,11 @@ const JEV_PATIENCE: Duration = Duration::from_secs(4);
 const OTHER_CANDIDATES: usize = 6;
 /// A prefetch runs while the user waits for the agent to start.
 const PREFETCH_PATIENCE: Duration = Duration::from_millis(2_500);
+/// Nimble judges each candidate in a request of its own: a whole shortlist
+/// took it 3 to 5 seconds on one GPU, past a prefetch's patience. The first
+/// candidates hold most of what agents need (360 of 404 expected locations in
+/// the 0.6.0 agent suite were in the first 20), so a prefetch judges those.
+const NIMBLE_PREFETCH_CANDIDATES: usize = 20;
 /// Room kept beside the answer for the header and its tags.
 const PREFETCH_WRAPPING_CHARS: usize = 40;
 /// A prompt that names code the ranker rejected still gets a pointer to
@@ -651,7 +656,14 @@ impl OkoServer {
                 None
             }
             Ok(Prefetched::Rejected(retrieval)) => {
-                record_prefetch_skip(&prompt, "nothing relevant", None, retrieval, started);
+                // Keyword order is no judgment: a ranker that gave none says why.
+                let fallback = retrieval
+                    .as_ref()
+                    .and_then(|retrieval| retrieval.get("lexicalFallback"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let reason = fallback.as_deref().unwrap_or("nothing relevant");
+                record_prefetch_skip(&prompt, reason, None, retrieval, started);
                 None
             }
             Err(error) => {
@@ -1091,7 +1103,11 @@ impl OkoServer {
             found.shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
             return Ok(found);
         }
-        let shortlist = oko::floor::pinned_shortlist(&named.pins, shortlist);
+        let mut shortlist = oko::floor::pinned_shortlist(&named.pins, shortlist);
+        if ask.lean && !self.no_jev && self.provider == Provider::Nimble {
+            // Named definitions lead, so they stay.
+            shortlist.truncate(NIMBLE_PREFETCH_CANDIDATES);
+        }
         found.pins = named
             .pins
             .iter()
