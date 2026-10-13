@@ -10,6 +10,8 @@ benchmark, run against Sense on the same evening. Raw per-task results are in
 and [`0.5.0/`](../benchmarks/published/0.5.0/) for earlier releases; Sense's
 earlier paired run is in `0.6.0/`); the
 harnesses and commands are in [the runner README](../scripts/benchmark-public/README.md#retrieval-benchmarks).
+[Nimble against Jev](#nimble-against-jev-october-2026) compares ranking
+with Jev and with Nimble on your own GPU, on the same build.
 
 ## Agent Retrieval Bench
 
@@ -387,6 +389,131 @@ input, $0.40/M cached input, $20/M output;
 [Jev](https://docs.typesafe.ai/models) $0.042/M input, free output. Pi used
 ChatGPT OAuth; estimates are not verified charges and exclude canaries and setup
 checks.
+
+## Nimble against Jev (October 2026)
+
+Oko can rank with [Nimble](configuration.md#rank-with-a-local-nimble), Bespoke
+Labs' open Jev-style model, on your own Ollama server instead of with Jev. We
+compared the two on 12 October, on Agent Retrieval Bench and in agent
+sessions with Claude Code, Codex, OpenCode and Pi. Raw results are in
+[`benchmarks/published/nimble/`](../benchmarks/published/nimble/).
+
+**Setup.** Nimble: `nimble:latest` (Bespoke-Nimble-9B, Q8_0, digest
+`9b953de7`) on Ollama 0.35.1 with one NVIDIA RTX 5090, reached through
+`kubectl port-forward`: an 8,194-token context, eight requests at a time, no
+prompt caching. Jev: `jev-1.13.0`, as in the published runs. Both rank the same
+candidates with the same previews from the same build; Nimble judges each
+candidate in a request of its own, eight at a time, and Jev all of a search's
+candidates in one.
+
+### Agent Retrieval Bench, with Nimble
+
+All 345 tasks with the method [above](#agent-retrieval-bench); Jev run the same
+day, beside the three published 0.7.0 runs.
+
+| Ranker | Recall@5 | Recall@20 | MRR | BCY@8k | Median search |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Jev, 12 October | 0.45 | 0.69 | 0.38 | 0.49 | 0.70 s |
+| Jev, 0.7.0 (three runs) | 0.44 | 0.68 | 0.37 | 0.49 | 0.72 s |
+| Nimble, 12 October | 0.44 | 0.68 | 0.34 | 0.47 | 11.1 s |
+
+Paired by task against the same day's Jev run, Nimble's MRR is 0.033 lower
+(95% bootstrap range [−0.066, +0.002] by task, [−0.081, +0.038] with each
+repository as one unit); Recall@5 (−0.006) and Recall@20 (−0.008) are within
+the noise, and two Jev runs differ by at most 0.004 in MRR. Oko with Nimble
+still leads every published method on MRR and BCY@8k (the best of them: 0.24
+and 0.38).
+
+By task type, MRR from Jev to Nimble: failing test → broken file 0.70 → 0.49
+(Recall@20 0.88 → 0.84), review comment 0.25 → 0.22, pull request → tests to
+update 0.25 → 0.38 (Recall@5 0.36 → 0.43), edit → ripple 0.21 → 0.20
+(Recall@20 0.61 → 0.56). On the held-out half, MRR 0.33 → 0.32 and Recall@5
+0.42 → 0.44. Nimble finds the broken file about as often but puts it first
+much less often.
+
+The two judge differently. Nimble rates 11.2 candidates per search above 0.5
+(Jev 2.2) and shows an excerpt on 96% of tasks (89%); its scores correlate
+weakly with Jev's (median Spearman 0.37, two Jev runs 0.96), and the two put
+the same file first on 43% of tasks (two Jev runs: 90 to 93%). A search took a
+median 11.1 s (p90 23.6 s) against 0.70 s: these queries run to 4,000 bytes,
+and Nimble reads the question again with each of about 146 candidates.
+
+### Agent sessions, with Nimble
+
+The rankers suite (`runner.py --suite rankers`): the nine branch tasks, three
+repetitions, without Oko and with Oko as setup installs it (guidance and
+prompt hook) ranking with Jev or with Nimble; low effort; commit `7dc779b`.
+Five setups: Claude Code 2.1.289 with Claude Sonnet 5, Codex CLI 0.162.1 with
+GPT-5.6 Sol, OpenCode 1.18.31 with Claude Sonnet 5, and Pi 1.2.0 with each.
+All 405 sessions completed; every memory canary passed, and source and frozen
+artifacts were unchanged. Means over 27 sessions:
+
+| Coding tool (model) | | Without Oko | Oko + Jev | Oko + Nimble |
+| --- | --- | ---: | ---: | ---: |
+| Claude Code (Sonnet 5) | Time | 18.7 s | 7.0 s | 12.0 s |
+| | Agent tokens | 65,518 | 23,982 | 36,429 |
+| | Passed | 26 | 24 | 21 |
+| Codex (GPT-5.6 Sol) | Time | 23.4 s | 15.3 s | 20.5 s |
+| | Agent tokens | 73,195 | 33,699 | 44,676 |
+| | Passed | 27 | 26 | 24 |
+| OpenCode (Sonnet 5) | Time | 13.6 s | 8.1 s | 11.8 s |
+| | Agent tokens | 43,051 | 16,935 | 30,933 |
+| | Passed | 22 | 26 | 20 |
+| Pi (GPT-5.6 Sol) | Time | 27.1 s | 15.7 s | 20.8 s |
+| | Agent tokens | 39,934 | 11,310 | 13,673 |
+| | Passed | 22 | 25 | 23 |
+| Pi (Sonnet 5) | Time | 10.0 s | 6.5 s | 9.3 s |
+| | Agent tokens | 24,936 | 14,005 | 20,589 |
+| | Passed | 23 | 21 | 20 |
+
+Paired by task and repetition, the median change from no Oko:
+
+| Coding tool (model) | Time, Jev | Time, Nimble | Agent tokens, Jev | Agent tokens, Nimble | Nimble faster than no Oko / than Jev |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Claude Code (Sonnet 5) | −62% | −39% | −62% | −45% | 21 / 5 of 27 |
+| Codex (GPT-5.6 Sol) | −38% | −11% | −53% | −38% | 15 / 7 of 27 |
+| OpenCode (Sonnet 5) | −48% | −24% | −58% | −45% | 21 / 4 of 27 |
+| Pi (GPT-5.6 Sol) | −47% | −20% | −67% | −60% | 23 / 8 of 27 |
+| Pi (Sonnet 5) | −38% | −18% | −45% | −22% | 16 / 6 of 27 |
+
+Nimble keeps 29 to 63% of Jev's time savings and 49 to 90% of its token
+savings. Nimble's own tokens are not in the agent totals:
+it read 19,000 to 41,000 input tokens per session on the local GPU (Jev 14,000
+to 27,000, billed by TypeSafe).
+
+**The prompt hook.** It answered all 135 sessions with either ranker, in a
+median 0.42 s with Jev and 1.34 s with Nimble. With Nimble it judges only the
+first 20 candidates. With the whole shortlist, as first implemented, it ran
+past its 2.5 seconds in all 25 Nimble sessions of an earlier, stopped run of 73
+sessions, and those Claude Code and Codex sessions were slower than without Oko
+(paired median +47% and +46%). Replaying the nine tasks' prompts twice through
+the hook: the whole shortlist answered 0 of 18; the first 20 answered 18 of 18
+in a median 1.3 s, holding 28 of 48 expected locations; the first 30, 34 of 48
+in 1.9 s, too close to the limit on a slower GPU; Jev, 44 of 48 in 0.4 s.
+
+**Quality.** Nimble passed 108 of 135 sessions, Jev 122 and no Oko 120, and two
+edit tasks account for most of the difference. In astro-forwarded-empty,
+Nimble's hook answer led with other code and with the function's identical
+copy in `validate-headers.ts`, without `request.ts`, the file the edit belongs
+in, and all 15 sessions also edited the copy and failed (Jev 7 and no Oko 3,
+the same way).
+In ripgrep-capture-hyphen it led with `crates/matcher/src/lib.rs` (0.80) and
+rated `interpolate.rs` 0.44, and Claude Code and OpenCode edited `lib.rs` in
+all six of their sessions (no Oko: 2 failures). In both, the right code was
+among the 20 judged candidates: Nimble rated unrelated code above it. Nimble
+also failed httpx-async-auth-body 3 times, astro-action-key-guards twice and
+ripgrep-capture-expansion once, where Jev failed none; Jev failed
+astro-image-probe-authorization 6 times (no Oko 4, Nimble 0).
+
+OpenCode with GPT-5.6 Sol stopped after 20 of its 81 sessions, when the
+ChatGPT plan's usage ran low: without Oko 7 of 7 passed in 21.3 s on average,
+Jev 6 of 6 in 7.6 s, Nimble 6 of 7 in 18.7 s.
+
+**Limits.** One GPU and one Nimble deployment, through a port-forward and
+without prompt caching: Nimble's speed here is not the model's alone. One
+Nimble run of Agent Retrieval Bench; Nimble is deterministic for a given
+request, Jev is not. Nine tasks on three repositories, three repetitions each.
+Agent tokens exclude both rankers' tokens.
 
 ## Previous run: 324 sessions, Oko 0.7.0 (September 2026)
 

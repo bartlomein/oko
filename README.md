@@ -243,6 +243,15 @@ $0.028 for Jev. These are API-equivalent estimates; Pi used ChatGPT OAuth.
 [Pi results and methodology](docs/benchmark-results.md#pi-54-sessions-october-2026)
 and [per-session data](benchmarks/published/0.7.2/agent-sessions/report-pi.json).
 
+Ranking with [Nimble](docs/configuration.md#rank-with-a-local-nimble) on one
+local RTX 5090 instead of with Jev (12 October): on Agent Retrieval Bench the
+same recall (Recall@20 0.68 against 0.69) but the right file first less often
+(MRR 0.34 against 0.38), with searches of about 11 s instead of 0.7 s. In 405
+sessions with Claude Code, Codex, OpenCode and Pi, Oko with Nimble cut time by a
+median 11–39% and agent tokens by 22–60% against no Oko (with Jev: 38–62% and
+45–67%), and passed 108 of 135 against 122 with Jev and 120 without Oko.
+[Details](docs/benchmark-results.md#nimble-against-jev-october-2026).
+
 ### Against Sense
 
 [Sense](https://github.com/luuuc/sense) publishes an agent benchmark: six
