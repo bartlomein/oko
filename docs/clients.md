@@ -121,3 +121,23 @@ framework and is not covered by this integration.
 References: [Pi MCP](https://pi.dev/docs/latest/mcp),
 [extensions](https://pi.dev/docs/latest/extensions),
 [Pi 1.0 release](https://github.com/earendil-works/pi/releases/tag/v1.0.0).
+
+## Rank with a local Nimble
+
+To rank with [Nimble](configuration.md#rank-with-a-local-nimble) on your own
+Ollama server instead of Jev, the `oko mcp` server needs `OKO_RANKER=nimble` in
+its environment, and `OKO_NIMBLE_URL` when Ollama is not at
+`http://127.0.0.1:11434`. No TypeSafe key is needed. Add them where each tool
+keeps the server's environment:
+
+| Tool | Where |
+| --- | --- |
+| Codex | `[mcp_servers.oko.env]` in `.codex/config.toml`: `OKO_RANKER = "nimble"` |
+| Claude Code | `"env":{"OKO_RANKER":"nimble"}` in the `claude mcp add-json` JSON |
+| OpenCode | `"environment":{"OKO_RANKER":"nimble"}` in the `oko` entry of `opencode.json` |
+| Pi | `"env":{"OKO_RANKER":"nimble"}` in the `oko` entry of `.pi/mcp.json` |
+
+Rerunning `oko setup` keeps these entries for Codex, OpenCode and Pi; it
+replaces Claude Code's connection without them. The OpenCode and Pi prompt
+hooks start Oko with the tool's own environment, so export `OKO_RANKER` before
+starting the tool for them to use Nimble too.

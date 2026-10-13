@@ -300,7 +300,13 @@ id (we tuned on `dev` only).
 python3 scripts/benchmark-public/replay/arb.py --fetch            # free
 python3 scripts/benchmark-public/replay/arb.py --split all         # keyword ranking only, free
 python3 scripts/benchmark-public/replay/arb.py --split all --jev   # paid: 345 Jev calls, about 11 minutes
+python3 scripts/benchmark-public/replay/arb.py --split all --nimble   # free on a local Ollama with Nimble; slower
 ```
+
+`--nimble` ranks with [Nimble](../../docs/configuration.md#rank-with-a-local-nimble)
+(`OKO_RANKER=nimble`) at `http://127.0.0.1:11434`; pass
+`--env OKO_NIMBLE_URL=http://host:port` for another server, since the harness
+gives Oko none of the shell's `OKO_` settings.
 
 The benchmark's RepoMap, lexical, and BM25 baselines run locally with its own
 CLI (`arb eval-repomap`, `arb eval-baseline --ranker bm25|lexical`); its
@@ -359,3 +365,27 @@ including cache reads/writes; reasoning is already included in output.
 Prefetch's Jev usage is counted separately from coding-agent tokens.
 The same public source is sent to the selected Pi provider; Oko additionally
 sends selected excerpts to TypeSafe/Jev. `--prepare` and `--check` make no paid calls.
+
+## Rankers: Jev against Nimble in agent sessions
+
+`--suite rankers` runs the nine branch tasks with three repetitions in three
+conditions: native, and Oko as `oko setup` installs it (guidance and prompt
+hook) twice, ranking with Jev (`jev`) or with Nimble on a local Ollama
+(`nimble`). All four clients by default, 324 timed sessions, plus two
+memory-canary sessions per client. Results live under
+`benchmarks/results/public-rankers`.
+
+```sh
+python3 scripts/benchmark-public/runner.py --suite rankers --prepare
+python3 scripts/benchmark-public/runner.py --suite rankers --check
+python3 scripts/benchmark-public/runner.py --suite rankers --execute
+```
+
+Like the Pi suite, it freezes the working-tree build without committing it.
+Preparation records the Ollama version and the digest of `nimble:latest` at
+`--nimble-url` (default `http://127.0.0.1:11434`); checks and execution stop if
+either changes. A Nimble session's Oko gets `OKO_RANKER=nimble` from the
+launcher and no TypeSafe key. To run one client with another model, prepare
+again with `--clients` and that client's `--*-model`; each run keeps its own
+settings in its report. Nimble shares one GPU with nothing else in the run, but
+keep other work off that GPU while it runs: its sessions' times are its speed.

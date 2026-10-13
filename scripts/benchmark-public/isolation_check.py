@@ -7,11 +7,12 @@ import tempfile
 import secrets
 
 
-def check_isolation(root,state):
+def check_isolation(root,state,clients=()):
     # Existing probe captures Codex/Claude requests at a localhost mock provider;
     # OpenCode is inspected through its resolved configuration, without paid calls.
+    # No clients named: all three.
     probe=root.parent/'benchmark-twenty/isolation-smoke.py'
-    result=subprocess.run([sys.executable,str(probe)],capture_output=True,text=True,timeout=120)
+    result=subprocess.run([sys.executable,str(probe),*clients],capture_output=True,text=True,timeout=120)
     (state/'isolation-preflight.log').write_text(result.stdout+result.stderr)
     if result.returncode:raise RuntimeError('Installed-client isolation probe failed; see isolation-preflight.log')
     return {'passed':True,'method':'localhost-request-capture-and-opencode-config',

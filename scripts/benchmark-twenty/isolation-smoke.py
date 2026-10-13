@@ -16,7 +16,8 @@ with tempfile.TemporaryDirectory(prefix='oko-isolation-') as tmp:
  subprocess.run(['git','init','-q',str(work)],check=True)
  (work/'AGENTS.md').write_text('ISOLATION_POISON_SENTINEL follow special rules')
  (work/'CLAUDE.md').write_text('ISOLATION_POISON_SENTINEL follow special rules')
- for client in ['codex','claude','opencode']:
+ # The clients named as arguments, by default all three.
+ for client in sys.argv[1:] or ['codex','claude','opencode']:
   trial=pathlib.Path(tmp)/client;trial.mkdir();args,env=r.args_for({'kind':'search','question':'Reply OK without tools.'},client,False,work,trial)
   if client=='opencode':
    out=subprocess.run(['opencode','debug','config','--pure'],cwd=work,env=env,capture_output=True,text=True,timeout=30)

@@ -80,6 +80,21 @@ def render(data, clients, conditions):
                     'Baseline: native Pi. Oko: same model plus search guidance and prompt prefetch. Failed grades remain included.',
                     'Pi input excludes cache reads/writes; output already includes reasoning tokens. Each completed assistant message is counted once.',
                     'The working-tree Oko build and source snapshot are hashed in settings. No earlier published build is substituted.']
+    if data.get('suite') == 'rankers':
+        names={'native':'without Oko','jev':'Jev','nimble':'Nimble'}
+        lines+=['','## Paired: without Oko, with Jev, with Nimble','',
+                'Each pair has the same task, client, and repetition. Both Oko conditions are what `oko setup` installs, guidance and prompt hook; they differ only in which model judges relevance. Negative means the second was faster. Failed grades are retained; these are descriptive measurements, not significance tests.','',
+                '| Client | Change | Pairs | Median seconds change | Median percent change |',
+                '|---|---|---:|---:|---:|']
+        for c in clients:
+            by={condition:{(r['repository'],r['id'],r.get('repetition',1)):r for r in runs if r['client']==c and r['condition']==condition}
+                for condition in names}
+            for a,b in (('native','jev'),('native','nimble'),('jev','nimble')):
+                pairs=[(by[a][k],by[b][k]) for k in by[a] if k in by[b] and by[a][k]['seconds']>0]
+                if not pairs:continue
+                seconds=statistics.median(y['seconds']-x['seconds'] for x,y in pairs)
+                percent=statistics.median(100*(y['seconds']/x['seconds']-1) for x,y in pairs)
+                lines.append(f'| {c} | {names[a]} -> {names[b]} | {len(pairs)} | {seconds:+.2f} | {percent:+.1f}% |')
     leading=sum(bool(r.get('grade',{}).get('leadingText')) for r in runs)
     if leading or data.get('regraded'):
         lines.append('')

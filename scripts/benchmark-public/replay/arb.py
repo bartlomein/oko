@@ -13,6 +13,7 @@ against `dev`. Run `heldout` only for a number that will be reported.
   arb.py --fetch                              # data (1.5 GB) and the evaluator; no model calls
   arb.py --split dev --limit 40               # keyword ranking only, free
   arb.py --split dev --limit 40 --jev         # with Jev: paid calls
+  arb.py --split dev --limit 40 --nimble      # with Nimble on a local Ollama: free, slower
   arb.py --split dev --tasks trace2code --jev
 
 Everything lands under benchmarks/results/arb/, which Git ignores.
@@ -221,7 +222,11 @@ def main():
                         help='all = both halves in one pass; it uses up the held-out half')
     parser.add_argument('--tasks', default=','.join(TASKS), help='Comma-separated: ' + ','.join(TASKS))
     parser.add_argument('--limit', type=int, default=0, help='Samples per task')
-    parser.add_argument('--jev', action='store_true', help='Rank with Jev: paid calls')
+    ranker = parser.add_mutually_exclusive_group()
+    ranker.add_argument('--jev', action='store_true', help='Rank with Jev: paid calls')
+    ranker.add_argument('--nimble', action='store_true',
+                        help='Rank with Nimble on a local Ollama (OKO_RANKER=nimble; '
+                             '--env OKO_NIMBLE_URL=... for another server): free, slower')
     parser.add_argument('--intent', choices=('implementation', 'explanation', 'general'), default='implementation')
     parser.add_argument('--binary', default=str(replay.PROJECT / 'target/release/oko'))
     parser.add_argument('--label', default=None)
@@ -241,12 +246,13 @@ def main():
         parser.error('Less than 5 GB free')
     baseline = metrics_module()
     samples = load(None if args.split == 'all' else args.split, args.limit, tasks)
-    label = args.label or ('jev' if args.jev else 'keywords')
+    label = args.label or ('jev' if args.jev else 'nimble' if args.nimble else 'keywords')
+    env = replay.env_pairs(args.env) | ({'OKO_RANKER': 'nimble'} if args.nimble else {})
     out = STATE / f'{args.split}-{label}-{time.strftime("%Y%m%d-%H%M%S")}.jsonl'
     rows = []
     with out.open('w') as handle:
         for index, sample in enumerate(samples, 1):
-            row = run(sample, args.binary, args.jev, args.timeout, args.intent, baseline, replay.env_pairs(args.env))
+            row = run(sample, args.binary, args.jev or args.nimble, args.timeout, args.intent, baseline, env)
             rows.append(row)
             handle.write(json.dumps(row) + '\n')
             handle.flush()

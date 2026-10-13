@@ -37,7 +37,8 @@ other projects ignore their `.env` files too.
 
 `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL` may be set in the process
 environment. Their defaults are `https://api.typesafe.ai` and `jev-latest`.
-These two settings are not read from `.env`.
+These two settings are not read from `.env`. To rank on your own server
+without a key, see [Nimble](#rank-with-a-local-nimble).
 
 Code search automatically caches prepared search data in the operating system's
 user-cache directory, outside the repository. The first search builds the cache;
@@ -110,3 +111,36 @@ system and architecture. Code search uses `OKO_RIPGREP`, then an `rg` binary
 beside Oko, then `rg` on PATH; supplied-item
 ranking does not. `oko setup --client claude` runs the `claude` command from PATH;
 set `OKO_CLAUDE` to use another path. Node.js is only needed for optional developer benchmark runners.
+
+## Rank with a local Nimble
+
+[Nimble](https://ollama.com/library/nimble) is Bespoke Labs' open, Jev-style
+decision model. Ollama 0.35 and later serve it through the same System One API
+that Jev answers, so Oko can rank with it instead:
+
+```sh
+ollama pull nimble
+export OKO_RANKER=nimble
+oko ask "where is authentication handled?"
+```
+
+Oko sends Nimble the same candidates and previews it would send Jev, and needs
+no TypeSafe key: it neither reads a saved key nor sends one. Your question and
+selected snippets go to the Ollama server, not to TypeSafe. `OKO_NIMBLE_URL`
+(default `http://127.0.0.1:11434`) and `OKO_NIMBLE_MODEL` (default `nimble`)
+choose the server and model. Like `OKO_RANKER` (`jev` by default), they are
+read from the process environment only, never from `.env`.
+
+Nimble scores each question in a prompt of its own that holds the whole request,
+up to 8,192 tokens, so Oko sends each candidate in a request of its own, eight at
+a time. A search judges about 150 candidates, so its speed depends on your GPU.
+A Nimble judgment may take up to 60 seconds (Jev: 10), and an MCP search waits
+for all of it unless `OKO_JEV_TIMEOUT_MS` is set lower. The prompt hook still
+waits at most 2.5 seconds, so with Nimble it judges only the first 20
+candidates: on an RTX 5090 that took 1.3 seconds, and the whole shortlist more
+than 2.5. Deep mode needs Jev: its choice between actions holds more than one
+Nimble prompt can.
+
+`oko setup` does not set these variables. A coding tool started from a terminal
+passes its environment on to Oko; otherwise add them to the environment of the
+`oko mcp` server in the tool's configuration (see [clients](clients.md#rank-with-a-local-nimble)).

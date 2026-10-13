@@ -21,7 +21,9 @@ task sooner. Gains vary by task and coding tool.
 Each benchmark's method and caveats are in [its section below](#benchmarks).
 
 Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
-source snippets. Use it through your coding agent or directly from your terminal.
+source snippets, or [Nimble](docs/configuration.md#rank-with-a-local-nimble), an
+open model, on your own Ollama server. Use it through your coding agent or
+directly from your terminal.
 
 [Install](#install) · [Connect your coding tool](#connect-your-coding-tool) · [Benchmarks](#benchmarks) · [CLI examples](#use-in-your-terminal) · [Documentation](#documentation)
 
@@ -30,7 +32,7 @@ oko ask "where is authentication handled?"
 ```
 
 No Node.js or Rust runtime needed for downloaded binaries. Oko needs a TypeSafe AI
-API key for Jev ranking; local keyword search also works without a key.
+API key for Jev ranking; Nimble and local keyword search work without a key.
 
 ## Install
 
@@ -178,6 +180,8 @@ oko ask "where is authentication handled?" --no-jev
 
 Start with normal search. Deep mode can investigate further, but makes additional
 Jev requests and can take longer. `--no-jev` uses local keyword ranking only.
+To rank on your own GPU instead of with Jev, pull Nimble into Ollama 0.35 or
+later and set `OKO_RANKER=nimble`; see [Nimble](docs/configuration.md#rank-with-a-local-nimble).
 
 To replace, check, or remove your saved key, use `oko auth login`,
 `oko auth status`, or `oko auth logout`.
@@ -238,6 +242,15 @@ combined recorded tokens were 14% lower. At 2 October API list prices, the
 $0.028 for Jev. These are API-equivalent estimates; Pi used ChatGPT OAuth.
 [Pi results and methodology](docs/benchmark-results.md#pi-54-sessions-october-2026)
 and [per-session data](benchmarks/published/0.7.2/agent-sessions/report-pi.json).
+
+Ranking with [Nimble](docs/configuration.md#rank-with-a-local-nimble) on one
+local RTX 5090 instead of with Jev (12 October): on Agent Retrieval Bench the
+same recall (Recall@20 0.68 against 0.69) but the right file first less often
+(MRR 0.34 against 0.38), with searches of about 11 s instead of 0.7 s. In 405
+sessions with Claude Code, Codex, OpenCode and Pi, Oko with Nimble cut time by a
+median 11–39% and agent tokens by 22–60% against no Oko (with Jev: 38–62% and
+45–67%), and passed 108 of 135 against 122 with Jev and 120 without Oko.
+[Details](docs/benchmark-results.md#nimble-against-jev-october-2026).
 
 ### Against Sense
 
@@ -315,7 +328,9 @@ selected source snippets to TypeSafe AI; with setup's prompt hook, a prompt that
 reads as a code question is searched as you send it, so its first paragraph is
 the question. Once a day Oko asks GitHub for the latest release number, and
 nothing else; `--no-jev` and `OKO_NO_UPDATE_CHECK=1` turn that off. Deep mode can send more snippets across
-multiple requests. **Use `--no-jev` for local-only searches.** Oko does not edit your
+multiple requests. **Use `--no-jev` for local-only searches**, or `OKO_RANKER=nimble`
+to rank on your own Ollama server, which then receives the question and
+snippets instead of TypeSafe. Oko does not edit your
 source files. Prepared search data is cached outside your repository;
 [configuration](docs/configuration.md) explains key storage and cache controls.
 

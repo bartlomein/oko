@@ -40,7 +40,7 @@ SMOKE_TASKS = ('astro-image-probe-authorization', 'astro-action-key-guards',
 
 
 def compares_builds():
-    return SUITE in ('branch', 'smoke', 'pi')
+    return SUITE in ('branch', 'smoke', 'pi', 'rankers')
 
 
 # Blank-slate sessions strip every project instruction, including the guidance
@@ -54,6 +54,25 @@ GUIDANCE = PROJECT / 'src/guidance.md'
 # running server; OpenCode loads setup's plugin, which keeps an Oko of its own.
 PREFETCH = 'prefetch'
 PREFETCH_INPUT = {'question': '${prompt}', 'prefetch': 'claude:${session_id}'}
+# The rankers suite runs the prefetch condition twice, once per ranker: what
+# `oko setup` installs, judged by Jev or by Nimble on a local Ollama.
+RANKERS = {'jev': 'jev', 'nimble': 'nimble'}
+
+
+def setup_condition(condition):
+    """The condition whose guidance and prompt hook a session gets."""
+    return PREFETCH if condition in RANKERS else condition
+
+
+def nimble_model(url):
+    """The Ollama version and the Nimble model it serves, to pin a run to them."""
+    import urllib.request
+    def get(path):
+        with urllib.request.urlopen(url.rstrip('/') + path, timeout=10) as response:
+            return json.loads(response.read())
+    models = {m['name']: m['digest'] for m in get('/api/tags')['models']}
+    return {'url': url, 'model': 'nimble', 'digest': models.get('nimble:latest'),
+            'ollama': get('/api/version')['version']}
 
 
 def guide(client, args, env, trial):
@@ -253,16 +272,22 @@ def fixture_check(repo, task):
 def prepare(args):
     if compares_builds():
         from builds import prepare_builds
-        if SUITE == 'pi':
+        if SUITE in ('pi', 'rankers'):
             from builds import prepare_working_build
             builds = {'current': prepare_working_build(PROJECT, BUILD_STATE)}
         else:
             builds = prepare_builds(PROJECT, BUILD_STATE, args.baseline_ref, args.current_ref)
         args.oko = Path(builds['current']['path'])
         from isolation_check import check_isolation
+        from pi import check_isolation as check_pi_isolation
         if SUITE == 'pi':
-            from pi import check_isolation as check_pi_isolation
             isolation = check_pi_isolation(shutil.which('pi'), ROOT, STATE)
+        elif SUITE == 'rankers':
+            # Each selected client's own offline check.
+            others = [c for c in args.clients if c != 'pi']
+            checks = {**({'shared': check_isolation(ROOT, STATE, others)} if others else {}),
+                      **({'pi': check_pi_isolation(shutil.which('pi'), ROOT, STATE)} if 'pi' in args.clients else {})}
+            isolation = {'passed': all(c['passed'] for c in checks.values()), **checks}
         else:
             isolation = check_isolation(ROOT, STATE)
     clients = {c: shutil.which(c) for c in args.clients}
@@ -295,6 +320,10 @@ def prepare(args):
                             validatorLibrarySha256=digest(BUILD_STATE/'libmemchr.rlib'),
                             runtimeVersions={name: subprocess.check_output([name, '--version'], text=True).strip()
                                              for name in ('node', 'rustc')}, pythonVersion=sys.version)
+        if SUITE == 'rankers':
+            settings.update(nimble=nimble_model(args.nimble_url))
+            if not settings['nimble']['digest']:
+                raise RuntimeError('Ollama at ' + args.nimble_url + ' does not serve nimble:latest')
         if state(repo) != initial:
             raise RuntimeError('Source changed during preparation')
         save(dest / 'settings.json', settings)
@@ -302,7 +331,7 @@ def prepare(args):
         print(f"Prepared {item['name']}: {len(item['tasks'])} tasks; executable edit checks fail before/pass after", flush=True)
     save(STATE/'plan.json',{
         'suite':SUITE,'repeats':args.repeats,'cachePolicy':CACHE_POLICY,
-        'memoryCanarySessions':2*len(args.clients) if SUITE in ('branch','pi') else 0,
+        'memoryCanarySessions':2*len(args.clients) if SUITE in ('branch','pi','rankers') else 0,
         'sessions':[{'repository':name,'task':task['id'],'client':client,
                      'condition':condition,'repetition':task['repetition']}
                     for name,task,client,condition in plan(REPOSITORIES,args.clients,args.repeats)]})
@@ -553,6 +582,8 @@ def verify_settings(args, schedule):
                 raise RuntimeError('Validator dependency changed; prepare again')
             if not s['isolationCheck'].get('passed'):
                 raise RuntimeError('Isolation preflight required')
+            if SUITE == 'rankers' and nimble_model(s['nimble']['url']) != s['nimble']:
+                raise RuntimeError('Nimble changed or is unreachable; prepare again')
             if s['pythonVersion'] != sys.version or any(subprocess.check_output([name,'--version'],text=True).strip()!=version for name,version in s['runtimeVersions'].items()):
                 raise RuntimeError('Validation runtime changed; prepare again')
         if state(Path(s['repository'])) != {'commit':s['commit'],'status':''}:
@@ -582,7 +613,7 @@ def execute(args, schedule):
         data={'plan':ids,'settings':settings,'runs':[],'complete':False,'isolation':engine.ISOLATION_VERSION,'cachePolicy':CACHE_POLICY,'repeats':getattr(args,'repeats',1),'suite':SUITE}
     print('Results: '+str(output),flush=True)
     report(output,data)
-    if SUITE in ('branch', 'pi') and not data.get('memoryCanary',{}).get('complete'):
+    if SUITE in ('branch', 'pi', 'rankers') and not data.get('memoryCanary',{}).get('complete'):
         if (output/'memory-canary').exists():
             raise RuntimeError('Incomplete memory canary exists; inspect before restarting paid calls')
         from isolation_check import memory_canary
@@ -596,8 +627,11 @@ def execute(args, schedule):
             engine.STATE=STATE/name
             engine.SETTINGS=dict(settings[name])
             if compares_builds():
-                selected = settings[name]['builds']['current' if condition in ('native', GUIDED, PREFETCH) else condition]
+                selected = settings[name]['builds']['current' if condition in ('native', GUIDED, PREFETCH, *RANKERS) else condition]
                 engine.SETTINGS.update(oko=selected['path'],okoSha256=selected['sha256'])
+            if condition == 'nimble':
+                # Read by the Oko launcher: OKO_RANKER=nimble, and no TypeSafe key.
+                engine.SETTINGS.update(ranker='nimble', nimbleUrl=settings[name]['nimble']['url'])
             engine_condition = ENGINE_CONDITIONS[condition]
             trials=engine.STATE/output.name/condition
             trials.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -606,19 +640,19 @@ def execute(args, schedule):
                 # Never silently repeat a possibly billed interrupted session.
                 raise RuntimeError('Existing unrecorded session requires inspection: '+str(trial))
             print(f'START {i}/{len(schedule)} {name} {task["id"]} {client} condition={condition}',flush=True)
-            row=engine.run_one({**task,'repositoryName':name,'cacheCondition':condition},client,engine_condition,trials,i)
+            row=engine.run_one({**task,'repositoryName':name,'cacheCondition':setup_condition(condition)},client,engine_condition,trials,i)
             row['repository']=name
             row['condition']=condition
             row['repetition']=task.get('repetition',1)
             if compares_builds():
                 row['build']=None if condition=='native' else selected
             row['cacheObservations']=cache_observations(row)
-            if condition==PREFETCH:
+            if setup_condition(condition)==PREFETCH:
                 row['prefetch']=prefetch_lines(trial)
                 if not row['cacheObservations']:
                     row['cacheObservations']=prewarm_observations(trial)
             row['cacheConditionVerified']=check_cache(condition,row['cacheObservations'])
-            if (condition==PREFETCH and row['cacheConditionVerified']
+            if (setup_condition(condition)==PREFETCH and row['cacheConditionVerified']
                     and str(row.get('error','')).startswith('Observed Oko cache state did not match')):
                 # The engine reads the cache state from the agent's first Oko
                 # call; answered from the prefetch alone, there was none.
@@ -717,8 +751,10 @@ def main():
     p.add_argument('--pi-model',default='openai/gpt-5.6-sol')
     p.add_argument('--effort',choices=('low','medium','high'),default='low')
     p.add_argument('--timeout',type=int,default=180)
-    p.add_argument('--suite', choices=('legacy','branch','smoke','pi'), default='legacy',
-                   help='smoke: previous vs current build on a few branch tasks, minutes not hours; direction only')
+    p.add_argument('--suite', choices=('legacy','branch','smoke','pi','rankers'), default='legacy',
+                   help='smoke: previous vs current build on a few branch tasks, minutes not hours; direction only. '
+                        'rankers: native, Jev and Nimble, each with setup guidance and prompt hook')
+    p.add_argument('--nimble-url',default='http://127.0.0.1:11434',help='Rankers suite: the Ollama server serving Nimble')
     p.add_argument('--guided',action='store_true',
                    help='Branch/smoke: add a condition that is the current build plus the agent guidance oko setup installs')
     p.add_argument('--prefetch',action='store_true',
@@ -732,7 +768,8 @@ def main():
     p.add_argument('--current-ref',default='HEAD')
     args=p.parse_args()
     SUITE=args.suite
-    args.clients=(args.clients or ('pi' if SUITE=='pi' else 'claude' if SUITE=='smoke' else ','.join(CLIENTS))).split(',')
+    args.clients=(args.clients or ('pi' if SUITE=='pi' else 'claude' if SUITE=='smoke'
+                                   else ','.join(SUPPORTED_CLIENTS) if SUITE=='rankers' else ','.join(CLIENTS))).split(',')
     if args.tasks and SUITE!='smoke':p.error('--tasks requires --suite smoke')
     args.repeats=args.repeats if args.repeats is not None else (3 if compares_builds() else 1)
     if args.repeats<1:p.error('Repeats must be positive')
@@ -765,6 +802,15 @@ def main():
         CONDITIONS=('native', PREFETCH)
         ENGINE_CONDITIONS={'native':'native', PREFETCH:'oko-'+args.cache_policy}
         CACHE_POLICY=args.cache_policy
+    if SUITE == 'rankers':
+        if args.guided or args.prefetch or args.skip_previous:
+            p.error('--suite rankers runs native, Jev and Nimble, both with setup guidance and prompt hook')
+        STATE=PROJECT/'benchmarks/results/public-rankers'
+        FIXTURE=ROOT/'tasks-branch.json'
+        REPOSITORIES=json.loads(FIXTURE.read_text())['repositories']
+        CONDITIONS=('native', *RANKERS)
+        ENGINE_CONDITIONS={'native':'native', **{c:'oko-'+args.cache_policy for c in RANKERS}}
+        CACHE_POLICY=args.cache_policy
     if args.guided:
         if not compares_builds():p.error('--guided requires --suite branch or smoke')
         CONDITIONS=CONDITIONS+(GUIDED,)
@@ -792,7 +838,7 @@ def main():
     if args.check:
         with suite_lock():
             verify_settings(args,schedule)
-            print(f'Ready: {len(schedule)} timed sessions; '+(f'{2*len(args.clients)} memory-canary sessions; ' if SUITE in ('branch','pi') else '')+'no model calls made.')
+            print(f'Ready: {len(schedule)} timed sessions; '+(f'{2*len(args.clients)} memory-canary sessions; ' if SUITE in ('branch','pi','rankers') else '')+'no model calls made.')
         return
     if args.execute:
         with suite_lock():execute(args,schedule)

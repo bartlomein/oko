@@ -12,7 +12,11 @@ def main(root=None, state_name="twenty"):
     if not (workspace.is_relative_to(state.resolve()) and cache.is_relative_to(state.resolve())):
         raise RuntimeError('Oko paths must remain within benchmark artifacts')
     env = dict(os.environ)
-    if not env.get('TYPESAFE_API_KEY'):
+    # A session ranked by Nimble on a local Ollama gets no TypeSafe key.
+    if settings.get('ranker') == 'nimble':
+        env.pop('TYPESAFE_API_KEY', None)
+        env.update(OKO_RANKER='nimble', OKO_NIMBLE_URL=settings['nimbleUrl'])
+    elif not env.get('TYPESAFE_API_KEY'):
         path = root.parents[1] / '.env'
         if path.exists():
             for line in path.read_text().splitlines():

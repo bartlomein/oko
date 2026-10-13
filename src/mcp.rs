@@ -1,6 +1,6 @@
 //! Local MCP transport. Stdout is reserved for protocol messages.
 use anyhow::{Context, Result, bail};
-use oko::{RankingIntent, search, search_cache::WorkspaceCache};
+use oko::{Provider, RankingIntent, search, search_cache::WorkspaceCache};
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
     handler::server::wrapper::Parameters,
@@ -19,7 +19,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
-const USAGE: &str = "Usage: oko mcp [--root DIRECTORY] [--no-jev]\n\nStarts a local MCP server over stdin/stdout. Root defaults to the current directory.\nSearches are restricted to that workspace. Credentials come from the server environment,\nthe root's .env, or the OS credential store. --no-jev is local-only mode.\nThe workspace is prepared in the background at startup; set OKO_NO_PREWARM=1 to wait for the first search.\nSet OKO_METRICS_FILE to append per-search timings and retrieval metadata as JSON lines.";
+const USAGE: &str = "Usage: oko mcp [--root DIRECTORY] [--no-jev]\n\nStarts a local MCP server over stdin/stdout. Root defaults to the current directory.\nSearches are restricted to that workspace. Credentials come from the server environment,\nthe root's .env, or the OS credential store. --no-jev is local-only mode.\nOKO_RANKER=nimble ranks with Nimble on a local Ollama instead, without credentials.\nThe workspace is prepared in the background at startup; set OKO_NO_PREWARM=1 to wait for the first search.\nSet OKO_METRICS_FILE to append per-search timings and retrieval metadata as JSON lines.";
 // The serialized tool result, including JSON escaping of the text, before the
 // small JSON-RPC id/envelope added by rmcp.
 const MAX_MCP_RESULT_BYTES: usize = 16_000;
@@ -36,6 +36,11 @@ const JEV_PATIENCE: Duration = Duration::from_secs(4);
 const OTHER_CANDIDATES: usize = 6;
 /// A prefetch runs while the user waits for the agent to start.
 const PREFETCH_PATIENCE: Duration = Duration::from_millis(2_500);
+/// Nimble judges each candidate in a request of its own: a whole shortlist
+/// took it 3 to 5 seconds on one GPU, past a prefetch's patience. The first
+/// candidates hold most of what agents need (360 of 404 expected locations in
+/// the 0.6.0 agent suite were in the first 20), so a prefetch judges those.
+const NIMBLE_PREFETCH_CANDIDATES: usize = 20;
 /// Room kept beside the answer for the header and its tags.
 const PREFETCH_WRAPPING_CHARS: usize = 40;
 /// A prompt that names code the ranker rejected still gets a pointer to
@@ -48,12 +53,18 @@ const PREFETCH_MAX_DEFINITIONS: usize = 3;
 const OTHER_CANDIDATE_FLOOR: f64 = 0.2;
 
 /// OKO_JEV_TIMEOUT_MS, between half a second and the provider's own timeout.
-fn jev_patience() -> Duration {
+/// A local Nimble is as fast as its GPU every time, not rarely slow, so by
+/// default it gets its whole timeout rather than giving way to keyword order.
+fn jev_patience(provider: Provider) -> Duration {
+    let default = match provider {
+        Provider::Jev => JEV_PATIENCE,
+        Provider::Nimble => provider.timeout(),
+    };
     std::env::var("OKO_JEV_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
-        .map_or(JEV_PATIENCE, |ms| {
-            Duration::from_millis(ms.clamp(500, oko::ranking::JEV_TIMEOUT.as_millis() as u64))
+        .map_or(default, |ms| {
+            Duration::from_millis(ms.clamp(500, provider.timeout().as_millis() as u64))
         })
 }
 
@@ -291,6 +302,8 @@ const MAX_CONCURRENT_SEARCHES: usize = 4;
 struct OkoServer {
     root: PathBuf,
     no_jev: bool,
+    /// Who judges, unless `no_jev`; chosen once, at startup.
+    provider: Provider,
     gate: Arc<Semaphore>,
     cache: Arc<Mutex<WorkspaceCache>>,
     memory: Arc<Mutex<Memory>>,
@@ -383,7 +396,19 @@ impl OkoServer {
         if input.deep && self.no_jev {
             bail!("Deep search requires Jev; this server is running with --no-jev.");
         }
+        // Its action choices hold more than one Nimble prompt can.
+        if input.deep && self.provider != Provider::Jev {
+            bail!(
+                "Deep search requires Jev; this server ranks with {}.",
+                self.provider
+            );
+        }
         Ok(())
+    }
+
+    /// Whether searches need a TypeSafe key: Jev's do, local ones do not.
+    fn needs_key(&self) -> bool {
+        !self.no_jev && self.provider.needs_key()
     }
 
     /// The directory to search: inside the configured workspace.
@@ -500,12 +525,12 @@ impl OkoServer {
             .unwrap_or_else(|| symbols.join(" "));
         let question = question_text.as_str();
         // Credentials belong to the operator-selected root, never a model-selected subdirectory.
-        let key = if self.no_jev {
-            None
-        } else {
+        let key = if self.needs_key() {
             super::api_key(&self.root)?
+        } else {
+            None
         };
-        if !self.no_jev && key.is_none() {
+        if self.needs_key() && key.is_none() {
             bail!(
                 "No TypeSafe key configured. Run `oko auth login` or set TYPESAFE_API_KEY for the server."
             );
@@ -561,7 +586,7 @@ impl OkoServer {
         let notes = self.notes(&ask, &mut found, &workspace.timings, investigation.as_ref());
         let shown_question = prefix(question, 512);
         let metadata = json!({"question":shown_question, "questionTruncated":shown_question.len() < question.len(), "directory":directory,
-            "ranking":if self.no_jev {"lexical"} else if found.lexical_fallback.is_some() {"lexical-fallback"} else {"jev"},
+            "ranking":if self.no_jev {"lexical"} else if found.lexical_fallback.is_some() {"lexical-fallback"} else {self.provider.name()},
             "investigation":investigation, "retrieval":found.retrieval, "floor":found.floor, "focused":found.focused,
             "coverage":{"files":snapshot.coverage(), "parsedFiles":snapshot.navigation().coverage().parsed_files,
                 "partialFiles":snapshot.navigation().coverage().partial_files, "definitions":snapshot.navigation().coverage().definitions},
@@ -631,7 +656,14 @@ impl OkoServer {
                 None
             }
             Ok(Prefetched::Rejected(retrieval)) => {
-                record_prefetch_skip(&prompt, "nothing relevant", None, retrieval, started);
+                // Keyword order is no judgment: a ranker that gave none says why.
+                let fallback = retrieval
+                    .as_ref()
+                    .and_then(|retrieval| retrieval.get("lexicalFallback"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let reason = fallback.as_deref().unwrap_or("nothing relevant");
+                record_prefetch_skip(&prompt, reason, None, retrieval, started);
                 None
             }
             Err(error) => {
@@ -674,13 +706,13 @@ impl OkoServer {
             Ok(read) => read,
             Err(reason) => return Ok(Prefetched::Nothing(reason)),
         };
-        let key = if self.no_jev {
-            None
-        } else {
+        let key = if self.needs_key() {
             match super::api_key(&self.root)? {
                 Some(key) => Some(key),
                 None => return Ok(Prefetched::Nothing("no key")),
             }
+        } else {
+            None
         };
         let flight = Flight::begin(&self.in_flight, &self.started);
         let wait_started = Instant::now();
@@ -790,7 +822,7 @@ impl OkoServer {
         let context_started = Instant::now();
         let notes = self.notes(&ask, &mut found, &workspace.timings, None);
         let metadata = json!({"question": prefix(question, 512), "directory": self.root,
-            "ranking": if judged {"jev"} else {"lexical"},
+            "ranking": if judged {self.provider.name()} else {"lexical"},
             "prefetch": {"decision": "inject", "client": client, "session": session, "strong": strong},
             "retrieval": found.retrieval, "floor": found.floor, "focused": found.focused,
             "timings": {"cacheWaitMs": cache_wait_ms, "scanMs": workspace.timings.scan_ms,
@@ -1071,7 +1103,11 @@ impl OkoServer {
             found.shortlist_ms = Some(shortlist_started.elapsed().as_millis() as u64);
             return Ok(found);
         }
-        let shortlist = oko::floor::pinned_shortlist(&named.pins, shortlist);
+        let mut shortlist = oko::floor::pinned_shortlist(&named.pins, shortlist);
+        if ask.lean && !self.no_jev && self.provider == Provider::Nimble {
+            // Named definitions lead, so they stay.
+            shortlist.truncate(NIMBLE_PREFETCH_CANDIDATES);
+        }
         found.pins = named
             .pins
             .iter()
@@ -1087,11 +1123,12 @@ impl OkoServer {
                 super::Reranker::Lexical
             } else {
                 super::Reranker::Jev {
+                    provider: self.provider,
                     key: ask.key.clone(),
                     patience: Some(if ask.lean {
                         PREFETCH_PATIENCE
                     } else {
-                        jev_patience()
+                        jev_patience(self.provider)
                     }),
                     recover: !ask.lean,
                 }
@@ -1231,7 +1268,7 @@ impl OkoServer {
         // that names a definition gets its listing.
         let force_listing = matches!(ask.input.mode, Some(Mode::Usages | Mode::Enumerate));
         let corpus = snapshot.chunks();
-        let no_jev = self.no_jev;
+        let (no_jev, provider) = (self.no_jev, self.provider);
         let outcomes: Vec<Result<Outcome>> = std::thread::scope(|scope| {
             let handles: Vec<_> = questions
                 .iter()
@@ -1256,8 +1293,9 @@ impl OkoServer {
                                 super::Reranker::Lexical
                             } else {
                                 super::Reranker::Jev {
+                                    provider,
                                     key,
-                                    patience: Some(jev_patience()),
+                                    patience: Some(jev_patience(provider)),
                                     recover: true,
                                 }
                             },
@@ -2187,6 +2225,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     let server = OkoServer {
         root,
         no_jev,
+        provider: Provider::from_env()?,
         gate: Arc::new(Semaphore::new(MAX_CONCURRENT_SEARCHES)),
         cache: Arc::new(Mutex::new(WorkspaceCache::new())),
         memory: Arc::new(Mutex::new(Memory::default())),

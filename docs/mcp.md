@@ -430,6 +430,10 @@ the result stays empty: keyword order does not overrule that judgment. The CLI
 and deep mode keep the ten-second timeout and report provider failures, so
 measurements never mistake keyword order for Jev's. Configure a client tool timeout
 of 120 seconds when using deep mode; large repository scans can take longer.
+With [Nimble](configuration.md#rank-with-a-local-nimble), which judges each
+candidate in a request of its own at your GPU's pace, a search waits the whole
+60-second timeout by default (`OKO_JEV_TIMEOUT_MS` up to 60000), and deep searches
+are rejected.
 Up to four searches run at once and further calls wait for a slot; they share one
 workspace snapshot, so parallel searches do not repeat a scan. Cancellation
 stops before the next search phase or provider call; it does not interrupt a
@@ -439,13 +443,15 @@ Credentials are resolved on each call from the server environment, the configure
 root's `.env`, or the OS credential store. Model-selected subdirectories do not
 change the credential source. Discovery and startup do not require a key. For
 local-only testing, launch `oko mcp --root /path/to/project --no-jev`; this skips
-credential loading and rejects deep searches.
+credential loading and rejects deep searches. With `OKO_RANKER=nimble` the server
+loads no credentials either; an unknown `OKO_RANKER` stops it at startup.
 
 Searches rescan current files on each call and cannot select a directory outside
 the configured root. File discovery ignores user ripgrep configuration and skips
 files resolving outside the searched directory. This is an application boundary,
 not an operating-system sandbox. Existing ignored-file and file-size rules apply.
-Normal/deep searches send selected snippets to TypeSafe, as described in the [privacy overview](../README.md#privacy).
+Normal/deep searches send selected snippets to TypeSafe, as described in the [privacy overview](../README.md#privacy),
+or with `OKO_RANKER=nimble` to your Ollama server.
 
 The server advertises when to use Oko, but connecting it does not force the agent
 to choose it over native search. Codex project setup is available above. Release

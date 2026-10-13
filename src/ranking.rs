@@ -1,9 +1,11 @@
-//! Generic text ranking and the TypeSafe System One transport.
+//! Generic text ranking and the System One transport: TypeSafe's Jev, or
+//! Nimble on a local Ollama.
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
     collections::HashSet,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
@@ -144,10 +146,94 @@ pub struct RankOptions {
     pub intent: RankingIntent,
     /// Total time allowed for one provider request.
     pub timeout: Duration,
+    /// Who judges; `Provider::from_env` reads the operator's choice.
+    pub provider: Provider,
 }
 
 /// The SDK's total request timeout, for callers with no fallback.
 pub const JEV_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A local model answers at its GPU's pace. One search judges about 150
+/// candidates; with long questions that took up to 20 seconds on one
+/// RTX 5090, and searches running at once share the GPU.
+pub const NIMBLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Requests one Nimble judgment keeps in flight. One GPU is saturated by
+/// four; more keep a server with several replicas busy.
+const NIMBLE_PARALLEL: usize = 8;
+
+/// Which model answers the System One requests.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Provider {
+    /// TypeSafe's hosted Jev: one request judges every candidate.
+    #[default]
+    Jev,
+    /// Bespoke Labs' open Nimble, served by Ollama 0.35 or later, which
+    /// needs no key. It scores each question in a prompt of its own that
+    /// holds the whole state, within 8,192 tokens, so each candidate goes in
+    /// a request of its own: sixty in one would not fit, and would cost sixty
+    /// times their length.
+    Nimble,
+}
+
+impl Provider {
+    /// `OKO_RANKER` in the process environment, never `.env`, like
+    /// `TYPESAFE_BASE_URL`: `jev` (the default) or `nimble`.
+    pub fn from_env() -> Result<Self> {
+        match env_value("OKO_RANKER")
+            .map(|name| name.to_ascii_lowercase())
+            .as_deref()
+        {
+            None | Some("jev") => Ok(Self::Jev),
+            Some("nimble") => Ok(Self::Nimble),
+            Some(other) => bail!("Unknown OKO_RANKER: {other}. Use jev or nimble."),
+        }
+    }
+
+    /// The ranking a search reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Jev => "jev",
+            Self::Nimble => "nimble",
+        }
+    }
+
+    /// Jev needs a TypeSafe key; Nimble runs on the operator's own server.
+    pub fn needs_key(self) -> bool {
+        self == Self::Jev
+    }
+
+    /// How long one judgment may take in all.
+    pub fn timeout(self) -> Duration {
+        match self {
+            Self::Jev => JEV_TIMEOUT,
+            Self::Nimble => NIMBLE_TIMEOUT,
+        }
+    }
+
+    /// The System One server and model.
+    fn endpoint(self) -> (String, String) {
+        match self {
+            Self::Jev => (
+                env_value("TYPESAFE_BASE_URL").unwrap_or_else(|| "https://api.typesafe.ai".into()),
+                env_value("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| "jev-latest".into()),
+            ),
+            Self::Nimble => (
+                env_value("OKO_NIMBLE_URL").unwrap_or_else(|| "http://127.0.0.1:11434".into()),
+                env_value("OKO_NIMBLE_MODEL").unwrap_or_else(|| "nimble".into()),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Jev => "Jev",
+            Self::Nimble => "Nimble",
+        })
+    }
+}
 
 impl Default for RankOptions {
     fn default() -> Self {
@@ -157,6 +243,7 @@ impl Default for RankOptions {
             no_jev: false,
             intent: RankingIntent::General,
             timeout: JEV_TIMEOUT,
+            provider: Provider::Jev,
         }
     }
 }
@@ -436,16 +523,35 @@ pub fn call_jev_observed_within(
     observations: &mut Vec<JevCallStats>,
     timeout: Duration,
 ) -> Result<Value> {
-    let base = env_value("TYPESAFE_BASE_URL").unwrap_or_else(|| "https://api.typesafe.ai".into());
+    send(
+        Provider::Jev,
+        request,
+        Some(api_key),
+        phase,
+        observations,
+        timeout,
+    )
+}
+
+/// One request to `provider`, with no application retries.
+fn send(
+    provider: Provider,
+    request: &Value,
+    api_key: Option<&str>,
+    phase: &str,
+    observations: &mut Vec<JevCallStats>,
+    timeout: Duration,
+) -> Result<Value> {
+    let (base, model) = provider.endpoint();
     let mut body = request.clone();
     body.as_object_mut()
-        .context("Jev request must be an object.")?
-        .insert(
-            "model".into(),
-            json!(env_value("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| "jev-latest".into())),
-        );
+        .with_context(|| format!("{provider} request must be an object."))?
+        .insert("model".into(), json!(model));
     let request_bytes = serde_json::to_vec(&body)?.len();
-    throttle(request_bytes);
+    // The rate is TypeSafe's; a local server queues what it cannot run yet.
+    if provider == Provider::Jev {
+        throttle(request_bytes);
+    }
     let started = Instant::now();
     let client = match reqwest::blocking::Client::builder()
         .retry(reqwest::retry::never())
@@ -467,9 +573,12 @@ pub fn call_jev_observed_within(
             return Err(error.into());
         }
     };
-    let response = match client
-        .post(format!("{}/v1/systemone", base.trim_end_matches('/')))
-        .bearer_auth(api_key)
+    let post = client.post(format!("{}/v1/systemone", base.trim_end_matches('/')));
+    let post = match api_key {
+        Some(api_key) => post.bearer_auth(api_key),
+        None => post,
+    };
+    let response = match post
         .header(reqwest::header::ACCEPT, "application/json")
         // Which of a search's requests this is: several run at once, and nothing
         // in the body tells the shortlist's apart from those judged beside it.
@@ -496,7 +605,7 @@ pub fn call_jev_observed_within(
                 ),
                 usage: None,
             });
-            return Err(error).context("Jev request failed");
+            return Err(error).context(format!("{provider} request failed"));
         }
     };
     let status = response.status();
@@ -521,7 +630,7 @@ pub fn call_jev_observed_within(
                 ),
                 usage: None,
             });
-            return Err(error).context("Could not read Jev response");
+            return Err(error).context(format!("Could not read {provider} response"));
         }
     };
     let response_bytes = bytes.len();
@@ -536,7 +645,13 @@ pub fn call_jev_observed_within(
             error_class: Some("http_status".into()),
             usage: None,
         });
-        bail!("Jev returned HTTP {}.", status.as_u16());
+        // Ollama's answer for a model it has not pulled, and before 0.35 for the endpoint.
+        if provider == Provider::Nimble && status == reqwest::StatusCode::NOT_FOUND {
+            bail!(
+                "Nimble returned HTTP 404: it needs Ollama 0.35 or later with the model pulled (`ollama pull {model}`)."
+            );
+        }
+        bail!("{provider} returned HTTP {}.", status.as_u16());
     }
     let value: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
@@ -551,7 +666,7 @@ pub fn call_jev_observed_within(
                 error_class: Some("invalid_json".into()),
                 usage: None,
             });
-            return Err(error).context("Jev returned invalid JSON.");
+            return Err(error).context(format!("{provider} returned invalid JSON."));
         }
     };
     observations.push(JevCallStats {
@@ -612,6 +727,106 @@ fn jev_usage(value: &Value) -> Option<JevUsage> {
     }
 }
 
+/// Field by field, what several calls used.
+fn total_usage(calls: &[JevCallStats]) -> Option<JevUsage> {
+    let usages: Vec<&JevUsage> = calls
+        .iter()
+        .filter_map(|call| call.usage.as_ref())
+        .collect();
+    let sum = |field: fn(&JevUsage) -> Option<u64>| {
+        usages
+            .iter()
+            .filter_map(|usage| field(usage))
+            .reduce(|a, b| a + b)
+    };
+    (!usages.is_empty()).then(|| JevUsage {
+        input_tokens: sum(|usage| usage.input_tokens),
+        output_tokens: sum(|usage| usage.output_tokens),
+        cache_read_tokens: sum(|usage| usage.cache_read_tokens),
+        cache_write_tokens: sum(|usage| usage.cache_write_tokens),
+        total_tokens: sum(|usage| usage.total_tokens),
+    })
+}
+
+/// Nimble's judgment of `candidates`, each in a request of its own built as
+/// Jev's would be for that candidate alone, merged into Jev's response shape.
+/// Like one Jev request it fails when any part does, and it is recorded as
+/// one call: so `jevCalls` counts judgments for either provider.
+fn judge_each(
+    question: &str,
+    candidates: &[RankItem],
+    intent: RankingIntent,
+    phase: &str,
+    observations: &mut Vec<JevCallStats>,
+    timeout: Duration,
+) -> Result<Value> {
+    let started = Instant::now();
+    let deadline = started + timeout;
+    let (next, failed) = (AtomicUsize::new(0), AtomicBool::new(false));
+    // Each worker takes the next candidate until none is left, or until one
+    // request has failed and with it the judgment.
+    let work = || {
+        let mut done = Vec::new();
+        while !failed.load(Ordering::Relaxed) {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some(item) = candidates.get(index) else {
+                break;
+            };
+            let request = create_request(question, std::slice::from_ref(item), intent);
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let mut calls = Vec::new();
+            let result = send(
+                Provider::Nimble,
+                &request,
+                None,
+                phase,
+                &mut calls,
+                remaining,
+            );
+            failed.fetch_or(result.is_err(), Ordering::Relaxed);
+            done.push((index, result, calls));
+        }
+        done
+    };
+    let mut outcomes: Vec<(usize, Result<Value>, Vec<JevCallStats>)> =
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..NIMBLE_PARALLEL.min(candidates.len()))
+                .map(|_| scope.spawn(work))
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().expect("Nimble request thread"))
+                .collect()
+        });
+    outcomes.sort_by_key(|(index, ..)| *index);
+    let calls: Vec<JevCallStats> = outcomes
+        .iter()
+        .flat_map(|(_, _, calls)| calls.iter().cloned())
+        .collect();
+    let failure = outcomes
+        .iter()
+        .find(|(_, result, _)| result.is_err())
+        .and_then(|(_, _, calls)| calls.last());
+    observations.push(JevCallStats {
+        phase: phase.into(),
+        duration_ns: started.elapsed().as_nanos() as u64,
+        request_bytes: calls.iter().map(|call| call.request_bytes).sum(),
+        response_bytes: calls.iter().map(|call| call.response_bytes).sum(),
+        http_status: failure.or(calls.last()).and_then(|call| call.http_status),
+        success: outcomes.iter().all(|(_, result, _)| result.is_ok()),
+        error_class: failure.and_then(|call| call.error_class.clone()),
+        usage: total_usage(&calls),
+    });
+    let mut answers = Map::new();
+    for (index, result, _) in outcomes {
+        // Each request asked about its one candidate as `candidate_1`.
+        if let Some(answer) = result?.pointer("/answers/candidate_1") {
+            answers.insert(format!("candidate_{}", index + 1), answer.clone());
+        }
+    }
+    Ok(json!({ "answers": answers }))
+}
+
 pub fn rank_items(
     question: &str,
     input: &[RankItem],
@@ -647,30 +862,49 @@ pub fn rank_items_with_stats(
             judged: Vec::new(),
         });
     }
+    let provider = options.provider;
     let api_key = options
         .api_key
         .as_deref()
         .map(trim)
-        .filter(|key| !key.is_empty())
-        .context("TYPESAFE_API_KEY is required for Jev ranking.")?;
+        .filter(|key| !key.is_empty());
+    if provider.needs_key() && api_key.is_none() {
+        bail!("TYPESAFE_API_KEY is required for Jev ranking.");
+    }
     if items.is_empty() {
         return Ok(ItemRanking {
-            method: "jev".into(),
+            method: provider.name().into(),
             results: vec![],
             omitted_count: 0,
             judged: Vec::new(),
         });
     }
     let mut run = || -> Result<ItemRanking> {
+        // Nimble's candidates are Jev's: the same budget picks them and
+        // shapes their previews, so the two differ only in who judges.
         let (request, candidates) = prepare_request_with_intent(question, &items, options.intent)?;
-        rank_response(
-            &candidates,
-            &call_jev_observed_within(&request, api_key, phase, observations, options.timeout)?,
-            options.limit,
-            items.len(),
-        )
+        let response = match provider {
+            Provider::Jev => call_jev_observed_within(
+                &request,
+                api_key.unwrap_or_default(),
+                phase,
+                observations,
+                options.timeout,
+            )?,
+            Provider::Nimble => judge_each(
+                question,
+                &candidates,
+                options.intent,
+                phase,
+                observations,
+                options.timeout,
+            )?,
+        };
+        let mut ranking = rank_response(&candidates, &response, options.limit, items.len())?;
+        ranking.method = provider.name().into();
+        Ok(ranking)
     };
-    run().map_err(|error| anyhow::anyhow!("Jev ranking failed: {error:#}"))
+    run().map_err(|error| anyhow::anyhow!("{provider} ranking failed: {error:#}"))
 }
 
 #[cfg(test)]
@@ -1301,5 +1535,232 @@ mod tests {
 
         let failed = mock_http(503, "{}", None, Some("HTTP 503"), true);
         assert_eq!(failed.len(), 1);
+    }
+
+    #[test]
+    fn providers_differ_in_key_name_and_timeout() {
+        assert_eq!(RankOptions::default().provider, Provider::Jev);
+        assert!(Provider::Jev.needs_key() && !Provider::Nimble.needs_key());
+        assert_eq!(
+            (Provider::Jev.name(), Provider::Nimble.name()),
+            ("jev", "nimble")
+        );
+        assert_eq!(Provider::Nimble.to_string(), "Nimble");
+        assert_eq!(Provider::Jev.timeout(), JEV_TIMEOUT);
+        assert_eq!(Provider::Nimble.timeout(), NIMBLE_TIMEOUT);
+        // Only Jev needs a key; without items neither makes a request.
+        let nimble = RankOptions {
+            provider: Provider::Nimble,
+            ..Default::default()
+        };
+        assert_eq!(rank_items("q", &[], &nimble).unwrap().method, "nimble");
+        assert!(rank_items("q", &[], &RankOptions::default()).is_err());
+    }
+
+    const NIMBLE_QUESTION: &str = "where are parcels dispatched?";
+
+    /// Candidates for the loopback Nimble, which scores each by its id.
+    fn nimble_items() -> Vec<RankItem> {
+        parse_items(json!([
+            {"id": "low", "text": "fn weigh() {}", "source": "a.rs:1-1"},
+            {"id": "high", "text": "fn dispatch() {}", "source": "b.rs:1-1"},
+            {"id": "middle", "text": "fn route() {}"},
+        ]))
+        .unwrap()
+    }
+
+    // In a child process, as `http_child`: OKO_NIMBLE_URL is set for it alone.
+    #[test]
+    fn nimble_child() {
+        if std::env::var("OKO_NIMBLE_TEST_CHILD").is_err() {
+            return;
+        }
+        let options = RankOptions {
+            provider: Provider::Nimble,
+            intent: RankingIntent::Implementation,
+            ..Default::default()
+        };
+        let mut observations = Vec::new();
+        let result = rank_items_with_stats(
+            NIMBLE_QUESTION,
+            &nimble_items(),
+            &options,
+            "normal",
+            &mut observations,
+        );
+        // However many requests, one judgment is one call.
+        assert_eq!(observations.len(), 1);
+        let call = &observations[0];
+        if let Ok(expected) = std::env::var("OKO_NIMBLE_EXPECT_ERROR") {
+            assert!(format!("{:#}", result.unwrap_err()).contains(&expected));
+            assert!(!call.success);
+            assert_eq!(call.error_class.as_deref(), Some("http_status"));
+            return;
+        }
+        let ranking = result.unwrap();
+        assert_eq!(ranking.method, "nimble");
+        assert_eq!(
+            ranking
+                .results
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["high", "middle"]
+        );
+        assert_eq!(ranking.results[1].source, None);
+        assert_eq!(
+            ranking.judged,
+            [
+                ("high".to_owned(), 0.9),
+                ("middle".to_owned(), 0.6),
+                ("low".to_owned(), 0.1)
+            ]
+        );
+        assert!(call.success);
+        assert_eq!(
+            (call.phase.as_str(), call.http_status),
+            ("normal", Some(200))
+        );
+        let usage = call.usage.as_ref().unwrap();
+        assert_eq!(
+            (usage.input_tokens, usage.output_tokens),
+            (Some(30), Some(3))
+        );
+        assert_eq!(usage.total_tokens, None);
+    }
+
+    /// Runs `nimble_child` against a loopback Nimble that answers every
+    /// request, `fail` naming the candidate id answered with that status
+    /// instead; returns each request's lowercase headers and JSON body.
+    fn mock_nimble(
+        fail: Option<(&'static str, u16)>,
+        model: Option<&str>,
+        error: Option<&str>,
+    ) -> Vec<(String, Value)> {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        use std::thread;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let server_done = done.clone();
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            while !server_done.load(Ordering::Acquire) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(error) => panic!("mock accept failed: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                let (headers, body) = loop {
+                    let size = stream.read(&mut buffer).unwrap();
+                    assert!(size > 0, "client closed before sending complete request");
+                    bytes.extend_from_slice(&buffer[..size]);
+                    if let Some(end) = bytes.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            let body: Value = serde_json::from_slice(&bytes[end + 4..]).unwrap();
+                            break (headers, body);
+                        }
+                    }
+                };
+                let id = body["state"]["candidates"][0]["id"].as_str().unwrap_or("");
+                let (status, answer) = match (fail, id) {
+                    (Some((failing, status)), id) if id == failing => (status, String::new()),
+                    (_, id) => {
+                        let score = match id {
+                            "high" => 0.9,
+                            "middle" => 0.6,
+                            _ => 0.1,
+                        };
+                        let answer = json!({"model": "nimble",
+                            "answers": {"candidate_1": {"type": "noul", "noul": score}},
+                            "usage": {"input_tokens": 10, "output_tokens": 1}});
+                        (200, answer.to_string())
+                    }
+                };
+                write!(stream, "HTTP/1.1 {status} Mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len()).unwrap();
+                requests.push((headers, body));
+            }
+            requests
+        });
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "ranking::tests::nimble_child", "--nocapture"])
+            .env("OKO_NIMBLE_TEST_CHILD", "1")
+            .env("OKO_NIMBLE_URL", format!("http://{address}/"))
+            .env_remove("OKO_NIMBLE_MODEL")
+            .env_remove("OKO_NIMBLE_EXPECT_ERROR");
+        if let Some(model) = model {
+            command.env("OKO_NIMBLE_MODEL", model);
+        }
+        if let Some(error) = error {
+            command.env("OKO_NIMBLE_EXPECT_ERROR", error);
+        }
+        let output = command.output().unwrap();
+        done.store(true, Ordering::Release);
+        let requests = server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        requests
+    }
+
+    #[test]
+    fn nimble_judges_each_candidate_in_a_request_of_its_own() {
+        for (model, expected) in [(None, "nimble"), (Some(" nimble:9b "), "nimble:9b")] {
+            let mut requests = mock_nimble(None, model, None);
+            assert_eq!(requests.len(), nimble_items().len());
+            requests.sort_by_key(|(_, body)| body["state"]["candidates"][0]["id"].to_string());
+            let mut items = nimble_items();
+            items.sort_by(|a, b| a.id.cmp(&b.id));
+            for ((headers, body), item) in requests.iter().zip(&items) {
+                assert!(headers.starts_with("post /v1/systemone http/1.1\r\n"));
+                assert!(headers.contains("x-oko-phase: normal\r\n"));
+                assert!(!headers.contains("authorization:"), "Nimble gets no key");
+                // Jev's request for this candidate alone, so it is `candidates[0]`.
+                let mut alone = create_request(
+                    NIMBLE_QUESTION,
+                    std::slice::from_ref(item),
+                    RankingIntent::Implementation,
+                );
+                alone["model"] = json!(expected);
+                assert_eq!(body, &alone);
+            }
+        }
+    }
+
+    #[test]
+    fn a_failed_nimble_request_fails_the_judgment() {
+        mock_nimble(
+            Some(("middle", 500)),
+            None,
+            Some("Nimble returned HTTP 500"),
+        );
+        // An unpulled model, or an Ollama without the endpoint, says how to fix it.
+        mock_nimble(Some(("middle", 404)), None, Some("`ollama pull nimble`"));
     }
 }

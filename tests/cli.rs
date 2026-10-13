@@ -38,6 +38,7 @@ fn command(cwd: &Path) -> TestCommand {
         .env("OKO_NO_CACHE", "0")
         .env_remove("TYPESAFE_API_KEY")
         .env_remove("TYPESAFE_DEFAULT_MODEL")
+        .env_remove("OKO_RANKER")
         .env("TYPESAFE_BASE_URL", "http://127.0.0.1:1");
     TestCommand {
         command,
@@ -158,6 +159,168 @@ fn input(cwd: &Path) {
         r#"[{"id":"ticket","text":"Refund request","source":"tickets/1"}]"#,
     )
     .unwrap();
+}
+
+/// Runs `command` with OKO_RANKER=nimble against a loopback Nimble that
+/// scores each request's one candidate; returns every request's lowercase
+/// headers and body.
+fn nimble_run(
+    command: &mut Command,
+    score: impl Fn(&Value) -> f64 + Send + 'static,
+) -> (Output, Vec<(String, Value)>) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    command.env("OKO_RANKER", "nimble").env(
+        "OKO_NIMBLE_URL",
+        format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let done = Arc::new(AtomicBool::new(false));
+    let server_done = done.clone();
+    let server = thread::spawn(move || {
+        let mut requests = Vec::new();
+        while !server_done.load(Ordering::Acquire) {
+            let mut stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(error) => panic!("mock accept failed: {error}"),
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 4096];
+            let (headers, body) = loop {
+                let length = stream.read(&mut buffer).unwrap();
+                assert!(length > 0);
+                bytes.extend_from_slice(&buffer[..length]);
+                if let Some(end) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        let body: Value = serde_json::from_slice(&bytes[end + 4..]).unwrap();
+                        break (headers, body);
+                    }
+                }
+            };
+            let noul = score(&body["state"]["candidates"][0]);
+            let response = serde_json::to_vec(
+                &json!({"answers": {"candidate_1": {"type": "noul", "noul": noul}}}),
+            )
+            .unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len()).unwrap();
+            stream.write_all(&response).unwrap();
+            requests.push((headers, body));
+        }
+        requests
+    });
+    let output = command.output().unwrap();
+    done.store(true, Ordering::Release);
+    (output, server.join().unwrap())
+}
+
+#[test]
+fn nimble_ranks_each_item_in_a_request_of_its_own_without_a_key() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("items.json"),
+        r#"[{"id":"invoice","text":"Invoice copy"},{"id":"ticket","text":"Refund request","source":"tickets/1"}]"#,
+    )
+    .unwrap();
+    let mut cmd = command(temp.path());
+    // An empty key also turns off any saved one: Nimble needs none.
+    cmd.env("TYPESAFE_API_KEY", "")
+        .args(["rank", "--input", "items.json", "--json", "refund"]);
+    let (output, requests) = nimble_run(&mut cmd, |candidate| {
+        if candidate["id"] == "ticket" {
+            0.9
+        } else {
+            0.2
+        }
+    });
+    let json = success(output);
+    assert_eq!(json["ranking"], "nimble");
+    assert_eq!(
+        json["results"],
+        json!([{"id":"ticket","text":"Refund request","source":"tickets/1","score":0.9}])
+    );
+    assert_eq!(requests.len(), 2);
+    for (headers, body) in &requests {
+        assert!(headers.starts_with("post /v1/systemone http/1.1\r\n"));
+        assert!(!headers.contains("authorization:"));
+        assert_eq!(body["model"], "nimble");
+        assert_eq!(body["state"]["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(body["questions"].as_object().unwrap().len(), 1);
+        assert!(
+            body["questions"]["candidate_1"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("`candidates[0]`")
+        );
+    }
+}
+
+#[test]
+fn nimble_ask_reports_its_ranking_and_deep_stays_with_jev() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["login", "logout"] {
+        fs::write(
+            temp.path().join(format!("{name}.rs")),
+            format!("fn {name}_session() {{ authenticate(); }}\n"),
+        )
+        .unwrap();
+    }
+    let mut cmd = command(temp.path());
+    cmd.args(["ask", "--json", "where is the login session authenticated?"]);
+    let (output, requests) = nimble_run(&mut cmd, |candidate| {
+        if candidate["source"]
+            .as_str()
+            .unwrap()
+            .starts_with("login.rs:")
+        {
+            0.9
+        } else {
+            0.1
+        }
+    });
+    let result = success(output);
+    assert_eq!(result["ranking"], "nimble");
+    assert_eq!(result["results"][0]["path"], "login.rs");
+    assert_eq!(result["results"].as_array().unwrap().len(), 1);
+    assert!(requests.iter().all(|(_, body)| body["model"] == "nimble"));
+    for (ranker, args, error) in [
+        (
+            "nimble",
+            vec!["ask", "--deep", "login"],
+            "--deep requires Jev; OKO_RANKER selects Nimble.",
+        ),
+        (
+            "bogus",
+            vec!["ask", "--json", "login"],
+            "Unknown OKO_RANKER: bogus. Use jev or nimble.",
+        ),
+    ] {
+        let output = command(temp.path())
+            .env("OKO_RANKER", ranker)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(error));
+    }
 }
 
 fn relevance_response(request: &Value, score: impl Fn(&Value) -> f64) -> Value {
