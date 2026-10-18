@@ -364,6 +364,20 @@ pub fn hook_json(context: Option<&str>) -> String {
     }
 }
 
+/// Hook JSON for a problem the user must fix: shown to the user where the
+/// client shows hook messages (Claude Code, Codex), and given to the agent to
+/// pass on where only context arrives (the OpenCode and Pi plugins).
+pub fn hook_notice(message: &str) -> String {
+    serde_json::json!({
+        "systemMessage": message,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": format!("{message} Tell the user this before anything else."),
+        }
+    })
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

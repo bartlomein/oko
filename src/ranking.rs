@@ -409,6 +409,15 @@ fn throttle(request_bytes: usize) {
 }
 
 /// One request, no application retries, with the SDK's ten-second total timeout.
+/// What a search says when TypeSafe refuses for lack of credit. Said plainly
+/// and never papered over with keyword results: the user has to act.
+pub const OUT_OF_CREDIT: &str = "Oko stopped working: the TypeSafe account behind Jev is out of credit (HTTP 402). Top up the account to turn Oko back on.";
+
+/// Whether an error, anywhere in its chain, is TypeSafe's out-of-credit refusal.
+pub fn is_out_of_credit(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains(OUT_OF_CREDIT)
+}
+
 pub fn call_jev(request: &Value, api_key: &str) -> Result<Value> {
     let mut ignored = Vec::new();
     call_jev_observed(request, api_key, "normal", &mut ignored)
@@ -552,6 +561,9 @@ fn send_observed(
             error_class: Some("http_status".into()),
             usage: None,
         });
+        if status == reqwest::StatusCode::PAYMENT_REQUIRED {
+            bail!("{OUT_OF_CREDIT}");
+        }
         bail!("Jev returned HTTP {}.", status.as_u16());
     }
     let value: Value = match serde_json::from_slice(&bytes) {
@@ -686,7 +698,13 @@ pub fn rank_items_with_stats(
             items.len(),
         )
     };
-    run().map_err(|error| anyhow::anyhow!("Jev ranking failed: {error:#}"))
+    run().map_err(|error| {
+        if is_out_of_credit(&error) {
+            anyhow::anyhow!(OUT_OF_CREDIT)
+        } else {
+            anyhow::anyhow!("Jev ranking failed: {error:#}")
+        }
+    })
 }
 
 #[cfg(test)]
