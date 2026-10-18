@@ -2184,6 +2184,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     if !root.is_dir() {
         bail!("MCP workspace root must be a directory.");
     }
+    oko::jev_log::set_workspace(&root);
     let server = OkoServer {
         root,
         no_jev,
