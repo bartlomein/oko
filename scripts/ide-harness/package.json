@@ -2,8 +2,9 @@
   "name": "oko-ide-harness",
   "private": true,
   "type": "module",
-  "description": "Runs prompts through the programs behind the Claude Code and Codex VS Code extensions",
+  "description": "Runs prompts through the programs behind the Claude Code and Codex VS Code extensions, and the Cursor app",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.301"
+    "@anthropic-ai/claude-agent-sdk": "0.3.301",
+    "playwright-core": "1.48.2"
   }
 }

@@ -72,7 +72,8 @@ oko setup                     # Codex app or CLI
 oko setup --client claude     # Claude Code
 oko setup --client opencode   # OpenCode 1.x
 oko setup --client pi         # Pi 1.0+
-oko setup --client all        # all four
+oko setup --client cursor     # Cursor 3.x
+oko setup --client all        # all five
 ```
 
 Setup installs stable copies, connects the tool to Oko for this project, adds
@@ -88,6 +89,11 @@ The first time you open the project after setup, it shows **Hooks need review**:
 choose **Trust all and continue** (or **Review hooks** to read Oko's first). It asks
 once per project, and again only if a later Oko release changes the hook. If you
 skipped it, `/hooks` brings it back. Claude Code and OpenCode need no extra step.
+
+**In Cursor, turn Oko on once.** Cursor adds a project's MCP servers switched
+off. After setup, open **Customize > MCPs**, click **oko** and turn it on. Oko's
+prompt hook works without this step, but the agent can only call Oko's search
+once it is on.
 Pi requires project trust.
 See [Pi setup and requirements](docs/clients.md#pi-10-by-hand).
 

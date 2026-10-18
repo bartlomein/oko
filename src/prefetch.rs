@@ -31,7 +31,9 @@ pub fn max_context_chars(client: &str) -> usize {
 /// `codex:<id>`); any other value is a session id alone.
 pub fn client_session(value: &str) -> (&str, &str) {
     match value.split_once(':') {
-        Some((client, session)) if matches!(client, "claude" | "codex" | "opencode" | "pi") => {
+        Some((client, session))
+            if matches!(client, "claude" | "codex" | "opencode" | "pi" | "cursor") =>
+        {
             (client, session)
         }
         _ => ("", value),

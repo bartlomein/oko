@@ -455,7 +455,7 @@ fn a_missing_claude_command_or_unknown_client_changes_nothing() {
         executable(),
         &root,
         &temp.path().join("bin"),
-        &["--no-jev", "--client", "cursor"],
+        &["--no-jev", "--client", "windsurf"],
     );
     assert!(!output.status.success());
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
@@ -481,13 +481,22 @@ fn all_clients_share_one_agents_file() {
         "opencode.json",
         ".pi/mcp.json",
         ".pi/extensions/oko-prefetch.js",
+        ".cursor/mcp.json",
+        ".cursor/hooks.json",
+        ".cursor/cli.json",
         "AGENTS.md",
         "CLAUDE.md",
     ] {
         assert!(root.join(file).is_file(), "{file}");
     }
     let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
-    for entry in ["/.codex/config.toml", "/opencode.json", "/.env"] {
+    for entry in [
+        "/.codex/config.toml",
+        "/opencode.json",
+        "/.cursor/mcp.json",
+        "/.cursor/hooks.json",
+        "/.env",
+    ] {
         assert!(ignore.lines().any(|line| line == entry), "{entry}");
     }
 }
@@ -1194,4 +1203,169 @@ for (const mode of ['hang', 'malformed', 'init-error', 'exit', 'bad-content', 'm
             .output()
             .unwrap(),
     );
+}
+
+/// Runs a hook command as Cursor does: through the shell, the event on stdin.
+fn run_cursor_hook(command: &str, root: &Path, event: serde_json::Value) -> serde_json::Value {
+    use std::io::Write;
+    let mut child = Command::new("sh")
+        .args(["-c", command])
+        .current_dir(root)
+        .env_remove("TYPESAFE_API_KEY")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(event.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn cursor_setup_connects_hooks_and_permits_oko_beside_the_users_own() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project with spaces");
+    let install = temp.path().join("bin");
+    fs::create_dir_all(root.join(".cursor")).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/shipping.rs"),
+        "/// Picks the depot for a parcel.\npub fn dispatch_parcel_to_depot(postcode: &str) -> &'static str {\n    if postcode.starts_with(\"ZX\") { \"north\" } else { \"south\" }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".cursor/mcp.json"),
+        r#"{"mcpServers":{"other":{"command":"other"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"beforeSubmitPrompt":[{"command":"./mine.sh"}],"stop":[{"command":"./done.sh"}]}}"#,
+    )
+    .unwrap();
+    let args = ["--no-jev", "--client", "cursor"];
+    assert_ok(&setup(executable(), &root, &install, &args));
+    let read = |file: &str| -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(root.join(file)).unwrap()).unwrap()
+    };
+    let config = read(".cursor/mcp.json");
+    assert_eq!(config["mcpServers"]["other"]["command"], "other");
+    let oko = &config["mcpServers"]["oko"];
+    assert!(oko["command"].as_str().unwrap().ends_with("oko"));
+    assert_eq!(
+        oko["args"],
+        serde_json::json!(["mcp", "--root", root.canonicalize().unwrap(), "--no-jev"])
+    );
+    assert!(oko["env"]["OKO_RIPGREP"].as_str().unwrap().ends_with("rg"));
+    let hooks = read(".cursor/hooks.json");
+    assert_eq!(hooks["hooks"]["stop"][0]["command"], "./done.sh");
+    let prompt = hooks["hooks"]["beforeSubmitPrompt"].as_array().unwrap();
+    assert_eq!(prompt.len(), 2, "{hooks}");
+    assert_eq!(prompt[0]["command"], "./mine.sh");
+    let command = prompt[1]["command"].as_str().unwrap();
+    assert!(
+        command.contains(" hook cursor-prompt --root '"),
+        "{command}"
+    );
+    assert!(command.ends_with(" --no-jev"), "{command}");
+    assert_eq!(prompt[1]["timeout"], 15);
+    assert_eq!(
+        read(".cursor/cli.json")["permissions"]["allow"],
+        serde_json::json!(["Mcp(oko:search)"])
+    );
+    assert!(
+        fs::read_to_string(root.join("AGENTS.md"))
+            .unwrap()
+            .contains("oko:search:start")
+    );
+
+    // The installed hook answers a code question and lets a chore through.
+    let answered = run_cursor_hook(
+        command,
+        &root,
+        serde_json::json!({"hook_event_name": "beforeSubmitPrompt", "prompt": "Where is dispatch_parcel_to_depot defined?", "conversation_id": "c1"}),
+    );
+    assert_eq!(answered["continue"], true);
+    let context = answered["additional_context"].as_str().unwrap();
+    assert!(
+        context.starts_with("Oko answer for this prompt."),
+        "{context}"
+    );
+    assert!(
+        context.contains("pub fn dispatch_parcel_to_depot"),
+        "{context}"
+    );
+    let chore = run_cursor_hook(command, &root, serde_json::json!({"prompt": "thanks!"}));
+    assert_eq!(chore, serde_json::json!({"continue": true}));
+
+    // Repeatable, and listed for upgrade.
+    let files = [".cursor/mcp.json", ".cursor/hooks.json", ".cursor/cli.json"]
+        .map(|file| fs::read_to_string(root.join(file)).unwrap());
+    assert_ok(&setup(executable(), &root, &install, &args));
+    for (file, before) in [".cursor/mcp.json", ".cursor/hooks.json", ".cursor/cli.json"]
+        .iter()
+        .zip(&files)
+    {
+        assert_eq!(
+            &fs::read_to_string(root.join(file)).unwrap(),
+            before,
+            "{file}"
+        );
+    }
+    let projects: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(install.join("projects.json")).unwrap()).unwrap();
+    assert_eq!(
+        projects["projects"][0]["clients"],
+        serde_json::json!(["cursor"])
+    );
+
+    // Turned off: setup's hook goes, the user's stay.
+    assert_ok(&setup(
+        executable(),
+        &root,
+        &install,
+        &["--no-jev", "--client", "cursor", "--no-prefetch"],
+    ));
+    let hooks = read(".cursor/hooks.json");
+    assert_eq!(
+        hooks["hooks"]["beforeSubmitPrompt"],
+        serde_json::json!([{"command": "./mine.sh"}])
+    );
+    assert_eq!(hooks["hooks"]["stop"][0]["command"], "./done.sh");
+}
+
+#[test]
+fn cursor_setup_leaves_invalid_or_foreign_config_alone() {
+    for (file, original) in [
+        (".cursor/mcp.json", "{broken"),
+        (
+            ".cursor/mcp.json",
+            r#"{"mcpServers":{"oko":{"command":"custom"}}}"#,
+        ),
+        (
+            ".cursor/hooks.json",
+            r#"{"version":1,"hooks":{"beforeSubmitPrompt":{}}}"#,
+        ),
+        (".cursor/cli.json", r#"{"permissions":{"allow":"all"}}"#),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir_all(root.join(".cursor")).unwrap();
+        fs::write(root.join(file), original).unwrap();
+        let result = setup(
+            executable(),
+            &root,
+            &temp.path().join("bin"),
+            &["--no-jev", "--client", "cursor"],
+        );
+        assert!(!result.status.success(), "{file}: {original}");
+        assert_eq!(fs::read_to_string(root.join(file)).unwrap(), original);
+        assert!(!root.join("AGENTS.md").exists());
+    }
 }
