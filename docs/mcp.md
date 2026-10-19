@@ -424,7 +424,12 @@ keyword-ranked shortlist instead of an error. The result then begins with a
 line saying that the matches are in keyword order and should be verified, and
 the metrics line reports `ranking: "lexical-fallback"` and
 `retrieval.lexicalFallback` (`timeout`, `unreachable`, or `unavailable`).
-Rejections that need an operator, such as an invalid key, are still errors. If
+Rejections that need an operator, such as an invalid key, are still errors. An
+account out of credit (HTTP 402) fails every search with "Oko stopped working: the
+TypeSafe account behind Jev is out of credit" and asks the agent to tell the user;
+the prompt hook shows the same line to the user in Claude Code and Codex, and gives
+it to the agent to pass on in OpenCode and Pi. Oko does not switch to keyword
+results for it, so a lapsed account is noticed. If
 Jev judged the first shortlist irrelevant and the recovery request then fails,
 the result stays empty: keyword order does not overrule that judgment. The CLI
 and deep mode keep the ten-second timeout and report provider failures, so

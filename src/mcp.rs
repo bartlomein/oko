@@ -634,6 +634,12 @@ impl OkoServer {
                 record_prefetch_skip(&prompt, "nothing relevant", None, retrieval, started);
                 None
             }
+            Err(error) if oko::ranking::is_out_of_credit(&error) => {
+                record_prefetch_skip(&prompt, "error", Some(&error.to_string()), None, started);
+                return CallToolResult::success(vec![ContentBlock::text(
+                    oko::prefetch::hook_notice(oko::ranking::OUT_OF_CREDIT),
+                )]);
+            }
             Err(error) => {
                 record_prefetch_skip(&prompt, "error", Some(&error.to_string()), None, started);
                 None
@@ -2139,6 +2145,10 @@ impl OkoServer {
         .await
         {
             Ok(Ok(result)) => result,
+            Ok(Err(error)) if oko::ranking::is_out_of_credit(&error) => failure(&format!(
+                "{} Tell the user this now, in these words.",
+                oko::ranking::OUT_OF_CREDIT
+            )),
             Ok(Err(error)) => failure(&error.to_string()),
             Err(_) => failure("Search worker failed. Restart the server and retry."),
         }

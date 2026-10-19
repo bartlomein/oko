@@ -2942,6 +2942,67 @@ fn a_code_prompt_is_answered_before_the_first_turn_and_other_prompts_are_not() {
 }
 
 #[test]
+fn out_of_jev_credit_is_said_plainly_to_the_user_not_papered_over() {
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let root = upload_fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let done = Arc::new(AtomicBool::new(false));
+    let serving = done.clone();
+    let server = thread::spawn(move || {
+        while !serving.load(Ordering::Acquire) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    let mut buffer = [0; 65536];
+                    let _ = stream.read(&mut buffer);
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 402 Payment Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+                Err(_) => thread::sleep(Duration::from_millis(2)),
+            }
+        }
+    });
+    let mut client = Client::start(root.path(), false, Some(&endpoint));
+    client.initialize();
+    let plainly = "Oko stopped working: the TypeSafe account behind Jev is out of credit (HTTP 402). Top up the account to turn Oko back on.";
+
+    // The agent's search fails, with words to pass on, and no keyword results.
+    let search =
+        client.search(json!({"question": "Where does the uploader retry a failed upload?"}));
+    assert_eq!(search["result"]["isError"], true, "{search}");
+    let text = search["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with(plainly), "{text}");
+    assert!(text.contains("Tell the user"), "{text}");
+    assert!(!text.contains("uploads.rs"), "{text}");
+
+    // The prompt hook shows it to the user, and gives it to the agent too.
+    let prompt = "Where does the uploader retry a failed upload after a timeout?";
+    let response = client.search(json!({"question": prompt, "prefetch": "s1"}));
+    let hook: Value =
+        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(hook["systemMessage"], plainly, "{hook}");
+    assert!(
+        hook["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .starts_with(plainly)
+    );
+    assert!(!response.to_string().contains("fake-mcp-key"));
+    drop(client);
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+}
+
+#[test]
 fn without_jev_a_prefetch_shows_only_definitions_the_prompt_names() {
     let root = upload_fixture();
     let mut client = Client::start(root.path(), true, None);
