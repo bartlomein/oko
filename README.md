@@ -1,371 +1,153 @@
 <p align="center">
-  <img src="docs/images/oko.png" alt="Oko: a pixel-art eye with a blue iris" width="280">
+  <img src="docs/images/oko.png" alt="Oko: a pixel-art eye with a blue iris" width="200">
 </p>
 
-# Oko
+<h1 align="center">Oko</h1>
 
-**Help your coding agent find code faster and use fewer tokens.**
+<p align="center">
+  <strong>Help your coding agent find code faster and use fewer tokens.</strong>
+</p>
 
-Oko helps Codex, Claude Code, and OpenCode spend less time searching and fewer
-tokens reading irrelevant code. It delivers relevant source snippets through
-MCP, and answers a code question as you send it, so your agent can get to the
-task sooner. Gains vary by task and coding tool.
+<p align="center">
+  <a href="https://github.com/bartlomein/oko/actions/workflows/ci.yml"><img src="https://github.com/bartlomein/oko/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/bartlomein/oko/releases/latest"><img src="https://img.shields.io/github/v/release/bartlomein/oko" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/bartlomein/oko" alt="MIT license"></a>
+</p>
 
-| Benchmark | What it measures | Oko |
-| --- | --- | --- |
-| [Our agent sessions](#agent-sessions) | Codex, OpenCode and Claude Code on nine tasks, with and without Oko | 60–63% fewer tokens, 47–58% faster, 75–86% fewer tool calls |
-| [Sense's agent benchmark](#against-sense) | Claude Opus 4.7 on six multi-step tasks, run against Sense the same evening | Cited recall 0.88 against Sense's 0.63, at half the cost |
-| [Agent Retrieval Bench](#agent-retrieval-bench) | 345 code-retrieval tasks in six languages | Right file first more often than any published method (MRR 0.37 against 0.24); top-20 recall 0.68, next to the best embedding model's 0.70 |
-| [SWE-Explore](#swe-explore) | 848 real issues: the code that fixing agents needed | One search ranks the code about as well as agents that explore for many turns (nDCG 0.82, line precision 0.56) |
+Oko gives Claude Code, Codex, Cursor, OpenCode and Pi a better code search. When
+you ask your agent about your code, Oko has already found the relevant source,
+so the agent spends fewer rounds searching and reading files it does not need.
 
-Each benchmark's method and caveats are in [its section below](#benchmarks).
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/agent-sessions-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/agent-sessions-light.svg">
+    <img alt="Bar chart: with Oko, Claude Code spends 58% less time, 61% fewer tokens and 85% fewer tool calls; Codex 47%, 60% and 75%; OpenCode 49%, 63% and 86%; Pi 52%, 78% and 83%; Cursor 6%, 40% and 65%." src="docs/images/agent-sessions-light.svg" width="760">
+  </picture>
+  <br>
+  <sub>Nine coding tasks on Astro, HTTPX and ripgrep, three runs each, with and without Oko. <a href="#results">Results</a> · <a href="docs/benchmark-results.md#agent-sessions">Method</a></sub>
+</p>
 
-Oko runs locally and uses [TypeSafe AI’s Jev](https://typesafe.ai/) to rank selected
-source snippets. Use it through your coding agent or directly from your terminal.
+- **Faster:** about half the time in Claude Code, Codex, OpenCode and Pi.
+- **Cheaper:** 40–78% fewer tokens with every tool we measured.
+- **Fewer detours:** 65–86% fewer tool calls.
+- **Better ranking:** puts the right file first more often than any published method on [Agent Retrieval Bench](#other-benchmarks).
+- **Local first:** search runs on your machine; only the question and selected snippets go to the ranker ([privacy](docs/privacy.md)).
 
-[Install](#install) · [Connect your coding tool](#connect-your-coding-tool) · [Benchmarks](#benchmarks) · [CLI examples](#use-in-your-terminal) · [Documentation](#documentation)
-
-```sh
-oko ask "where is authentication handled?"
-```
-
-No Node.js or Rust runtime needed for downloaded binaries. Oko needs a TypeSafe AI
-API key for Jev ranking; local keyword search also works without a key.
-
-## Install
-
-Run this on macOS or Linux to install the latest release:
+## Quick start
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+cd your-project
+oko setup --client claude     # or codex, cursor, opencode, pi, all
 ```
 
-The installer detects your processor, downloads Oko and its bundled ripgrep,
-verifies the checksum, and installs them without administrator access. Add the
-`export PATH` line to `~/.zshrc` or `~/.bashrc` to keep `oko` available in new
-terminals. Existing installations from other sources are left untouched.
-
-Supported downloads: macOS Apple Silicon and Intel; Linux ARM64 and x64 with
-glibc 2.35+ (Ubuntu 22.04 or newer). Alpine and Windows are not supported by the
-installer. macOS binaries are not yet signed or notarized.
-
-To upgrade later, run `oko upgrade`: it installs the latest release and
-refreshes every project you set up. Oko tells you when one is out.
-
-Prefer to inspect the script, install manually, or select a version?
-See [installation options](docs/installation.md).
-
-Continue with `oko setup` below—it prompts for your
-[TypeSafe AI](https://typesafe.ai/) key. For terminal use or a manual connection,
-save the key with `oko auth login`. Oko uses your operating system’s credential
-store; headless Linux can use an environment variable or ignored `.env` instead.
-See [key configuration](docs/configuration.md).
-
-## Connect your coding tool
-
-Run setup from the project you want to search, naming your coding tool:
-
-```sh
-cd /path/to/your/project
-oko setup                     # Codex app or CLI
-oko setup --client claude     # Claude Code
-oko setup --client opencode   # OpenCode 1.x
-oko setup --client pi         # Pi 1.0+
-oko setup --client cursor     # Cursor 3.x
-oko setup --client all        # all five
-```
-
-Setup installs stable copies, connects the tool to Oko for this project, adds
-search guidance to the instructions that tool reads, and checks the connection.
-The guidance matters: in our benchmark it is what makes Codex and OpenCode
-sessions faster, not just cheaper. Setup also adds a prompt hook: when you ask a
-code question, Oko's answer is in the agent's context before its first turn, so
-it skips a round of searching. Start a new session afterwards. Repeat setup for
-each project.
-
-**In Codex, approve the hook once.** Codex runs no hook you have not reviewed.
-The first time you open the project after setup, it shows **Hooks need review**:
-choose **Trust all and continue** (or **Review hooks** to read Oko's first). It asks
-once per project, and again only if a later Oko release changes the hook. If you
-skipped it, `/hooks` brings it back. Claude Code and OpenCode need no extra step.
-
-**In Cursor, turn Oko on once.** Cursor adds a project's MCP servers switched
-off. After setup, open **Customize > MCPs**, click **oko** and turn it on. Oko's
-prompt hook works without this step, but the agent can only call Oko's search
-once it is on.
-Pi requires project trust.
-See [Pi setup and requirements](docs/clients.md#pi-10-by-hand).
-
-For a key-free connection, add `--no-jev`. See [what setup changes](docs/mcp.md#set-up-a-project).
-The manual steps below do the same by hand, without the guidance.
-
-### Claude Code by hand
-
-From the project you want to search:
-
-```sh
-cd /path/to/your/project
-oko auth login
-claude mcp add-json --scope local oko \
-  "{\"type\":\"stdio\",\"command\":\"$(command -v oko)\",\"args\":[\"mcp\",\"--root\",\"$PWD\"],\"alwaysLoad\":true}"
-claude mcp list
-```
-
-Start a new Claude Code session and check `/mcp` for Oko. This connection is
-private to you and scoped to this project; repeat the command for other projects.
-Skip `oko auth login` if you already saved your key.
-
-### OpenCode by hand
-
-Save your key once with `oko auth login`, then add this to `opencode.json` in
-your project root (merge the `oko` entry if the file exists):
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "oko": {
-      "type": "local",
-      "command": ["oko", "mcp"],
-      "enabled": true
-    }
-  }
-}
-```
+Then use your coding tool as usual. Setup asks for a [TypeSafe AI](https://typesafe.ai/)
+key the first time, connects your tool to Oko for this project, and checks the
+connection. Run it once per project; `oko upgrade` keeps everything current.
 
 <details>
-<summary>OpenCode 2.x configuration</summary>
+<summary><strong>Codex:</strong> approve Oko's hook once</summary>
 
-Version 2 places servers under `mcp.servers` and connects them automatically:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "servers": {
-      "oko": {
-        "type": "local",
-        "command": ["oko", "mcp"]
-      }
-    }
-  }
-}
-```
-
+The first time you open the project, Codex shows **Hooks need review**. Choose
+**Trust all and continue**. If you skipped it, `/hooks` brings it back.
 </details>
 
-Run `opencode mcp list` from your project to check the connection, then start a
-new OpenCode session. Use `opencode --version` if you are unsure which format to use.
-See the [OpenCode MCP docs](https://opencode.ai/docs/mcp-servers/) for more options.
+<details>
+<summary><strong>Cursor:</strong> turn Oko on once</summary>
 
-### Try it
+Cursor adds a project's tools switched off. Open **Customize > MCPs**, click
+**oko** and turn it on.
+</details>
 
-Ask your agent:
+<details>
+<summary><strong>Pi:</strong> trust the project</summary>
 
-> Use Oko to find where authentication is handled in this project.
+Pi 1.0 or later. Trust the project when Pi asks, then check `/mcp`.
+[Pi setup](docs/clients.md#pi-10-by-hand).
+</details>
 
-Your coding tool starts Oko automatically. You do not need to run a server yourself.
-Connecting Oko makes it available; it does not force the agent to use it for every
-search. A function, class or method named in the question is always found;
-literal text can still be searched with native grep.
+<details>
+<summary><strong>Claude Code, OpenCode:</strong> nothing more to do</summary>
 
-## Use in your terminal
+Start a new session after setup.
+</details>
 
-Oko searches the directory you run it from:
+<details>
+<summary>Platforms, manual install, no-key mode</summary>
+
+macOS (Apple Silicon and Intel) and Linux (ARM64 and x64, glibc 2.35+). The
+installer puts `oko` in `~/.local/bin`; add it to your `PATH` if needed.
+[Other install options](docs/installation.md) · [Connect a tool by hand](docs/clients.md) ·
+[Keys and configuration](docs/configuration.md). For search without a key,
+add `--no-jev`: local keyword ranking only.
+</details>
+
+## Results
+
+The same task given to the same coding tool twice, once with its own search and
+once with Oko. Means per session, 27 sessions per side.
+
+| Coding tool | Time | Tokens | Tool calls | Tasks passed (without → with) |
+| --- | --- | --- | --- | --- |
+| Claude Code | **58% less**<br><sub>12.0 → 5.0 s</sub> | **61% less**<br><sub>56,513 → 22,008</sub> | **85% less**<br><sub>4.4 → 0.7</sub> | 26 → 25 of 27 |
+| Codex | **47% less**<br><sub>48.2 → 25.8 s</sub> | **60% less**<br><sub>72,247 → 28,751</sub> | **75% less**<br><sub>3.5 → 0.9</sub> | 26 → 27 of 27 |
+| OpenCode | **49% less**<br><sub>25.7 → 13.1 s</sub> | **63% less**<br><sub>28,513 → 10,624</sub> | **86% less**<br><sub>5.5 → 0.7</sub> | 27 → 27 of 27 |
+| Pi | **52% less**<br><sub>31.4 → 15.0 s</sub> | **78% less**<br><sub>41,886 → 9,261</sub> | **83% less**<br><sub>6.5 → 1.1</sub> | 25 → 25 of 27 |
+| Cursor | **6% less**<br><sub>52.3 → 49.2 s</sub> | **40% less**<br><sub>182,940 → 109,520</sub> | **65% less**<br><sub>8.0 → 2.8</sub> | 26 → 24 of 27 |
+
+<sub>Models: Claude Sonnet 5 (Claude Code), GPT-5.6 Sol (Codex, OpenCode, Pi), Grok 4.7 High (Cursor), at their default or low effort. Each tool counts tokens its own way, so compare within a row. Small benchmark; your results will vary. [Method, per-task results and caveats](docs/benchmark-results.md#agent-sessions) · [raw data](benchmarks/published/).</sub>
+
+## Other benchmarks
+
+| Benchmark | What it tests | Oko | Best comparison |
+| --- | --- | --- | --- |
+| [Sense's agent benchmark](docs/benchmark-results.md#senses-agent-benchmark-against-sense) | Six multi-step tasks, Claude Opus 4.7, run against Sense the same evening | Found **88%** of the locations to cite, at **half the cost** | Sense: 63% |
+| [Agent Retrieval Bench](docs/benchmark-results.md#agent-retrieval-bench) | 345 tasks: find the files a developer needs next | Right file ranked first most often: **0.37** | Best published method: 0.24 |
+| [SWE-Explore](docs/benchmark-results.md#swe-explore) | 848 real issues: rank the code fixing agents needed | One search ranks it within the range of agents that explore for many turns: **0.82** | Agents: 0.72–0.95 |
+
+## Where Oko helps less
+
+- **Cursor's own search is already fast,** so Oko saves less time there: mostly tokens and tool calls.
+- **Duplicated code can mislead it.** When two files hold identical copies of a function, Oko may show the wrong one first; one Astro edit task in our benchmark fails this way.
+- **Big changes across many files:** one search returns five places, so an issue touching many files still needs the agent's own exploring.
+
+## Use it from your terminal
 
 ```sh
-cd /path/to/your/project
 oko ask "where is authentication handled?"
 oko ask "how are retries handled?" --json
-oko ask "how does authentication work?" --deep --max-steps 5
-oko ask "where is authentication handled?" --no-jev
+oko stats                     # what ranking has cost you
 ```
 
-Start with normal search. Deep mode can investigate further, but makes additional
-Jev requests and can take longer. `--no-jev` uses local keyword ranking only.
+More in [search options](docs/search.md).
 
-To replace, check, or remove your saved key, use `oko auth login`,
-`oko auth status`, or `oko auth logout`. `oko stats` shows what Jev ranking has
-cost: requests, input tokens and their price over the last 30 days, by day,
-phase and workspace.
+## How it works
 
-## Benchmarks
-
-### Agent sessions
-
-We give the same coding task to the same agent twice, once with its built-in
-search and once with Oko set up by `oko setup`, and compare the whole session:
-time, the agent's tokens, and tool calls. Nine tasks on pinned commits of
-[Astro](https://github.com/withastro/astro), [HTTPX](https://github.com/encode/httpx),
-and [ripgrep](https://github.com/BurntSushi/ripgrep): six ask for code spread over
-several places, three ask for a small edit checked by tests. The wording never
-names the file or function. Each task runs 3 times per setup with Codex, OpenCode,
-and Claude Code: **162 sessions**, measured on the 0.7.0 code. With Oko, the
-agent starts with Oko's answer to the prompt and usually needs no search of its
-own: 63 of the 81 sessions with Oko made no Oko call.
-
-| Coding tool | | Without Oko | With Oko | Average | Best task |
-| --- | --- | --- | --- | --- | --- |
-| Codex | Time | 48.2 s | 25.8 s | **47% faster** | 77% faster |
-| | Tokens | 72,247 | 28,751 | **60% fewer** | 77% fewer |
-| | Tool calls | 3.5 | 0.9 | **75% fewer** | 100% fewer |
-| OpenCode | Time | 25.7 s | 13.1 s | **49% faster** | 63% faster |
-| | Tokens | 28,513 | 10,624 | **63% fewer** | 85% fewer |
-| | Tool calls | 5.5 | 0.7 | **86% fewer** | 100% fewer |
-| Claude Code | Time | 12.0 s | 5.0 s | **58% faster** | 84% faster |
-| | Tokens | 56,513 | 22,008 | **61% fewer** | 75% fewer |
-| | Tool calls | 4.4 | 0.7 | **85% fewer** | 100% fewer |
-| Pi | Time | 31.4 s | 15.0 s | **52% faster** | 73% faster |
-| | Tokens | 41,886 | 9,261 | **78% fewer** | 94% fewer |
-| | Tool calls | 6.5 | 1.1 | **83% fewer** | 100% fewer |
-| Cursor | Time | 52.3 s | 49.2 s | **6% less** | 51% faster |
-| | Tokens | 182,900 | 109,500 | **40% fewer** | 67% fewer |
-| | Tool calls | 8.0 | 2.8 | **65% fewer** | 100% fewer |
-
-With Oko, Codex passed 27 of 27, OpenCode 27 and Claude Code 25; without it,
-26, 27 and 26. Three of the four misses are one Astro edit task, where the agent
-also changed an identical copy of the function in another file (Claude Code
-twice with Oko, Codex once without); the fourth is a Claude Code answer without
-Oko citing a line past the end of a file. Tokens and tool calls fell on all nine
-tasks for every tool, and time on all nine for Codex and OpenCode and eight for
-Claude Code. Against Oko without the prompt hook, as in earlier releases, tokens
-fell a further 35–40%. The other Claude Code hooks `oko setup` installs are not
-part of these sessions, which use no subagents. It is a small benchmark with
-Codex CLI 0.155 and OpenCode 1.18 (`gpt-5.6-sol`) and Claude Code 2.1
-(`claude-sonnet-5`) at low reasoning effort; your results will vary.
-[Full results and methodology](docs/benchmark-results.md#agent-sessions), the
-[runner, tasks, and checks](scripts/benchmark-public/), and the
-[raw results](benchmarks/published/0.7.0/) are in this repository.
-
-Pi was measured separately on 2 October with the 0.7.2 development snapshot:
-**54 additional sessions**, Pi 1.0.0, `gpt-5.6-sol`, low thinking, the same nine
-tasks and three repeats. Both setups passed **25/27**, including all edits.
-Pi with Oko missed the final URL authorization location in the Astro task twice.
-The table uses means; median time was 29.72 s without Oko and 13.97 s with it.
-Agent tokens include cached input and exclude Jev. Oko added 724,939 Jev tokens;
-combined recorded tokens were 14% lower. At 2 October API list prices, the
-27 sessions cost an estimated $2.12 without Oko versus $0.79 with it, including
-$0.028 for Jev. These are API-equivalent estimates; Pi used ChatGPT OAuth.
-[Pi results and methodology](docs/benchmark-results.md#pi-54-sessions-october-2026)
-and [per-session data](benchmarks/published/0.7.2/agent-sessions/report-pi.json).
-
-Cursor was measured on 19 October: **54 additional sessions** in the Cursor app
-3.25.9 with its default model, Grok 4.7 High, the same nine tasks and three
-repeats. Cursor's own search is local and fast, so Oko saves less time there
-than elsewhere: mean time was 6% lower (52.3 s to 49.2 s), lower on five of the
-nine tasks, while median time was higher (38.7 s to 45.4 s). Tokens, from
-Cursor's usage export, and tool calls fell on all nine tasks. Without Oko 26 of
-27 sessions passed, with it 24: Oko's answer showed the identical copy of the
-helper in the Astro edit task, and Cursor changed that copy in all three
-sessions. [Cursor results and methodology](docs/benchmark-results.md#cursor-54-sessions-october-2026)
-and [per-session data](benchmarks/published/cursor/sessions.json).
-
-### Against Sense
-
-[Sense](https://github.com/luuuc/sense) publishes an agent benchmark: six
-multi-step tasks on real repositories answered by Claude Opus 4.7, scored and
-judged by its own harness. We ran it with Oko and with Sense on the same
-evening, five runs per task each.
-
-| | Oko | Sense |
-| --- | --- | --- |
-| Cited recall (the harness's headline) | **0.883** | 0.625 |
-| Blended score | **0.922** | 0.727 |
-| Relations stated correctly | **0.943** | 0.733 |
-| Sessions finished within budget and time | **30 of 30** | 21 of 30 |
-| Cost, 30 sessions | **$25.19** + about $0.31 of Jev | $50.55 |
-| Mean time per session | **161 s** | 212 s |
-
-Cited recall and relations come from one task (Discourse, 24 locations) run
-five times. With this Claude Code version (2.1.286), Sense went over its budget
-in 8 of 30 sessions and ran to the time limit in one; the harness scores what
-those sessions wrote. In our earlier paired run, on an older Claude Code, Sense
-scored 0.875. [Details](docs/benchmark-results.md#senses-agent-benchmark-against-sense).
-
-### Agent Retrieval Bench
-
-[Agent Retrieval Bench](https://arxiv.org/abs/2607.24882) has 345 tasks from 25
-repositories in six languages: given a repository and a signal from a coding
-workflow (a failing test's output, a pull request, a review comment, a code
-change), find the files a developer needs next. Oko's numbers are the mean of
-three runs on the 0.7.0 code, scored with the benchmark's own code; the
-baselines were run locally on the same tasks and reproduce the published
-figures.
-
-| Method | Right file in top 20 | First right file ranks high (MRR) | Needed code within 8k tokens |
-| --- | --- | --- | --- |
-| **Oko** | 0.68 | **0.37** | **0.49** |
-| Qwen3-Embedding-8B (GPU, index) | **0.70** | 0.23 | 0.37 |
-| RepoMap | 0.64 | 0.22 | 0.38 |
-| Qwen3-Embedding-4B (GPU, index) | 0.63 | 0.24 | 0.34 |
-| Lexical | 0.49 | 0.16 | 0.27 |
-| BM25 | 0.45 | 0.15 | 0.21 |
-
-Each task is one search, so setup's prompt hook plays no part here. Per-task
-tables, the held-out split, what was tuned on what, and the limits are in
-[the details](docs/benchmark-results.md#agent-retrieval-bench).
-
-### SWE-Explore
-
-[SWE-Explore](https://arxiv.org/abs/2606.07297) has 848 real issues from
-SWE-bench Verified, Pro and Multilingual in ten languages. The answer is the
-code that successful agents read while fixing each issue; an explorer returns
-five ranked regions. The agent rows are the paper's published results; they
-explore for many turns with a frontier model, while Oko makes one search of
-about a second.
-
-| Method | Right file in top 5 | Line precision | Ranking (nDCG@500) |
-| --- | --- | --- | --- |
-| Claude Code (agent) | **0.67** | 0.60 | 0.94 |
-| Mini-SWE-Agent (agent) | 0.64 | 0.53 | 0.89 |
-| LocAgent (agent) | 0.54 | 0.64 | **0.95** |
-| CoSIL (agent) | 0.54 | 0.58 | 0.82 |
-| **Oko, one search** | 0.40 | 0.56 | 0.82 |
-| AutoCodeRover (agent) | 0.28 | **0.68** | 0.72 |
-| TF-IDF | 0.14 | 0.10 | 0.22 |
-| BM25 | 0.07 | 0.05 | 0.12 |
-
-On ranking and precision one Oko search sits among the agents; on finding every
-file an issue needs it does not, because five regions from one search cannot
-cover the 4.3 files an issue needs on average. [Details](docs/benchmark-results.md#swe-explore).
-
-## Privacy
-
-File discovery and initial search run locally. Jev ranking sends your question and
-selected source snippets to TypeSafe AI; with setup's prompt hook, a prompt that
-reads as a code question is searched as you send it, so its first paragraph is
-the question. Once a day Oko asks GitHub for the latest release number, and
-nothing else; `--no-jev` and `OKO_NO_UPDATE_CHECK=1` turn that off. Deep mode can send more snippets across
-multiple requests. **Use `--no-jev` for local-only searches.** Each Jev request's
-time, workspace path, phase and token counts are logged locally for `oko stats`,
-never the question or code; `OKO_NO_JEV_LOG=1` turns that off. Oko does not edit your
-source files. Prepared search data is cached outside your repository;
-[configuration](docs/configuration.md) explains key storage and cache controls.
+Oko searches your project locally (keywords, symbols and file structure), then
+asks [Jev](https://typesafe.ai/), TypeSafe AI's relevance model, which of the
+candidates actually answer the question, and returns those excerpts with exact
+line numbers. `oko setup` connects it to your tool as an MCP server, adds short
+guidance to the instructions your tool reads, and installs a hook that answers a
+code question as you send it.
+[What setup changes](docs/mcp.md#set-up-a-project) · [Privacy](docs/privacy.md).
 
 ## Documentation
 
 | I want to… | Guide |
 | --- | --- |
-| Build from source, upgrade, or troubleshoot installation | [Installation](docs/installation.md) |
-| Connect an agent or understand the MCP tool | [Client setup](docs/clients.md) · [MCP reference](docs/mcp.md) |
-| Configure keys, `.env`, or caching | [Configuration](docs/configuration.md) |
-| Use search options or rank my own documents and records | [Search](docs/search.md) · [Document ranking](docs/ranking.md) |
-| Contribute, evaluate results, or prepare a release | [Development and benchmarks](docs/benchmarks.md) · [Releasing](docs/releasing.md) |
+| Install, upgrade or troubleshoot | [Installation](docs/installation.md) |
+| Connect a tool by hand, or understand the MCP tool | [Client setup](docs/clients.md) · [MCP reference](docs/mcp.md) |
+| Configure keys, `.env` or caching | [Configuration](docs/configuration.md) |
+| Search from the terminal, or rank my own documents | [Search](docs/search.md) · [Document ranking](docs/ranking.md) |
+| See every benchmark and how it was run | [Benchmark results](docs/benchmark-results.md) |
+| Know what leaves my machine | [Privacy](docs/privacy.md) |
 
-## Help and contributing
+## Contributing
 
-Found a bug or have an idea? [Open an issue](https://github.com/bartlomein/oko/issues).
-Include your OS, `oko --version`, and steps to reproduce, without API keys or
-private source code. For code changes, build from source and run:
-
-```sh
-cargo fmt --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
-```
-
-The Rust tests need no API key or private repository. Live benchmarks are optional.
+Bug reports and ideas are welcome: [open an issue](https://github.com/bartlomein/oko/issues)
+with your OS and `oko --version`, without keys or private code. To build and
+test, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

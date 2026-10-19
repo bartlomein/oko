@@ -1,11 +1,13 @@
 # Benchmark results
 
-[← Back to Oko](../README.md#benchmarks)
+[← Back to Oko](../README.md#results)
 
 Four benchmarks: two public retrieval benchmarks that score what Oko returns,
 our own agent benchmark that times whole coding sessions, and Sense's agent
 benchmark, run against Sense on the same evening. Raw per-task results are in
-[`benchmarks/published/0.7.0/`](../benchmarks/published/0.7.0/) (and
+[`benchmarks/published/0.7.0/`](../benchmarks/published/0.7.0/), with Pi's run in
+[`0.7.2/`](../benchmarks/published/0.7.2/) and Cursor's in
+[`cursor/`](../benchmarks/published/cursor/) (and
 [`0.6.1/`](../benchmarks/published/0.6.1/), [`0.6.0/`](../benchmarks/published/0.6.0/)
 and [`0.5.0/`](../benchmarks/published/0.5.0/) for earlier releases; Sense's
 earlier paired run is in `0.6.0/`); the

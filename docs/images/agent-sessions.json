@@ -1,0 +1,20 @@
+{
+  "about": "Headline agent-session results for the README: means per session, 27 sessions per side, nine tasks. Percentages are as reported in docs/benchmark-results.md. Rendered by scripts/render-readme-charts.py.",
+  "tools": [
+    {"name": "Claude Code", "model": "Claude Sonnet 5, low effort",
+     "time": [12.0, 5.0, 58], "tokens": [56513, 22008, 61], "toolCalls": [4.4, 0.7, 85], "passed": [26, 25],
+     "source": "benchmarks/published/0.7.0/agent-sessions/report-claude-codex.json"},
+    {"name": "Codex", "model": "GPT-5.6 Sol, low effort",
+     "time": [48.2, 25.8, 47], "tokens": [72247, 28751, 60], "toolCalls": [3.5, 0.9, 75], "passed": [26, 27],
+     "source": "benchmarks/published/0.7.0/agent-sessions/report-claude-codex.json"},
+    {"name": "OpenCode", "model": "GPT-5.6 Sol",
+     "time": [25.7, 13.1, 49], "tokens": [28513, 10624, 63], "toolCalls": [5.5, 0.7, 86], "passed": [27, 27],
+     "source": "benchmarks/published/0.7.0/agent-sessions/report-opencode.json"},
+    {"name": "Pi", "model": "GPT-5.6 Sol, low thinking",
+     "time": [31.4, 15.0, 52], "tokens": [41886, 9261, 78], "toolCalls": [6.5, 1.1, 83], "passed": [25, 25],
+     "source": "benchmarks/published/0.7.2/agent-sessions/report-pi.json"},
+    {"name": "Cursor", "model": "Grok 4.7 High",
+     "time": [52.3, 49.2, 6], "tokens": [182940, 109520, 40], "toolCalls": [8.0, 2.8, 65], "passed": [26, 24],
+     "source": "benchmarks/published/cursor/sessions.json"}
+  ]
+}
