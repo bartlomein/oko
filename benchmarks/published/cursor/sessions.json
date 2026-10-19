@@ -1,0 +1,2114 @@
+[
+ {
+  "task": "astro-image-probe-authorization",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 28.355,
+  "toolCalls": 7,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep"
+  ],
+  "passed": true,
+  "tokensK": 165.6,
+  "requests": 5.0,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:33:17Z",
+  "endedAt": "2026-10-19T01:33:57Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.69,
+   "thinkingEndsSeconds": [
+    3.8,
+    6.4,
+    10.6,
+    19.3,
+    27.4
+   ]
+  }
+ },
+ {
+  "task": "astro-image-probe-authorization",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 47.331,
+  "toolCalls": 2,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 67.8,
+  "requests": 2.07,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:34:05Z",
+  "endedAt": "2026-10-19T01:35:36Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 4.42,
+   "thinkingEndsSeconds": [
+    11.2
+   ]
+  }
+ },
+ {
+  "task": "astro-action-key-guards",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 42.744,
+  "toolCalls": 3,
+  "tools": [
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 116.7,
+  "requests": 3.71,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:35:45Z",
+  "endedAt": "2026-10-19T01:36:49Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 5.73,
+   "thinkingEndsSeconds": [
+    10.1,
+    29.9,
+    41.6
+   ]
+  }
+ },
+ {
+  "task": "astro-action-key-guards",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 32.315,
+  "toolCalls": 10,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 177.2,
+  "requests": 5.47,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:36:58Z",
+  "endedAt": "2026-10-19T01:37:40Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.73,
+   "thinkingEndsSeconds": [
+    3.8,
+    8.1,
+    14.1,
+    19.2,
+    23.3,
+    31.6
+   ]
+  }
+ },
+ {
+  "task": "astro-forwarded-empty",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 100.128,
+  "toolCalls": 12,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 318.3,
+  "requests": 8.37,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:37:48Z",
+  "endedAt": "2026-10-19T01:39:34Z",
+  "answer": "`getFirstForwardedValue` in `packages/internal-helpers/src/request.ts` now returns `undefined` when the first forwarded value is empty or only whitespace.\n\nThe helper still takes only the first comma-separated segment. It trims that segment, and it still treats arrays with `toString()` and `null` or `undefined` inputs the same way. An empty first segment is not skipped in favor of a later one. IP validation in the same file is unchanged.\n\nNo builds, tests, or dependency installs were run, so nothing was verified beyond reading the edited helper.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 4.9,
+   "thinkingEndsSeconds": [
+    4.9,
+    7.8,
+    10.4,
+    25.6,
+    38.7,
+    81.0,
+    87.0,
+    89.4,
+    98.9
+   ]
+  }
+ },
+ {
+  "task": "astro-forwarded-empty",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 105.04,
+  "toolCalls": 2,
+  "tools": [
+   "StrReplace",
+   "Read"
+  ],
+  "passed": false,
+  "tokensK": 144.4,
+  "requests": 3.47,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:39:43Z",
+  "endedAt": "2026-10-19T01:42:03Z",
+  "answer": "`getFirstForwardedValue` in `packages/astro/src/core/app/validate-headers.ts` now returns `undefined` when the first forwarded value is empty or whitespace-only.\n\nThe helper still trims, still uses `toString()` for arrays, and still treats `null` or `undefined` as missing. It only reads the first comma-separated value, so a blank first entry is not replaced by a later one. The comment above the function matches that contract. IP validation was left as it was.\n\nNo builds, tests, or installs were run. The runner's behavior checks are still outstanding.",
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "trace": {
+   "ttftSeconds": 4.0,
+   "thinkingEndsSeconds": []
+  }
+ },
+ {
+  "task": "httpx-decoder-chain",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 9.477,
+  "toolCalls": 0,
+  "tools": [],
+  "passed": true,
+  "tokensK": 55.5,
+  "requests": 1.5,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:42:11Z",
+  "endedAt": "2026-10-19T01:43:04Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.26,
+   "thinkingEndsSeconds": [
+    7.9
+   ]
+  }
+ },
+ {
+  "task": "httpx-decoder-chain",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 15.74,
+  "toolCalls": 5,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Grep",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 94.3,
+  "requests": 3.04,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:43:12Z",
+  "endedAt": "2026-10-19T01:43:39Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225},{\"path\":\"httpx/_decoders.py\",\"startLine\":381,\"endLine\":393}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.01,
+   "thinkingEndsSeconds": [
+    4.0,
+    5.3,
+    8.7,
+    14.5
+   ]
+  }
+ },
+ {
+  "task": "httpx-async-auth-body",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 131.475,
+  "toolCalls": 6,
+  "tools": [
+   "Grep",
+   "Glob",
+   "Read",
+   "Read",
+   "Read",
+   "Grep"
+  ],
+  "passed": true,
+  "tokensK": 136.9,
+  "requests": 4.5,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:43:48Z",
+  "endedAt": "2026-10-19T01:46:05Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.22,
+   "thinkingEndsSeconds": [
+    4.8,
+    84.8,
+    106.2,
+    130.7
+   ]
+  }
+ },
+ {
+  "task": "httpx-async-auth-body",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 53.161,
+  "toolCalls": 0,
+  "tools": [],
+  "passed": true,
+  "tokensK": 55.2,
+  "requests": 1.64,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:46:13Z",
+  "endedAt": "2026-10-19T01:47:41Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 5.62,
+   "thinkingEndsSeconds": []
+  }
+ },
+ {
+  "task": "httpx-reason-fallback",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 38.647,
+  "toolCalls": 1,
+  "tools": [
+   "StrReplace"
+  ],
+  "passed": true,
+  "tokensK": 62.5,
+  "requests": 2.06,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:47:49Z",
+  "endedAt": "2026-10-19T01:48:50Z",
+  "answer": "`codes.get_reason_phrase` in `httpx/_status_codes.py` now returns the literal string `Unknown Status` when an integer status code is not a known code. Known phrases still come from `codes(value).phrase`, so enum and int inputs and the status classification helpers are unchanged.\n\nNo builds or tests were run; the runner will do the focused checks.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 10.41,
+   "thinkingEndsSeconds": [
+    26.8,
+    37.2
+   ]
+  }
+ },
+ {
+  "task": "httpx-reason-fallback",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 65.806,
+  "toolCalls": 5,
+  "tools": [
+   "Grep",
+   "Read",
+   "Grep",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 176.5,
+  "requests": 5.78,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:48:57Z",
+  "endedAt": "2026-10-19T01:50:13Z",
+  "answer": "`codes.get_reason_phrase` in `httpx/_status_codes.py` now returns the literal string `Unknown Status` when an integer code is not a known status.\n\nKnown phrases still come from the enum member. Integer and `codes` inputs still go through the same lookup. The status classification helpers are unchanged. A short docstring on that method describes the new fallback.\n\nI only searched and read the status-code module, then edited that method. I did not run builds or tests.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 7.55,
+   "thinkingEndsSeconds": [
+    8.6,
+    17.9,
+    40.1
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-expansion",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 38.748,
+  "toolCalls": 8,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 147.5,
+  "requests": 4.61,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:50:21Z",
+  "endedAt": "2026-10-19T01:51:10Z",
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":450,\"endLine\":456},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":35},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.67,
+   "thinkingEndsSeconds": [
+    3.7,
+    5.7,
+    20.5,
+    22.4,
+    37.6
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-expansion",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 64.359,
+  "toolCalls": 10,
+  "tools": [
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 148.9,
+  "requests": 4.21,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:51:18Z",
+  "endedAt": "2026-10-19T01:53:06Z",
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":450,\"endLine\":456},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.26,
+   "thinkingEndsSeconds": [
+    10.0
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-printed-bytes",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 63.352,
+  "toolCalls": 2,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 115.3,
+  "requests": 3.3,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:53:14Z",
+  "endedAt": "2026-10-19T01:54:39Z",
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":36,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":59}]}",
+  "grade": {
+   "correctFirst": false,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.72,
+   "thinkingEndsSeconds": [
+    10.2,
+    12.6,
+    62.3
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-printed-bytes",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 27.439,
+  "toolCalls": 6,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 91.2,
+  "requests": 3.05,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:54:47Z",
+  "endedAt": "2026-10-19T01:55:24Z",
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":34,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":59}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.85,
+   "thinkingEndsSeconds": [
+    3.9,
+    6.7,
+    8.7,
+    26.2
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-hyphen",
+  "condition": "native",
+  "repetition": 1,
+  "seconds": 31.724,
+  "toolCalls": 5,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 116.8,
+  "requests": 3.9,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:55:32Z",
+  "endedAt": "2026-10-19T01:56:11Z",
+  "answer": "Named replacement references can now include ASCII hyphens.\n\nIn `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` still accepts ASCII letters, digits, and `_`, and now also accepts `-`. The comment directly above that predicate notes that both `$first-name` and `${first-name}` are recognized. Braced and unbraced names share this check, so both forms pick up the hyphen. Numeric captures, `$$` escaping, and malformed-reference handling are unchanged because only that predicate was edited.\n\nNo builds, tests, or other checks were run.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 3.92,
+   "thinkingEndsSeconds": [
+    3.9,
+    6.2,
+    24.8,
+    27.4,
+    30.9
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-hyphen",
+  "condition": "oko",
+  "repetition": 1,
+  "seconds": 58.045,
+  "toolCalls": 1,
+  "tools": [
+   "StrReplace"
+  ],
+  "passed": true,
+  "tokensK": 138.9,
+  "requests": 4.24,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:56:18Z",
+  "endedAt": "2026-10-19T01:57:52Z",
+  "answer": "`is_valid_cap_letter` in `crates/matcher/src/interpolate.rs` now treats ASCII `-` as a valid capture-name byte, so both `$first-name` and `${first-name}` are accepted. The doc comment immediately above that predicate now lists digits, letters, underscore, and hyphen.\n\nDigits, letters, underscore, all-digit numeric references, `$$` escaping, and malformed-reference handling are unchanged. The regex engine and tests were not modified.\n\nNo builds or tests were run.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 4.23,
+   "thinkingEndsSeconds": []
+  }
+ },
+ {
+  "task": "astro-image-probe-authorization",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 67.506,
+  "toolCalls": 2,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 92.2,
+  "requests": 2.86,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:58:00Z",
+  "endedAt": "2026-10-19T01:59:42Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 4.95,
+   "thinkingEndsSeconds": [
+    12.7,
+    17.8
+   ]
+  }
+ },
+ {
+  "task": "astro-image-probe-authorization",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 54.786,
+  "toolCalls": 9,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 175.7,
+  "requests": 5.21,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T01:59:50Z",
+  "endedAt": "2026-10-19T02:00:55Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 7.21,
+   "thinkingEndsSeconds": [
+    7.2,
+    19.2,
+    25.1,
+    35.3
+   ]
+  }
+ },
+ {
+  "task": "astro-action-key-guards",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 50.686,
+  "toolCalls": 12,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "Grep",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 165.6,
+  "requests": 5.04,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:01:03Z",
+  "endedAt": "2026-10-19T02:01:59Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":32,\"endLine\":63},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.16,
+   "thinkingEndsSeconds": [
+    4.0,
+    7.6,
+    13.0,
+    24.4,
+    49.1
+   ]
+  }
+ },
+ {
+  "task": "astro-action-key-guards",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 28.53,
+  "toolCalls": 3,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 74.0,
+  "requests": 2.39,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:02:07Z",
+  "endedAt": "2026-10-19T02:03:10Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.75,
+   "thinkingEndsSeconds": [
+    7.9,
+    10.2,
+    22.3,
+    27.8
+   ]
+  }
+ },
+ {
+  "task": "astro-forwarded-empty",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 225.708,
+  "toolCalls": 18,
+  "tools": [
+   "GetDynamicTools",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "StrReplace",
+   "StrReplace",
+   "Read",
+   "Read",
+   "Shell"
+  ],
+  "passed": false,
+  "tokensK": 482.7,
+  "requests": 11.36,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:03:18Z",
+  "endedAt": "2026-10-19T02:07:24Z",
+  "answer": "`getFirstForwardedValue` now returns `undefined` when the first forwarded value is empty or whitespace-only, and it still uses that first value only.\n\nUpdated both copies and the comment immediately above each one:\n\n- `packages/internal-helpers/src/request.ts`\n- `packages/astro/src/core/app/validate-headers.ts`\n\nTrimming, array handling via `toString()`, and `null`/`undefined` inputs are unchanged. A header such as `\"  , example.com\"` stays `undefined`. `isValidIpAddress` and `getValidatedIpFromHeader` were not edited.\n\nA small Node check of the helper logic covered empty, whitespace-only, a blank first value before a later one, trimming, arrays, and `null`/`undefined`. The repository test suite was not run. The existing internal-helpers unit test still expects `getFirstForwardedValue('')` to be `''`.",
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "trace": {
+   "ttftSeconds": 4.94,
+   "thinkingEndsSeconds": [
+    44.8,
+    57.7,
+    81.1,
+    111.2,
+    113.4,
+    185.0,
+    188.1,
+    200.0,
+    209.8,
+    216.9,
+    223.4
+   ]
+  }
+ },
+ {
+  "task": "astro-forwarded-empty",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 102.527,
+  "toolCalls": 10,
+  "tools": [
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Glob",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 386.1,
+  "requests": 9.59,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:07:32Z",
+  "endedAt": "2026-10-19T02:09:25Z",
+  "answer": "`getFirstForwardedValue` in `packages/internal-helpers/src/request.ts` now returns `undefined` when the first header value is empty or only whitespace.\n\nThe helper still takes only that first value, trims it, and keeps the existing array, `null`, and `undefined` handling. A blank first value is not replaced by a later one. IP validation is unchanged.\n\nI checked the edit by reading the helper and the IP validation below it. Builds and tests were not run.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 2.59,
+   "thinkingEndsSeconds": [
+    3.4,
+    7.3,
+    42.9
+   ]
+  }
+ },
+ {
+  "task": "httpx-decoder-chain",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 15.839,
+  "toolCalls": 5,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 129.0,
+  "requests": 3.62,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:09:33Z",
+  "endedAt": "2026-10-19T02:09:58Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.76,
+   "thinkingEndsSeconds": [
+    3.8,
+    6.0,
+    8.1,
+    15.1
+   ]
+  }
+ },
+ {
+  "task": "httpx-decoder-chain",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 9.526,
+  "toolCalls": 0,
+  "tools": [],
+  "passed": true,
+  "tokensK": 28.6,
+  "requests": 0.94,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:10:06Z",
+  "endedAt": "2026-10-19T02:10:51Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.25,
+   "thinkingEndsSeconds": [
+    9.0
+   ]
+  }
+ },
+ {
+  "task": "httpx-async-auth-body",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 24.247,
+  "toolCalls": 0,
+  "tools": [],
+  "passed": true,
+  "tokensK": 28.0,
+  "requests": 0.88,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:10:59Z",
+  "endedAt": "2026-10-19T02:11:45Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 4.64,
+   "thinkingEndsSeconds": [
+    23.4
+   ]
+  }
+ },
+ {
+  "task": "httpx-async-auth-body",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 31.762,
+  "toolCalls": 4,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 99.8,
+  "requests": 3.39,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:11:52Z",
+  "endedAt": "2026-10-19T02:12:34Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.06,
+   "thinkingEndsSeconds": [
+    4.6,
+    8.3,
+    30.5
+   ]
+  }
+ },
+ {
+  "task": "httpx-reason-fallback",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 27.505,
+  "toolCalls": 4,
+  "tools": [
+   "Grep",
+   "Read",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 81.6,
+  "requests": 2.7,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:12:42Z",
+  "endedAt": "2026-10-19T02:13:15Z",
+  "answer": "`codes.get_reason_phrase` in `httpx/_status_codes.py` now returns the literal string `Unknown Status` when the integer code is not a known status.\n\nKnown phrases are unchanged: the method still resolves both integer codes and `codes` members through the existing enum lookup. The classification helpers (`is_informational`, `is_success`, and the rest) were left as they are. A short docstring inside the method notes the new fallback.\n\nNo builds or tests were run. The existing check in `tests/test_status_codes.py` still expects an empty string for code 499; that assertion was left untouched.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 3.8,
+   "thinkingEndsSeconds": [
+    3.8,
+    6.2,
+    18.7,
+    22.6,
+    26.4
+   ]
+  }
+ },
+ {
+  "task": "httpx-reason-fallback",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 12.701,
+  "toolCalls": 1,
+  "tools": [
+   "StrReplace"
+  ],
+  "passed": true,
+  "tokensK": 80.9,
+  "requests": 2.55,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:13:23Z",
+  "endedAt": "2026-10-19T02:14:11Z",
+  "answer": "`codes.get_reason_phrase` now returns the literal string `Unknown Status` when an integer status code is not a known code. Recognized phrases, enum and int inputs, and the status classification helpers are unchanged.\n\nThe only edit is the `ValueError` fallback in `httpx/_status_codes.py`. No tests, builds, or dependency installs were run.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 3.59,
+   "thinkingEndsSeconds": [
+    9.3,
+    12.0
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-expansion",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 63.405,
+  "toolCalls": 3,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 184.5,
+  "requests": 5.54,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:14:19Z",
+  "endedAt": "2026-10-19T02:15:57Z",
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":441,\"endLine\":460},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.1,
+   "thinkingEndsSeconds": []
+  }
+ },
+ {
+  "task": "ripgrep-capture-expansion",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 74.977,
+  "toolCalls": 9,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "Grep"
+  ],
+  "passed": true,
+  "tokensK": 218.3,
+  "requests": 6.86,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:16:05Z",
+  "endedAt": "2026-10-19T02:17:30Z",
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":450,\"endLine\":459},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.84,
+   "thinkingEndsSeconds": [
+    3.8,
+    6.0,
+    23.4,
+    25.6
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-printed-bytes",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 28.556,
+  "toolCalls": 6,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 78.5,
+  "requests": 2.39,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:17:38Z",
+  "endedAt": "2026-10-19T02:18:12Z",
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":34,\"endLine\":39},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":59}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 4.11,
+   "thinkingEndsSeconds": [
+    4.3,
+    8.3,
+    10.5,
+    27.8
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-printed-bytes",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 45.433,
+  "toolCalls": 2,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 97.2,
+  "requests": 3.0,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:18:20Z",
+  "endedAt": "2026-10-19T02:19:40Z",
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":36,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":65}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.28,
+   "thinkingEndsSeconds": [
+    10.3
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-hyphen",
+  "condition": "oko",
+  "repetition": 2,
+  "seconds": 36.942,
+  "toolCalls": 2,
+  "tools": [
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 107.6,
+  "requests": 3.38,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:19:48Z",
+  "endedAt": "2026-10-19T02:20:47Z",
+  "answer": "`is_valid_cap_letter` in `crates/matcher/src/interpolate.rs` now treats an ASCII hyphen as a capture-name byte, alongside digits, letters, and underscore. The comment directly above that predicate documents the same set.\n\n`find_cap_ref` already scans names with this predicate, so `$first-name` and `${first-name}` are named references. All-digit names still parse as numeric captures, `$$` still fails the name scan, and a braced reference without `}` is still rejected. The regex engine and tests were left unchanged.\n\nNo build or tests were run; the runner will do those checks. The change is uncommitted.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 3.16,
+   "thinkingEndsSeconds": [
+    26.4,
+    30.4,
+    35.4
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-hyphen",
+  "condition": "native",
+  "repetition": 2,
+  "seconds": 64.398,
+  "toolCalls": 8,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 214.0,
+  "requests": 6.66,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:20:55Z",
+  "endedAt": "2026-10-19T02:22:10Z",
+  "answer": "Named replacement references can now include an ASCII hyphen. `$first-name` and `${first-name}` are both recognized as the capture name `first-name`.\n\nIn `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` still accepts ASCII letters, digits, and `_`, and now also accepts `-`. The comment directly above that predicate lists the same set. Digits still parse as numeric captures, `$$` is still a literal dollar, and malformed references are unchanged because the scan and brace checks were left as they were.\n\nNo builds or tests were run, and nothing was committed.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 3.62,
+   "thinkingEndsSeconds": [
+    4.9,
+    8.5,
+    26.9,
+    30.7
+   ]
+  }
+ },
+ {
+  "task": "astro-image-probe-authorization",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 41.201,
+  "toolCalls": 10,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Glob",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep"
+  ],
+  "passed": true,
+  "tokensK": 165.5,
+  "requests": 4.91,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:22:18Z",
+  "endedAt": "2026-10-19T02:23:09Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.7,
+   "thinkingEndsSeconds": [
+    3.8,
+    7.3,
+    9.5,
+    14.4,
+    40.6
+   ]
+  }
+ },
+ {
+  "task": "astro-image-probe-authorization",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 47.52,
+  "toolCalls": 3,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 132.8,
+  "requests": 3.73,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:23:17Z",
+  "endedAt": "2026-10-19T02:24:39Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.82,
+   "thinkingEndsSeconds": [
+    10.0,
+    13.4,
+    42.3
+   ]
+  }
+ },
+ {
+  "task": "astro-action-key-guards",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 22.184,
+  "toolCalls": 3,
+  "tools": [
+   "Grep",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 123.2,
+  "requests": 3.93,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:24:47Z",
+  "endedAt": "2026-10-19T02:25:30Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.64,
+   "thinkingEndsSeconds": [
+    7.4,
+    16.2,
+    20.8
+   ]
+  }
+ },
+ {
+  "task": "astro-action-key-guards",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 29.712,
+  "toolCalls": 10,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 120.1,
+  "requests": 3.84,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:25:38Z",
+  "endedAt": "2026-10-19T02:26:17Z",
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.77,
+   "thinkingEndsSeconds": [
+    3.8,
+    7.6,
+    13.4,
+    28.3
+   ]
+  }
+ },
+ {
+  "task": "astro-forwarded-empty",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 195.237,
+  "toolCalls": 26,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Grep",
+   "StrReplace",
+   "StrReplace",
+   "Read",
+   "Read",
+   "Shell"
+  ],
+  "passed": false,
+  "tokensK": 775.6,
+  "requests": 15.59,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:26:25Z",
+  "endedAt": "2026-10-19T02:29:46Z",
+  "answer": "An empty or whitespace-only first forwarded header value now returns `undefined`. A later value is not used in its place.\n\n`getFirstForwardedValue` in `packages/internal-helpers/src/request.ts` and `packages/astro/src/core/app/validate-headers.ts` still trims the first comma-separated value and still treats arrays, `null`, and `undefined` as before. Only the blank-first-value result changed, from `\"\"` to `undefined`. IP validation is unchanged.\n\nA standalone check of that logic passed for trimmed values, arrays, `null`, `undefined`, an empty string, whitespace-only input, and an empty first value followed by another value. Project builds and tests were not run.",
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "trace": {
+   "ttftSeconds": 3.08,
+   "thinkingEndsSeconds": [
+    4.1,
+    13.5,
+    16.0,
+    34.9,
+    50.5,
+    53.3,
+    73.0,
+    75.3,
+    81.7,
+    90.5,
+    111.2,
+    159.8,
+    176.0,
+    180.7,
+    186.3,
+    193.4
+   ]
+  }
+ },
+ {
+  "task": "astro-forwarded-empty",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 73.793,
+  "toolCalls": 5,
+  "tools": [
+   "Read",
+   "Read",
+   "Grep",
+   "StrReplace",
+   "StrReplace"
+  ],
+  "passed": false,
+  "tokensK": 136.6,
+  "requests": 3.07,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:29:54Z",
+  "endedAt": "2026-10-19T02:31:42Z",
+  "answer": "`getFirstForwardedValue` now returns `undefined` when the first forwarded-header segment is empty or whitespace-only, in both copies of the helper.\n\n- `packages/astro/src/core/app/validate-headers.ts`\n- `packages/internal-helpers/src/request.ts`\n\nThe first comma-separated segment is still the only one used. It is trimmed as before, and `null`, `undefined`, and array values still go through the same `toString()` path. A blank first segment stays blank: `\" , example.com\"` yields `undefined`. The comments immediately above each function describe that rule. IP validation in `request.ts` is unchanged.\n\nNo builds, tests, or dependency installs were run. Behavior checks are left to the runner.",
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "trace": {
+   "ttftSeconds": 3.25,
+   "thinkingEndsSeconds": [
+    40.2
+   ]
+  }
+ },
+ {
+  "task": "httpx-decoder-chain",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 7.429,
+  "toolCalls": 0,
+  "tools": [],
+  "passed": true,
+  "tokensK": 78.3,
+  "requests": 2.52,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:31:50Z",
+  "endedAt": "2026-10-19T02:32:33Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.99,
+   "thinkingEndsSeconds": [
+    6.6
+   ]
+  }
+ },
+ {
+  "task": "httpx-decoder-chain",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 22.159,
+  "toolCalls": 5,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Grep",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 82.1,
+  "requests": 2.74,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:32:41Z",
+  "endedAt": "2026-10-19T02:33:12Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225},{\"path\":\"httpx/_decoders.py\",\"startLine\":381,\"endLine\":393}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 4.0,
+   "thinkingEndsSeconds": [
+    4.0,
+    7.9,
+    10.1,
+    21.3
+   ]
+  }
+ },
+ {
+  "task": "httpx-async-auth-body",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 26.48,
+  "toolCalls": 6,
+  "tools": [
+   "Grep",
+   "Glob",
+   "Grep",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 127.9,
+  "requests": 4.15,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:33:20Z",
+  "endedAt": "2026-10-19T02:33:52Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.56,
+   "thinkingEndsSeconds": [
+    3.6,
+    5.9,
+    8.4,
+    25.1
+   ]
+  }
+ },
+ {
+  "task": "httpx-async-auth-body",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 19.013,
+  "toolCalls": 0,
+  "tools": [],
+  "passed": true,
+  "tokensK": 38.4,
+  "requests": 1.23,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:34:00Z",
+  "endedAt": "2026-10-19T02:34:54Z",
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.29,
+   "thinkingEndsSeconds": []
+  }
+ },
+ {
+  "task": "httpx-reason-fallback",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 14.795,
+  "toolCalls": 1,
+  "tools": [
+   "StrReplace"
+  ],
+  "passed": true,
+  "tokensK": 44.4,
+  "requests": 1.49,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:35:03Z",
+  "endedAt": "2026-10-19T02:35:40Z",
+  "answer": "`codes.get_reason_phrase` now returns the literal string `Unknown Status` when an integer status code is not recognized. Known reason phrases, enum and int inputs, and the status classification helpers are unchanged.\n\nThe edit is only the `ValueError` fallback in `httpx/_status_codes.py`. No tests, builds, or dependency installs were run.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 4.02,
+   "thinkingEndsSeconds": [
+    10.3,
+    13.6
+   ]
+  }
+ },
+ {
+  "task": "httpx-reason-fallback",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 37.928,
+  "toolCalls": 4,
+  "tools": [
+   "Grep",
+   "Read",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 138.9,
+  "requests": 4.58,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:35:48Z",
+  "endedAt": "2026-10-19T02:36:36Z",
+  "answer": "`codes.get_reason_phrase` in `httpx/_status_codes.py` now returns the literal string `Unknown Status` when an integer status code is not a known member.\n\nKnown phrases are unchanged: the method still resolves both plain integers and `codes` members through `codes(value).phrase`. The informational, success, redirect, and error helpers are untouched. A short docstring on that method documents the fallback.\n\nNo builds, tests, or dependency installs were run. The existing test `test_reason_phrase_for_unknown_status_code` still expects `\"\"` and was left as-is.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 4.97,
+   "thinkingEndsSeconds": [
+    5.0,
+    8.2,
+    28.3,
+    33.0,
+    36.8
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-expansion",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 38.725,
+  "toolCalls": 12,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 164.3,
+  "requests": 5.05,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:36:44Z",
+  "endedAt": "2026-10-19T02:37:33Z",
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":450,\"endLine\":456},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":35},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.92,
+   "thinkingEndsSeconds": [
+    4.0,
+    6.5,
+    12.9,
+    16.2,
+    20.8,
+    37.3
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-expansion",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 65.917,
+  "toolCalls": 8,
+  "tools": [
+   "GetDynamicTools",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 147.5,
+  "requests": 4.31,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:37:41Z",
+  "endedAt": "2026-10-19T02:39:22Z",
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":441,\"endLine\":460},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 3.47,
+   "thinkingEndsSeconds": [
+    11.1
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-printed-bytes",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 58.081,
+  "toolCalls": 2,
+  "tools": [
+   "GetDynamicTools",
+   "mcp:search"
+  ],
+  "passed": true,
+  "tokensK": 112.3,
+  "requests": 3.35,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:39:31Z",
+  "endedAt": "2026-10-19T02:40:50Z",
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":36,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":55,\"endLine\":58}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 4.11,
+   "thinkingEndsSeconds": [
+    9.0,
+    12.2,
+    56.7
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-printed-bytes",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 51.715,
+  "toolCalls": 9,
+  "tools": [
+   "Grep",
+   "Grep",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep"
+  ],
+  "passed": true,
+  "tokensK": 241.5,
+  "requests": 7.39,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:40:58Z",
+  "endedAt": "2026-10-19T02:42:00Z",
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":34,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":59}]}",
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "trace": {
+   "ttftSeconds": 2.93,
+   "thinkingEndsSeconds": [
+    3.8,
+    7.1,
+    10.6,
+    29.1,
+    31.1,
+    32.7
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-hyphen",
+  "condition": "native",
+  "repetition": 3,
+  "seconds": 46.388,
+  "toolCalls": 4,
+  "tools": [
+   "Grep",
+   "Read",
+   "StrReplace",
+   "Read"
+  ],
+  "passed": true,
+  "tokensK": 150.7,
+  "requests": 4.82,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:42:08Z",
+  "endedAt": "2026-10-19T02:43:01Z",
+  "answer": "Named replacement references can now include an ASCII hyphen. In `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` accepts `-` along with digits, letters, and `_`, and the comment directly above it lists those bytes.\n\n`$first-name` and `${first-name}` are therefore one capture name. Numeric references, `$$` escaping, and malformed references still follow the existing parser. The regex engine and tests were left unchanged.\n\nI only searched and read the interpolator, then re-read the edited predicate. Builds and tests were not run.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 2.72,
+   "thinkingEndsSeconds": [
+    4.4,
+    7.6,
+    36.0,
+    40.1,
+    45.6
+   ]
+  }
+ },
+ {
+  "task": "ripgrep-capture-hyphen",
+  "condition": "oko",
+  "repetition": 3,
+  "seconds": 24.11,
+  "toolCalls": 1,
+  "tools": [
+   "StrReplace"
+  ],
+  "passed": true,
+  "tokensK": 62.7,
+  "requests": 2.0,
+  "model": "Grok 4.7 High",
+  "startedAt": "2026-10-19T02:43:09Z",
+  "endedAt": "2026-10-19T02:44:09Z",
+  "answer": "Named replacement references can now include ASCII hyphens. In `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` accepts `b'-'` along with digits, ASCII letters, and underscore, and the doc comment directly above it lists hyphens as allowed.\n\n`$first-name` and `${first-name}` are therefore valid names. Numeric references, doubled-dollar escaping, and malformed-reference handling are unchanged because the parser itself was not modified. No builds, tests, or other checks were run.",
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "unexpectedFiles": []
+  },
+  "trace": {
+   "ttftSeconds": 3.37,
+   "thinkingEndsSeconds": []
+  }
+ }
+]

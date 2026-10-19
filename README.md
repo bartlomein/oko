@@ -219,6 +219,9 @@ own: 63 of the 81 sessions with Oko made no Oko call.
 | Pi | Time | 31.4 s | 15.0 s | **52% faster** | 73% faster |
 | | Tokens | 41,886 | 9,261 | **78% fewer** | 94% fewer |
 | | Tool calls | 6.5 | 1.1 | **83% fewer** | 100% fewer |
+| Cursor | Time | 52.3 s | 49.2 s | **6% less** | 51% faster |
+| | Tokens | 182,900 | 109,500 | **40% fewer** | 67% fewer |
+| | Tool calls | 8.0 | 2.8 | **65% fewer** | 100% fewer |
 
 With Oko, Codex passed 27 of 27, OpenCode 27 and Claude Code 25; without it,
 26, 27 and 26. Three of the four misses are one Astro edit task, where the agent
@@ -246,6 +249,17 @@ combined recorded tokens were 14% lower. At 2 October API list prices, the
 $0.028 for Jev. These are API-equivalent estimates; Pi used ChatGPT OAuth.
 [Pi results and methodology](docs/benchmark-results.md#pi-54-sessions-october-2026)
 and [per-session data](benchmarks/published/0.7.2/agent-sessions/report-pi.json).
+
+Cursor was measured on 19 October: **54 additional sessions** in the Cursor app
+3.25.9 with its default model, Grok 4.7 High, the same nine tasks and three
+repeats. Cursor's own search is local and fast, so Oko saves less time there
+than elsewhere: mean time was 6% lower (52.3 s to 49.2 s), lower on five of the
+nine tasks, while median time was higher (38.7 s to 45.4 s). Tokens, from
+Cursor's usage export, and tool calls fell on all nine tasks. Without Oko 26 of
+27 sessions passed, with it 24: Oko's answer showed the identical copy of the
+helper in the Astro edit task, and Cursor changed that copy in all three
+sessions. [Cursor results and methodology](docs/benchmark-results.md#cursor-54-sessions-october-2026)
+and [per-session data](benchmarks/published/cursor/sessions.json).
 
 ### Against Sense
 
