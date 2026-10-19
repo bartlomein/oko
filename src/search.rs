@@ -1500,6 +1500,37 @@ impl SourceStamp {
     }
 }
 
+/// A file's stamp whatever its size: what a skipped file is remembered by.
+pub(crate) fn any_file_stamp(root: &Path, file: &str) -> Option<SourceStamp> {
+    let path = root.join(file).canonicalize().ok()?;
+    if !path.starts_with(root) {
+        return None;
+    }
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    SourceStamp::from_metadata(&metadata)
+}
+
+/// The stamp of a file whose directory is known to resolve inside the root.
+/// Only a file that is itself a symlink has its whole path resolved, which is
+/// most of a rescan's cost on a large repository.
+pub(crate) fn file_stamp_in_root(root: &Path, file: &str, any_size: bool) -> Option<SourceStamp> {
+    let metadata = fs::symlink_metadata(root.join(file)).ok()?;
+    if metadata.file_type().is_symlink() {
+        return if any_size {
+            any_file_stamp(root, file)
+        } else {
+            workspace_file_stamp(root, file).ok().flatten()
+        };
+    }
+    if !metadata.is_file() || (!any_size && metadata.len() > file_byte_limit(file) as u64) {
+        return None;
+    }
+    SourceStamp::from_metadata(&metadata)
+}
+
 pub(crate) fn workspace_file_stamp(root: &Path, file: &str) -> Result<Option<SourceStamp>> {
     let path = root.join(file).canonicalize()?;
     if !path.starts_with(root) {

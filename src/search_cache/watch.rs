@@ -4,6 +4,7 @@ use anyhow::Result;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -26,10 +27,19 @@ struct Reconciliation<'a> {
     identity: Option<RootIdentity>,
     sources: &'a HashMap<String, WorkspaceFile>,
     dirty: &'a HashSet<PathBuf>,
+    inside: &'a HashMap<String, bool>,
     now: SystemTime,
 }
 
 impl Reconciliation<'_> {
+    fn stamp(&self, path: &str) -> Option<search::SourceStamp> {
+        if directory_inside(self.inside, path) {
+            search::file_stamp_in_root(self.root, path, false)
+        } else {
+            search::workspace_file_stamp(self.root, path).ok().flatten()
+        }
+    }
+
     fn reusable(&self, path: &str) -> bool {
         let absolute = self.root.join(path);
         if absolute.ancestors().any(|path| self.dirty.contains(path)) {
@@ -41,11 +51,7 @@ impl Reconciliation<'_> {
                     && self
                         .identity
                         .is_some_and(|root| root.device == previous.device())
-                    && search::workspace_file_stamp(self.root, path)
-                        .ok()
-                        .flatten()
-                        .as_ref()
-                        == Some(previous)
+                    && self.stamp(path).as_ref() == Some(previous)
             })
         })
     }
@@ -94,6 +100,39 @@ impl Reconciliation<'_> {
             }
         })
     }
+}
+
+/// Whether each directory holding a discovered file resolves inside the root:
+/// one lstat per directory, with a symlinked directory resolved in full.
+fn directories_inside(root: &Path, paths: &[String]) -> HashMap<String, bool> {
+    fn resolve(root: &Path, dir: &str, inside: &mut HashMap<String, bool>) -> bool {
+        if let Some(&known) = inside.get(dir) {
+            return known;
+        }
+        let parent = dir.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let parent_inside = resolve(root, parent, inside);
+        let absolute = root.join(dir);
+        let result = match fs::symlink_metadata(&absolute) {
+            Ok(metadata) if metadata.file_type().is_symlink() => absolute
+                .canonicalize()
+                .is_ok_and(|resolved| resolved.starts_with(root)),
+            Ok(metadata) => parent_inside && metadata.is_dir(),
+            Err(_) => false,
+        };
+        inside.insert(dir.to_owned(), result);
+        result
+    }
+    let mut inside = HashMap::from([(String::new(), true)]);
+    for path in paths {
+        let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+        resolve(root, dir, &mut inside);
+    }
+    inside
+}
+
+fn directory_inside(inside: &HashMap<String, bool>, path: &str) -> bool {
+    let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+    inside.get(dir).copied().unwrap_or(false)
 }
 
 fn root_identity(root: &Path) -> Option<RootIdentity> {
@@ -234,6 +273,9 @@ pub(super) struct WorkspaceWatch {
     _watcher: Option<RecommendedWatcher>,
     events: Arc<Mutex<Events>>,
     sources: HashMap<String, WorkspaceFile>,
+    /// Files read and not indexed (binary, too large, minified, empty), by
+    /// their stamp: unchanged, they are not read again on the next query.
+    skipped: HashMap<String, search::SourceStamp>,
     last_full: Option<Instant>,
     identity: Option<RootIdentity>,
     local: bool,
@@ -250,6 +292,7 @@ impl WorkspaceWatch {
                 _watcher: None,
                 events,
                 sources: HashMap::new(),
+                skipped: HashMap::new(),
                 last_full: None,
                 identity,
                 local,
@@ -280,6 +323,7 @@ impl WorkspaceWatch {
             _watcher: watcher,
             events,
             sources: HashMap::new(),
+            skipped: HashMap::new(),
             last_full: None,
             identity,
             local,
@@ -341,6 +385,11 @@ impl WorkspaceWatch {
         // This runs even with no events: additions, deletions, ignore rules and
         // branch changes must be visible before asynchronous delivery catches up.
         let paths = search::workspace_paths(&self.root)?;
+        let inside = if full {
+            HashMap::new()
+        } else {
+            directories_inside(&self.root, &paths)
+        };
         let decisions = if full {
             vec![false; paths.len()]
         } else {
@@ -349,15 +398,36 @@ impl WorkspaceWatch {
                 identity: self.identity,
                 sources: &self.sources,
                 dirty: &dirty,
+                inside: &inside,
                 now: SystemTime::now(),
             }
             .decisions(&paths, super::preparation_workers(paths.len()))?
         };
         let mut reused = HashMap::new();
         let mut read = Vec::new();
+        let mut still_skipped = HashMap::new();
+        let now = SystemTime::now();
         for (path, reusable) in paths.iter().zip(decisions) {
             if reusable {
                 reused.insert(path.clone(), self.sources[path].clone());
+                continue;
+            }
+            // A file skipped last time is skipped again while nothing about it
+            // changed; a full validation reads it regardless.
+            let unchanged_skip = !full
+                && !self
+                    .root
+                    .join(path)
+                    .ancestors()
+                    .any(|ancestor| dirty.contains(ancestor))
+                && self.skipped.get(path).is_some_and(|previous| {
+                    previous.can_reuse(now)
+                        && directory_inside(&inside, path)
+                        && search::file_stamp_in_root(&self.root, path, true).as_ref()
+                            == Some(previous)
+                });
+            if unchanged_skip {
+                still_skipped.insert(path.clone(), self.skipped[path].clone());
             } else {
                 read.push(path.clone());
             }
@@ -373,6 +443,15 @@ impl WorkspaceWatch {
             .map(|source| (source.path.clone(), source))
             .collect();
         let reused_contents = reused.len();
+        for path in &read {
+            if !captured.contains_key(path)
+                && let Some(stamp) = search::any_file_stamp(&self.root, path)
+                && stamp.can_reuse(now)
+            {
+                still_skipped.insert(path.clone(), stamp);
+            }
+        }
+        self.skipped = still_skipped;
         captured.extend(reused);
         // Paths from discovery dictate order, eligibility and deletions. Text
         // clones share Arc<str>, so retaining captures does not copy contents.
@@ -472,11 +551,13 @@ mod tests {
         paths.push("new.rs".into());
         std::fs::write(root.join("new.rs"), "fn new_source() {}\n").unwrap();
         let dirty = HashSet::from([root.join(&paths[41])]);
+        let inside = directories_inside(&root, &paths);
         let reconciliation = Reconciliation {
             root: &root,
             identity: root_identity(&root),
             sources: &sources,
             dirty: &dirty,
+            inside: &inside,
             now: SystemTime::now(),
         };
         let serial = reconciliation.decisions(&paths, 1).unwrap();
