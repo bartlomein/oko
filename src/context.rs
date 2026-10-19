@@ -1151,6 +1151,36 @@ fn overlaps(a: &SourceExcerpt, b: &SourceExcerpt) -> bool {
 }
 
 impl SourceExcerpt {
+    /// Covers `other` as well, when both are plain excerpts of one file whose
+    /// union is contiguous source no longer than a primary implementation.
+    fn widen(&mut self, other: &SourceExcerpt, snapshot: &Snapshot<'_>) {
+        let start = self.start_line.min(other.start_line);
+        let end = self.end_line.max(other.end_line);
+        if self.path != other.path
+            || !self.omitted.is_empty()
+            || !other.omitted.is_empty()
+            || (start, end) == (self.start_line, self.end_line)
+            || end - start + 1 > PRIMARY_IMPLEMENTATION_LINES
+            || snapshot.contiguous_end(start) < end
+        {
+            return;
+        }
+        self.text = (start..=end)
+            .map(|n| snapshot.lines[&n])
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.start_line = start;
+        self.end_line = end;
+        self.whole_file = snapshot.covers_whole_file(start, end);
+        self.truncated = (self.truncated || other.truncated) && !self.whole_file;
+        self.definition_complete &= other.definition_complete;
+        self.definitions = if self.definition_complete {
+            self.definitions.max(other.definitions)
+        } else {
+            0
+        };
+    }
+
     fn shrink(&mut self) -> bool {
         if self.text.len() <= MIN_TEXT_BYTES {
             return false;
@@ -1779,11 +1809,17 @@ fn build_packet_limited(
         ) else {
             continue;
         };
-        if packet
+        if let Some(shown) = packet
             .results
-            .iter()
-            .any(|r| overlaps(&r.excerpt, &context))
+            .iter_mut()
+            .find(|r| overlaps(&r.excerpt, &context))
         {
+            // An accepted match beside a narrower excerpt widens it. Dropped,
+            // the lines only it held were lost: httpx's `MultiDecoder.__init__`
+            // went missing beside its `decode` while a weaker match took the slot.
+            if !lower_confidence {
+                shown.excerpt.widen(&context, snapshot);
+            }
             continue;
         }
         let compact = (!primary && proven)
@@ -2118,6 +2154,45 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+    #[test]
+    fn an_accepted_match_overlapping_a_shown_excerpt_widens_it() {
+        let source = "class ZstdDecoder(ContentDecoder):\n    def flush(self) -> bytes:\n        if not self.seen_data:\n            return b\"\"\n        return bytes(self.decompressor.flush())\n\n\nclass MultiDecoder(ContentDecoder):\n    \"\"\"\n    Handle the case where multiple encodings have been applied.\n    \"\"\"\n\n    def __init__(self, children: typing.Sequence[ContentDecoder]) -> None:\n        # Note that we reverse the order for decoding.\n        self.children = list(reversed(children))\n\n    def decode(self, data: bytes) -> bytes:\n        for child in self.children:\n            data = child.decode(data)\n        return data\n\n    def flush(self) -> bytes:\n        data = b\"\"\n        for child in self.children:\n            data = child.decode(data) + child.flush()\n        return data\n";
+        let corpus = chunk_text("decoders.py", source);
+        let lines: Vec<&str> = source.lines().collect();
+        // Sections as the ranker judged them: merged short definitions.
+        let section = |start: usize, end: usize| Chunk {
+            start_line: start,
+            end_line: end,
+            text: lines[start - 1..end].join("\n"),
+            ..corpus[0].clone()
+        };
+        let winners = vec![(section(17, 26), 0.8), (section(1, 16), 0.77)];
+        let packet = build_packet(
+            &corpus,
+            &winners,
+            "how multiple decoders are combined and why decoding runs in reverse order",
+        );
+        let reversed = 15;
+        assert!(
+            packet
+                .results
+                .iter()
+                .any(|r| r.excerpt.start_line <= reversed && reversed <= r.excerpt.end_line),
+            "{:?}",
+            packet
+                .results
+                .iter()
+                .map(|r| (r.excerpt.start_line, r.excerpt.end_line))
+                .collect::<Vec<_>>()
+        );
+        for result in &packet.results {
+            let excerpt = &result.excerpt;
+            assert_eq!(
+                excerpt.text,
+                lines[excerpt.start_line - 1..excerpt.end_line].join("\n")
+            );
+        }
     }
     #[test]
     fn long_signatures_include_the_body_and_stop_at_its_end() {
