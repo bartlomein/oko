@@ -268,6 +268,12 @@ def prepare(args):
             isolation = check_pi_isolation(shutil.which('pi'), ROOT, STATE)
         else:
             isolation = check_isolation(ROOT, STATE)
+            if 'pi' in args.clients:
+                # Pi beside the other clients: its own preflight must pass too.
+                from pi import check_isolation as check_pi_isolation
+                pi_isolation = check_pi_isolation(shutil.which('pi'), ROOT, STATE)
+                isolation = {'passed': bool(isolation.get('passed') and pi_isolation.get('passed')),
+                             'clients': isolation, 'pi': pi_isolation}
     clients = {c: shutil.which(c) for c in args.clients}
     if not all(clients.values()):
         raise RuntimeError('Install the selected clients before preparing')
@@ -715,10 +721,10 @@ def main():
     p.add_argument('--clients',help='Comma-separated; default all three, or claude alone for the smoke suite')
     p.add_argument('--resume',type=Path)
     p.add_argument('--oko',type=Path,default=PROJECT/'target/release/oko')
-    p.add_argument('--codex-model',default='gpt-5.6-sol')
-    p.add_argument('--opencode-model',default='openai/gpt-5.6-sol')
-    p.add_argument('--claude-model',default='claude-sonnet-5')
-    p.add_argument('--pi-model',default='openai/gpt-5.6-sol')
+    p.add_argument('--codex-model',default='gpt-6.1-sol')
+    p.add_argument('--opencode-model',default='openai/gpt-6.1-sol')
+    p.add_argument('--claude-model',default='claude-sonnet-5-5')
+    p.add_argument('--pi-model',default='openai/gpt-6.1-sol')
     p.add_argument('--effort',choices=('low','medium','high'),default='low')
     p.add_argument('--timeout',type=int,default=180)
     p.add_argument('--suite', choices=('legacy','branch','smoke','pi'), default='legacy',

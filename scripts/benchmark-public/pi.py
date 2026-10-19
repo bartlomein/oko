@@ -54,13 +54,13 @@ export default function(pi) {
             'command': command[0], 'args': command[1:], 'exposure': 'direct',
             'description': 'Find relevant code by intent and return bounded source excerpts.'}}}))
         args += ['-e', 'builtin:mcp']
-        if task.get('cacheCondition') == 'prefetch':
+        if task.get('cacheCondition') in ('prefetch', 'prefetch-previous'):
             plugin = (root.parents[1] / 'src/pi_prefetch.js').read_text()
             plugin = plugin.replace('__OKO_COMMAND__', json.dumps(command)).replace('__OKO_ENV__', '{}')
             path = agent / 'oko-prefetch.js'
             path.write_text(plugin)
             args += ['-e', str(path)]
-    if task.get('cacheCondition') in ('guided', 'prefetch'):
+    if task.get('cacheCondition') in ('guided', 'prefetch', 'prefetch-previous'):
         args += ['--append-system-prompt', (root.parents[1] / 'src/guidance.md').read_text()]
     return args + [prompt], env
 
