@@ -38,6 +38,7 @@ What setup connects depends on the tool:
 | Claude Code | `claude mcp add-json --scope local` with `alwaysLoad`, stored by Claude Code for you and this project | `CLAUDE.md`, the file it links to inside the project, or `AGENTS.md` when `CLAUDE.md` imports `@AGENTS.md` |
 | OpenCode 1.x | `opencode.json` in the project | `AGENTS.md` |
 | Pi 1.0+ | `.pi/mcp.json` with direct tool exposure | `AGENTS.md`, or `AGENTS.override.md` when present |
+| Cursor 3.x | `.cursor/mcp.json`, plus `.cursor/hooks.json` and `.cursor/cli.json` | `AGENTS.md` |
 
 The guidance is a managed section between `oko:search` markers. Existing
 unrelated settings, comments, and instructions are preserved. Re-running setup
@@ -114,6 +115,29 @@ work on cancellation, timeout, or shutdown. `--no-prefetch` and `--no-hooks`
 remove only setup's own extension. Existing user extensions are preserved.
 A newly created `.pi/mcp.json` and the managed extension are gitignored; an
 existing MCP file is left shared and gets a warning about machine-local paths.
+
+Cursor setup writes `.cursor/mcp.json` (the connection), `.cursor/hooks.json`
+(a `beforeSubmitPrompt` hook running `oko hook cursor-prompt`), the always-applied
+rule `.cursor/rules/oko.mdc`, and `.cursor/cli.json` (a permission allowing
+`Mcp(oko:search)`, without which the Cursor CLI's print mode rejects every Oko
+call). For Cursor the prompt hook's answer is capped at 4,000 characters, and
+its header and the rule tell the model to answer from the excerpts when they
+suffice and to read or grep the files itself for anything else: Cursor's
+default model (Grok High) re-checks a long attached answer at length, and each
+call to an MCP tool costs Cursor a schema lookup and a round, while its own grep
+and reads are fast. The Cursor app gives the hook's
+`additional_context` to the model before its first turn; Cursor's documentation
+lists only `continue` and `user_message` for this hook, so this rests on the
+app's behaviour as tested with Cursor 3.25. The hook answers from its own Oko
+process over the on-disk index cache, waits at most 15 seconds, and never
+blocks a prompt. The Cursor CLI does not run this hook. **Cursor turns new
+project MCP servers off:** turn Oko on once per project under Customize > MCPs >
+oko. Until then the prompt hook still works, but the agent cannot call Oko's
+search itself. Other servers, hooks and permissions in these files are kept;
+`--no-prefetch` and `--no-hooks` remove only setup's own hook and rule; a rule
+of the user's own named `oko.mdc` is never overwritten. A newly created
+`.cursor/mcp.json` or `.cursor/hooks.json` is gitignored; the rule and
+`.cursor/cli.json` name no machine paths and are left shareable.
 
 For local-only setup use `oko setup --no-jev`. Use `--no-instructions` to leave
 agent instruction files untouched, and `--install-dir DIRECTORY` to choose the

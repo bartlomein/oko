@@ -18,6 +18,7 @@ oko setup                     # Codex
 oko setup --client claude     # Claude Code
 oko setup --client opencode   # OpenCode 1.x
 oko setup --client pi         # Pi 1.0+
+oko setup --client cursor     # Cursor 3.x
 oko setup --client all
 ```
 
@@ -121,3 +122,36 @@ framework and is not covered by this integration.
 References: [Pi MCP](https://pi.dev/docs/latest/mcp),
 [extensions](https://pi.dev/docs/latest/extensions),
 [Pi 1.0 release](https://github.com/earendil-works/pi/releases/tag/v1.0.0).
+
+## Cursor by hand
+
+Merge this into `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "oko": {
+      "command": "/absolute/path/to/oko",
+      "args": ["mcp", "--root", "/absolute/path/to/project"]
+    }
+  }
+}
+```
+
+Cursor adds new project servers switched off: open **Customize > MCPs**, click
+**oko**, and turn it on. For the prompt hook, add this to `.cursor/hooks.json`:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {"command": "/absolute/path/to/oko hook cursor-prompt --root /absolute/path/to/project", "timeout": 15}
+    ]
+  }
+}
+```
+
+For the Cursor CLI (`agent`), allow Oko's tool in `.cursor/cli.json`:
+`{"permissions": {"allow": ["Mcp(oko:search)"]}}`. The CLI does not run the
+prompt hook.

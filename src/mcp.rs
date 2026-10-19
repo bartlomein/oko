@@ -823,7 +823,7 @@ impl OkoServer {
             found.direct.is_some(),
             // JSON bytes are never fewer than the text's characters.
             oko::prefetch::max_context_chars(client)
-                - oko::prefetch::HEADER.chars().count()
+                - oko::prefetch::header(client).chars().count()
                 - PREFETCH_WRAPPING_CHARS,
             started,
             context_started,
@@ -836,7 +836,7 @@ impl OkoServer {
             .iter()
             .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
             .collect();
-        let context = oko::prefetch::wrap(&answer);
+        let context = oko::prefetch::wrap(client, &answer);
         if context.chars().count() > oko::prefetch::max_context_chars(client) {
             bail!("prefetched answer over the hook limit");
         }
@@ -2170,11 +2170,8 @@ fn failure(message: &str) -> CallToolResult {
 )]
 impl ServerHandler for OkoServer {}
 
-pub fn run(args: &[String], cwd: &Path) -> Result<()> {
-    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
-        println!("{USAGE}");
-        return Ok(());
-    }
+/// The workspace root and local-only flag from `--root DIRECTORY [--no-jev]`.
+fn workspace(args: &[String], cwd: &Path) -> Result<(PathBuf, bool)> {
     let mut root = None;
     let mut no_jev = false;
     let mut args = args.iter();
@@ -2195,15 +2192,30 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         bail!("MCP workspace root must be a directory.");
     }
     oko::jev_log::set_workspace(&root);
-    let server = OkoServer {
-        root,
-        no_jev,
-        gate: Arc::new(Semaphore::new(MAX_CONCURRENT_SEARCHES)),
-        cache: Arc::new(Mutex::new(WorkspaceCache::new())),
-        memory: Arc::new(Mutex::new(Memory::default())),
-        in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        started: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-    };
+    Ok((root, no_jev))
+}
+
+impl OkoServer {
+    fn new(root: PathBuf, no_jev: bool) -> Self {
+        OkoServer {
+            root,
+            no_jev,
+            gate: Arc::new(Semaphore::new(MAX_CONCURRENT_SEARCHES)),
+            cache: Arc::new(Mutex::new(WorkspaceCache::new())),
+            memory: Arc::new(Mutex::new(Memory::default())),
+            in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            started: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+}
+
+pub fn run(args: &[String], cwd: &Path) -> Result<()> {
+    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let (root, no_jev) = workspace(args, cwd)?;
+    let server = OkoServer::new(root, no_jev);
     prewarm(&server);
     // The daily check for a newer release, for the session-start notice;
     // local-only mode makes no network calls.
@@ -2218,6 +2230,39 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             service.waiting().await?;
             Ok(())
         })
+}
+
+/// Cursor's beforeSubmitPrompt hook: the prompt answered before the agent's
+/// first turn, as Cursor hook JSON on stdout. Cursor runs a command for each
+/// prompt rather than calling its MCP server, so the answer comes from a
+/// server of this process's own over the on-disk index cache. The prompt is
+/// never blocked: anything that goes wrong lets it through unanswered.
+pub fn cursor_prompt(args: &[String], cwd: &Path) -> Result<()> {
+    let mut input = String::new();
+    let _ = std::io::Read::read_to_string(
+        &mut std::io::Read::take(std::io::stdin(), 1 << 20),
+        &mut input,
+    );
+    let context = workspace(args, cwd).ok().and_then(|(root, no_jev)| {
+        let event: Value = serde_json::from_str(&input).ok()?;
+        let search = serde_json::from_value(json!({
+            "question": event["prompt"].as_str()?,
+            "prefetch": format!("cursor:{}", event["conversation_id"].as_str().unwrap_or("")),
+        }))
+        .ok()?;
+        let result =
+            serde_json::to_value(OkoServer::new(root, no_jev).prefetch(search, &|| false)).ok()?;
+        let hook: Value = serde_json::from_str(result["content"][0]["text"].as_str()?).ok()?;
+        hook["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .map(str::to_owned)
+    });
+    let mut answer = json!({"continue": true});
+    if let Some(context) = context {
+        answer["additional_context"] = json!(context);
+    }
+    println!("{answer}");
+    Ok(())
 }
 
 #[cfg(test)]

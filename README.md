@@ -72,7 +72,8 @@ oko setup                     # Codex app or CLI
 oko setup --client claude     # Claude Code
 oko setup --client opencode   # OpenCode 1.x
 oko setup --client pi         # Pi 1.0+
-oko setup --client all        # all four
+oko setup --client cursor     # Cursor 3.x
+oko setup --client all        # all five
 ```
 
 Setup installs stable copies, connects the tool to Oko for this project, adds
@@ -88,6 +89,11 @@ The first time you open the project after setup, it shows **Hooks need review**:
 choose **Trust all and continue** (or **Review hooks** to read Oko's first). It asks
 once per project, and again only if a later Oko release changes the hook. If you
 skipped it, `/hooks` brings it back. Claude Code and OpenCode need no extra step.
+
+**In Cursor, turn Oko on once.** Cursor adds a project's MCP servers switched
+off. After setup, open **Customize > MCPs**, click **oko** and turn it on. Oko's
+prompt hook works without this step, but the agent can only call Oko's search
+once it is on.
 Pi requires project trust.
 See [Pi setup and requirements](docs/clients.md#pi-10-by-hand).
 
@@ -213,6 +219,9 @@ own: 63 of the 81 sessions with Oko made no Oko call.
 | Pi | Time | 31.4 s | 15.0 s | **52% faster** | 73% faster |
 | | Tokens | 41,886 | 9,261 | **78% fewer** | 94% fewer |
 | | Tool calls | 6.5 | 1.1 | **83% fewer** | 100% fewer |
+| Cursor | Time | 52.3 s | 49.2 s | **6% less** | 51% faster |
+| | Tokens | 182,900 | 109,500 | **40% fewer** | 67% fewer |
+| | Tool calls | 8.0 | 2.8 | **65% fewer** | 100% fewer |
 
 With Oko, Codex passed 27 of 27, OpenCode 27 and Claude Code 25; without it,
 26, 27 and 26. Three of the four misses are one Astro edit task, where the agent
@@ -240,6 +249,17 @@ combined recorded tokens were 14% lower. At 2 October API list prices, the
 $0.028 for Jev. These are API-equivalent estimates; Pi used ChatGPT OAuth.
 [Pi results and methodology](docs/benchmark-results.md#pi-54-sessions-october-2026)
 and [per-session data](benchmarks/published/0.7.2/agent-sessions/report-pi.json).
+
+Cursor was measured on 19 October: **54 additional sessions** in the Cursor app
+3.25.9 with its default model, Grok 4.7 High, the same nine tasks and three
+repeats. Cursor's own search is local and fast, so Oko saves less time there
+than elsewhere: mean time was 6% lower (52.3 s to 49.2 s), lower on five of the
+nine tasks, while median time was higher (38.7 s to 45.4 s). Tokens, from
+Cursor's usage export, and tool calls fell on all nine tasks. Without Oko 26 of
+27 sessions passed, with it 24: Oko's answer showed the identical copy of the
+helper in the Astro edit task, and Cursor changed that copy in all three
+sessions. [Cursor results and methodology](docs/benchmark-results.md#cursor-54-sessions-october-2026)
+and [per-session data](benchmarks/published/cursor/sessions.json).
 
 ### Against Sense
 

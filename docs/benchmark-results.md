@@ -311,6 +311,67 @@ lot, which is why the table above stays as it was measured.
 
 ## Agent sessions
 
+### Cursor: 54 sessions (October 2026)
+
+Completed 54 timed sessions on 19 October 2026: the same nine tasks across
+Astro, HTTPX and ripgrep, three repetitions, two conditions. Cursor app 3.25.9
+on macOS, agent mode, its default model Grok 4.7 at High effort (Premium plan).
+Oko from commit `7277f8e` on `feat/cursor` (binary SHA-256
+`928069acfa6245308ebb61eeb3445e4ba896b238f7aa37e8b6df9ff367c86fa7`).
+
+| Metric | Cursor | Cursor + Oko |
+|---|---:|---:|
+| Sessions | 27 | 27 |
+| Passed | 26 | 24 |
+| Mean seconds | 52.31 | 49.22 |
+| Median seconds | 38.73 | 45.43 |
+| Tokens per session (Cursor usage export) | 182,940 | 109,520 |
+| Model requests per session | 5.27 | 3.14 |
+| Tool calls per session | 8.04 | 2.78 |
+
+Mean time fell 5.9% and was lower on five of the nine tasks (by up to 51%, on
+httpx-decoder-chain); it was higher on astro-image-probe-authorization,
+astro-forwarded-empty, ripgrep-capture-expansion and ripgrep-printed-bytes, and
+median time rose. Tokens fell 40.1% and tool calls 65.4%, both on all nine tasks.
+Cursor's built-in search runs locally and in parallel, so the rounds Oko saves
+are cheaper in Cursor than in Codex or Claude Code; and at High effort Grok
+spends a long reasoning step on a supplied answer. At Medium effort, on one
+task, the three setups we tried took the same time (about 33 s).
+
+#### Quality
+
+Without Oko 26/27 passed; with Oko 24/27. Every miss is the Astro edit task,
+astro-forwarded-empty (2/3 without Oko, 0/3 with it). The repository has an
+identical copy of the helper the task names, in
+`packages/astro/src/core/app/validate-headers.ts`; Oko's answer showed that
+copy first, and Cursor changed it, alone or together with the right one, in all
+three sessions with Oko, and in one without. The checker fails any change
+outside the requested function. Claude Code with Oko misses the same task the
+same way in the run below.
+
+#### Method
+
+`scripts/benchmark-public/cursor_bench.py` drives the Cursor app itself through
+its debugging port (`scripts/ide-harness/cursor_session.mjs`), with the public
+runner's prompts and graders. Each condition has its own checkout per
+repository, made from the frozen archives and reset with git before every
+session; Cursor is restarted on the session's project before each session,
+outside the timed part, because it loads a project's MCP servers only for the
+folder it starts on. With Oko, the checkout is what `oko setup --client cursor`
+writes (connection, prompt hook, rule, Cursor CLI permission), Oko's server is
+turned on under Customize > MCPs, Oko's index is prebuilt, and the prompt's line
+about tools says Oko's answer may already be in context; without Oko it says to
+use native tools only. Time runs from sending the prompt to the end of the turn
+in Cursor's transcript; tool calls are counted from that transcript. Tokens come
+from Cursor's usage export, one row per model request to the minute, matched to
+sessions by time overlap (a minute two sessions share is split by overlap); all
+7.9 million exported tokens were matched. Cursor counts cached input in these
+tokens; Jev's tokens are not included. All attempts are kept.
+
+Earlier Cursor runs that shaped this setup (other answer sizes and wordings, a
+rule asking for Oko's search, a pointer-only answer, Medium effort) are not in
+these numbers. [Per-session data](../benchmarks/published/cursor/sessions.json).
+
 ### Pi: 54 sessions (October 2026)
 
 Completed 54 timed sessions: nine tasks across Astro, HTTPX and ripgrep, three

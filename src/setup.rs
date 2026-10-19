@@ -1,4 +1,4 @@
-//! Project-scoped setup for Codex, Claude Code, OpenCode and Pi. Never writes
+//! Project-scoped setup for Codex, Claude Code, OpenCode, Pi and Cursor. Never writes
 //! credentials to configuration files.
 use anyhow::{Context, Result, bail};
 use rmcp::ServiceExt;
@@ -11,7 +11,7 @@ use std::{
 };
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|pi|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY] [--quiet]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\n  pi        updates .pi/mcp.json (Pi 1.0+)\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded.\nFor all four it adds a prompt hook through which Oko answers a code question\nbefore the agent's first turn (--no-prefetch skips that one; --no-hooks skips\nevery hook).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory; `oko upgrade`\nrefreshes every project set up with the copy there.\n--quiet prints only errors.";
+const USAGE: &str = "Usage: oko setup [--client codex|claude|opencode|pi|cursor|all] [--root DIRECTORY]\n                 [--no-jev] [--no-instructions] [--no-hooks] [--no-prefetch]\n                 [--install-dir DIRECTORY] [--quiet]\n\nSet up Oko in the chosen project (default: current directory) for one or more\ncoding tools (default: codex; separate several with commas, or use all).\nInstalls a stable copy, checks MCP, then connects each tool:\n  codex     updates .codex/config.toml\n  claude    runs `claude mcp add-json --scope local` (needs the claude command)\n  opencode  updates opencode.json\n  pi        updates .pi/mcp.json (Pi 1.0+)\n  cursor    updates .cursor/mcp.json, .cursor/hooks.json and .cursor/cli.json\nAdds a managed search section to the instructions each tool reads (AGENTS.md,\nand CLAUDE.md for Claude Code) unless --no-instructions is set.\nFor Claude Code it also adds hooks and a permission rule in\n.claude/settings.local.json so the agent and its subagents know Oko is loaded.\nFor all five it adds a prompt hook through which Oko answers a code question\nbefore the agent's first turn (--no-prefetch skips that one; --no-hooks skips\nevery hook).\n--no-jev sets up local-only search without credentials or network calls.\n--install-dir overrides the per-user application bin directory; `oko upgrade`\nrefreshes every project set up with the copy there.\n--quiet prints only errors.";
 const MANAGED: &str = "# Managed by oko setup";
 const START: &str = "<!-- oko:search:start -->";
 const END: &str = "<!-- oko:search:end -->";
@@ -32,9 +32,16 @@ enum Client {
     Claude,
     OpenCode,
     Pi,
+    Cursor,
 }
 impl Client {
-    const ALL: [Client; 4] = [Client::Codex, Client::Claude, Client::OpenCode, Client::Pi];
+    const ALL: [Client; 5] = [
+        Client::Codex,
+        Client::Claude,
+        Client::OpenCode,
+        Client::Pi,
+        Client::Cursor,
+    ];
     /// The `--client` name.
     fn arg(self) -> &'static str {
         match self {
@@ -42,6 +49,7 @@ impl Client {
             Client::Claude => "claude",
             Client::OpenCode => "opencode",
             Client::Pi => "pi",
+            Client::Cursor => "cursor",
         }
     }
     fn name(self) -> &'static str {
@@ -50,6 +58,7 @@ impl Client {
             Client::Claude => "Claude Code",
             Client::OpenCode => "OpenCode",
             Client::Pi => "Pi",
+            Client::Cursor => "Cursor",
         }
     }
 }
@@ -61,6 +70,7 @@ fn clients(list: &str) -> Result<Vec<Client>> {
             "claude" => &Client::ALL[1..2],
             "opencode" => &Client::ALL[2..3],
             "pi" => &Client::ALL[3..4],
+            "cursor" => &Client::ALL[4..5],
             "all" => &Client::ALL[..],
             _ => bail!("Unknown --client {name:?}.\n{USAGE}"),
         };
@@ -629,6 +639,170 @@ fn pi_plugin(exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<String
             }))?,
         ))
 }
+/// Cursor's rule beside the prompt hook. Cursor's model double-checks an
+/// attached answer at length and, asked to search with Oko, spends a round
+/// fetching the tool's schema first; on Cursor's default model (Grok High)
+/// follow-ups with its own grep and reads were faster. Always applied.
+const CURSOR_RULE_PATH: &str = ".cursor/rules/oko.mdc";
+const CURSOR_RULE_MARKER: &str = "<!-- Managed by oko setup";
+const CURSOR_RULE: &str = "---
+description: Oko code search
+alwaysApply: true
+---
+<!-- Managed by oko setup: `oko setup --client cursor --no-prefetch` removes this file. -->
+When an \"Oko answer for this prompt\" block is in your context, it is current repository text with exact
+line numbers. If it answers the question, answer from it directly, without re-reading or re-checking
+those files. For anything it does not show, use your own grep and file reads.
+";
+/// Cursor's MCP connection. The app and the Cursor CLI both read
+/// `.cursor/mcp.json`; other servers in it are kept.
+fn cursor_config(
+    original: &str,
+    exe: &Path,
+    root: &Path,
+    rg: &Path,
+    offline: bool,
+) -> Result<String> {
+    use serde_json::{Map, Value, json};
+    let before: Value = if original.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(original)
+            .context(".cursor/mcp.json must be valid JSON; nothing was overwritten")?
+    };
+    let mut doc = before.clone();
+    let servers = doc
+        .as_object_mut()
+        .context(".cursor/mcp.json must hold an object")?
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Cursor mcpServers must be an object")?;
+    if let Some(existing) = servers.get("oko")
+        && !existing
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| {
+                launches_oko(
+                    command,
+                    existing
+                        .get("args")
+                        .and_then(Value::as_array)
+                        .and_then(|args| args.first())
+                        .and_then(Value::as_str),
+                )
+            })
+    {
+        bail!(
+            "An Oko MCP entry already exists in .cursor/mcp.json and was not created by setup. Rename or remove it before continuing."
+        );
+    }
+    let server = servers
+        .entry("oko")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .context("Cursor Oko entry must be an object")?;
+    server.insert(
+        "command".into(),
+        json!(exe.to_str().context("Executable path must be UTF-8")?),
+    );
+    server.insert("args".into(), json!(server_args(root, offline)?));
+    server
+        .entry("env")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Cursor Oko env must be an object")?
+        .insert(
+            "OKO_RIPGREP".into(),
+            json!(rg.to_str().context("ripgrep path must be UTF-8")?),
+        );
+    if doc == before && !original.trim().is_empty() {
+        return Ok(original.into());
+    }
+    Ok(serde_json::to_string_pretty(&doc)? + "\n")
+}
+/// Cursor's prompt hook. The app gives `additional_context` from a
+/// beforeSubmitPrompt hook to the model before its first turn, though Cursor's
+/// documentation lists only `continue` and `user_message`; the Cursor CLI does
+/// not run this hook. Other hooks are kept; only setup's own is replaced.
+/// `None` when there is nothing to write.
+fn cursor_hooks(
+    original: &str,
+    exe: &Path,
+    root: &Path,
+    offline: bool,
+    prefetch: bool,
+) -> Result<Option<String>> {
+    use serde_json::{Value, json};
+    if original.trim().is_empty() && !prefetch {
+        return Ok(None);
+    }
+    let before: Value = if original.trim().is_empty() {
+        json!({"version": 1})
+    } else {
+        serde_json::from_str(original)
+            .context(".cursor/hooks.json must be valid JSON; nothing was overwritten")?
+    };
+    let mut doc = before.clone();
+    let hooks = doc
+        .as_object_mut()
+        .context(".cursor/hooks.json must hold an object")?
+        .entry("hooks")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Cursor hooks must be an object")?;
+    let entries = hooks
+        .entry("beforeSubmitPrompt")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .context("Cursor beforeSubmitPrompt hooks must be a list")?;
+    entries.retain(|entry| !runs_oko_hook(entry["command"].as_str().unwrap_or("")));
+    if prefetch {
+        let mut command = format!(
+            "{} hook cursor-prompt --root {}",
+            shell_word(exe.to_str().context("Executable path must be UTF-8")?),
+            shell_word(root.to_str().context("Project path must be UTF-8")?)
+        );
+        if offline {
+            command.push_str(" --no-jev");
+        }
+        entries.push(json!({"command": command, "timeout": 15}));
+    }
+    if entries.is_empty() {
+        hooks.remove("beforeSubmitPrompt");
+    }
+    if doc == before {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::to_string_pretty(&doc)? + "\n"))
+}
+/// The Cursor CLI asks before each MCP call, and in print mode an unanswered
+/// request is a rejection; this rule in `.cursor/cli.json` allows Oko's search.
+fn cursor_permissions(original: &str) -> Result<String> {
+    use serde_json::{Value, json};
+    let mut doc: Value = if original.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(original)
+            .context(".cursor/cli.json must be valid JSON; nothing was overwritten")?
+    };
+    let allow = doc
+        .as_object_mut()
+        .context(".cursor/cli.json must hold an object")?
+        .entry("permissions")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Cursor permissions must be an object")?
+        .entry("allow")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .context("Cursor permissions.allow must be a list")?;
+    if allow.iter().any(|rule| rule == "Mcp(oko:search)") {
+        return Ok(original.into());
+    }
+    allow.push(json!("Mcp(oko:search)"));
+    Ok(serde_json::to_string_pretty(&doc)? + "\n")
+}
 /// Claude Code keeps per-project, per-user connections in its own settings
 /// file; its command line is the supported way to change them.
 struct Claude {
@@ -1042,6 +1216,12 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     {
         bail!("Project .codex must be a real directory");
     }
+    if wants(Client::Cursor)
+        && let Ok(meta) = fs::symlink_metadata(options.root.join(".cursor"))
+        && (meta.file_type().is_symlink() || !meta.is_dir())
+    {
+        bail!("Project .cursor must be a real directory");
+    }
     if wants(Client::Pi) {
         for relative in [".pi", ".pi/extensions"] {
             if let Ok(meta) = fs::symlink_metadata(options.root.join(relative))
@@ -1176,6 +1356,83 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
             stale_plugins.push(plugin);
         }
     }
+    let mut shared_cursor = false;
+    if wants(Client::Cursor) {
+        let path = options.root.join(".cursor/mcp.json");
+        let before = text(&path)?;
+        let after = cursor_config(
+            before.as_deref().unwrap_or(""),
+            &executable,
+            &options.root,
+            &rg,
+            options.offline,
+        )?;
+        if before.is_none() {
+            ignored.push((
+                "/.cursor/mcp.json",
+                "# Oko: machine-local Cursor connection",
+            ));
+        } else {
+            shared_cursor = before.as_deref() != Some(&after);
+        }
+        edits.push(Edit {
+            path,
+            before,
+            after,
+        });
+        let path = options.root.join(".cursor/hooks.json");
+        let before = text(&path)?;
+        if let Some(after) = cursor_hooks(
+            before.as_deref().unwrap_or(""),
+            &executable,
+            &options.root,
+            options.offline,
+            options.hooks && options.prefetch,
+        )? {
+            if before.is_none() {
+                ignored.push((
+                    "/.cursor/hooks.json",
+                    "# Oko: machine-local prompt hook for Cursor",
+                ));
+            } else {
+                shared_cursor = true;
+            }
+            edits.push(Edit {
+                path,
+                before,
+                after,
+            });
+        }
+        let rule = options.root.join(CURSOR_RULE_PATH);
+        let existing = text(&rule)?;
+        let managed = existing
+            .as_deref()
+            .is_some_and(|text| text.contains(CURSOR_RULE_MARKER));
+        if options.hooks && options.prefetch && options.instructions {
+            if existing.is_some() && !managed {
+                bail!(
+                    "{CURSOR_RULE_PATH} exists and was not written by setup; rename it or run setup with --no-prefetch."
+                );
+            }
+            // Like the guidance, it names no path on this machine and can be shared.
+            edits.push(Edit {
+                path: rule,
+                before: existing,
+                after: CURSOR_RULE.into(),
+            });
+        } else if managed {
+            stale_plugins.push(rule);
+        }
+        // The rule names no path on this machine, so the file can be shared.
+        let path = options.root.join(".cursor/cli.json");
+        let before = text(&path)?;
+        let after = cursor_permissions(before.as_deref().unwrap_or(""))?;
+        edits.push(Edit {
+            path,
+            before,
+            after,
+        });
+    }
     let claude = if wants(Client::Claude) {
         let claude = Claude::find(&options.root)?;
         let replace = claude.existing()?;
@@ -1202,7 +1459,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
         ));
     }
     if options.instructions {
-        // Codex, OpenCode and Pi read AGENTS.md; Claude Code reads CLAUDE.md, which
+        // Codex, OpenCode, Pi and Cursor read AGENTS.md; Claude Code reads CLAUDE.md, which
         // may itself import AGENTS.md.
         let agents = options.root.join("AGENTS.md");
         let mut paths = Vec::new();
@@ -1306,6 +1563,8 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                     "Pi project configuration saved (requires Pi 1.0+). Start Pi, trust the project, and use /mcp to check Oko. Existing sessions need /reload. Built-in MCP must be enabled; legacy MCP adapter extensions can replace it.",
                 Client::OpenCode =>
                     "OpenCode project configuration saved, with Oko's prompt hook in .opencode/plugins/. Start a new session and run `opencode mcp list` to check the connection.",
+                Client::Cursor =>
+                    "Cursor project configuration saved in .cursor/: the MCP connection, Oko's prompt hook with its rule in .cursor/rules/oko.mdc, and a permission that lets the Cursor CLI run Oko's search. Cursor adds project servers switched off: open the project in Cursor, go to Customize > MCPs, click oko and turn it on, then start a new chat.",
             }
         );
     }
@@ -1313,6 +1572,11 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
     if shared_pi {
         println!(
             ".pi/mcp.json already existed, so it was not added to .gitignore; it now holds paths for this machine. Keep that change out of shared commits."
+        );
+    }
+    if shared_cursor {
+        println!(
+            ".cursor/mcp.json or .cursor/hooks.json already existed, so it was not added to .gitignore; it now holds paths for this machine. Keep that change out of shared commits."
         );
     }
     if shared_opencode {

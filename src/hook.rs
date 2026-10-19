@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const USAGE: &str = "Usage: oko hook session-start|subagent-start|pre-tool-use\n\nAnswers one Claude Code hook event read from stdin with JSON on stdout.\nInstalled by `oko setup --client claude`; it never blocks a tool call.";
+const USAGE: &str = "Usage: oko hook session-start|subagent-start|pre-tool-use\n       oko hook cursor-prompt [--root DIRECTORY] [--no-jev]\n\nAnswers one Claude Code hook event, or Cursor's beforeSubmitPrompt, read from\nstdin with JSON on stdout. Installed by `oko setup`; it never blocks a tool\ncall or a prompt.";
 
 // Claude Code treats imperative text from hooks as a possible prompt
 // injection, so these state facts and leave the choice to the agent.

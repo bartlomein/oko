@@ -670,6 +670,9 @@ fn run() -> Result<()> {
         return setup::run(&args[1..], &cwd);
     }
     if args.first().is_some_and(|arg| arg == "hook") {
+        if args.get(1).is_some_and(|arg| arg == "cursor-prompt") {
+            return mcp::cursor_prompt(&args[2..], &cwd);
+        }
         return hook::run(&args[1..]);
     }
     if args.first().is_some_and(|arg| arg == "upgrade") {
