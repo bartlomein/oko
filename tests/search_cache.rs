@@ -655,3 +655,43 @@ fn replacing_a_cached_file_with_an_external_symlink_removes_its_contents() {
     assert!(!paths(updated.snapshot.chunks()).contains(&"src/archive.rs"));
     assert_fresh(&mut fixture.cache(), fixture.root.path());
 }
+
+#[cfg(unix)]
+#[test]
+fn replacing_a_cached_directory_with_an_external_symlink_removes_its_contents() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    let mut cache = fixture.cache();
+    assert_fresh(&mut cache, fixture.root.path());
+    let outside = tempfile::tempdir().unwrap();
+    for entry in fs::read_dir(fixture.root.path().join("src")).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), outside.path().join(entry.file_name())).unwrap();
+    }
+    fs::remove_dir_all(fixture.root.path().join("src")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), fixture.root.path().join("src")).unwrap();
+    let updated = assert_fresh(&mut cache, fixture.root.path());
+    assert!(
+        !paths(updated.snapshot.chunks())
+            .iter()
+            .any(|path| path.starts_with("src/"))
+    );
+}
+
+#[test]
+fn a_skipped_file_is_indexed_once_it_gains_text() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    fixture.write("src/later.ts", "   \n");
+    let mut cache = fixture.cache();
+    let first = assert_fresh(&mut cache, fixture.root.path());
+    assert!(!paths(first.snapshot.chunks()).contains(&"src/later.ts"));
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    assert_fresh(&mut cache, fixture.root.path());
+    fixture.write(
+        "src/later.ts",
+        "export function settleLater() { return 1; }\n",
+    );
+    let updated = assert_fresh(&mut cache, fixture.root.path());
+    assert!(paths(updated.snapshot.chunks()).contains(&"src/later.ts"));
+}
