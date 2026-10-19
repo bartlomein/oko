@@ -80,6 +80,10 @@ pub struct ContextMatch {
     /// than one. Set after building, from the winner that produced it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// The parts of a split prompt this is the best match for, by index: the
+    /// last to go when the answer must shrink.
+    #[serde(skip)]
+    pub parts: Vec<usize>,
     /// The focused window that replaces a lower-ranked complete definition
     /// before any match is dropped to fit the budget.
     #[serde(skip)]
@@ -1331,6 +1335,21 @@ impl SourceExcerpt {
 impl ContextPacket {
     /// Label each result with the questions it answers, from `tags_of` the
     /// excerpt (several when two questions led to the same code).
+    /// Records which parts of a split prompt each match answers.
+    pub fn mark_parts(&mut self, parts_of: impl Fn(&SourceExcerpt) -> Vec<usize>) {
+        for result in &mut self.results {
+            result.parts = parts_of(&result.excerpt);
+        }
+    }
+    /// Whether the match at `index` is the only one answering some part.
+    fn answers_alone(&self, index: usize) -> bool {
+        self.results[index].parts.iter().any(|part| {
+            self.results
+                .iter()
+                .enumerate()
+                .all(|(other, result)| other == index || !result.parts.contains(part))
+        })
+    }
     pub fn tag_results(&mut self, tags_of: impl Fn(&SourceExcerpt) -> Vec<String>) {
         for result in &mut self.results {
             let mut tags = tags_of(&result.excerpt);
@@ -1515,7 +1534,27 @@ impl ContextPacket {
                 result.excerpt = result.compact.take().expect("checked above");
                 self.prune_related();
             } else if self.results.len() > 1 {
-                self.results.pop();
+                // A part's best match stays while another can go, or the
+                // longest can give up lines.
+                let spare = (1..self.results.len())
+                    .rev()
+                    .find(|&index| !self.answers_alone(index));
+                match spare {
+                    Some(index) => {
+                        self.results.remove(index);
+                    }
+                    None => {
+                        let longest = self
+                            .results
+                            .iter_mut()
+                            .max_by_key(|result| result.excerpt.text.len())
+                            .expect("several results");
+                        if longest.excerpt.shrink() {
+                            continue;
+                        }
+                        self.results.pop();
+                    }
+                }
                 self.omitted = true;
                 self.prune_related();
             } else if self.related.pop().is_some() {
@@ -1778,6 +1817,7 @@ fn build_packet_limited(
                 lower_confidence,
                 exact_name,
                 tag: None,
+                parts: Vec::new(),
                 compact,
                 seen: false,
             });
@@ -1844,6 +1884,7 @@ fn build_packet_limited(
             lower_confidence,
             exact_name,
             tag: None,
+            parts: Vec::new(),
             compact,
             seen: false,
         });
@@ -2154,6 +2195,40 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+    #[test]
+    fn fitting_keeps_each_parts_best_match_and_drops_another_first() {
+        let file = |name: &str| {
+            let source = format!(
+                "fn {name}() {{\n{}\n}}\n",
+                (0..30)
+                    .map(|n| format!("    step_{name}_{n}();"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            chunk_text(&format!("{name}.rs"), &source)
+        };
+        let corpus: Vec<Chunk> = ["alpha", "beta", "gamma"]
+            .iter()
+            .flat_map(|name| file(name))
+            .collect();
+        let winners: Vec<(Chunk, f64)> = corpus.iter().map(|chunk| (chunk.clone(), 0.9)).collect();
+        let mut packet = build_packet(&corpus, &winners, "alpha beta gamma steps");
+        assert_eq!(packet.results.len(), 3);
+        // `gamma`, last, is a part's best match; `beta` is no part's best.
+        packet.mark_parts(|excerpt| match excerpt.path.as_str() {
+            "gamma.rs" => vec![2],
+            "alpha.rs" => vec![1],
+            _ => Vec::new(),
+        });
+        let two = serde_json::to_vec(&packet).unwrap().len() * 3 / 4;
+        packet.fit_to_budget(two);
+        let kept: Vec<&str> = packet
+            .results
+            .iter()
+            .map(|r| r.excerpt.path.as_str())
+            .collect();
+        assert_eq!(kept, ["alpha.rs", "gamma.rs"]);
     }
     #[test]
     fn an_accepted_match_overlapping_a_shown_excerpt_widens_it() {

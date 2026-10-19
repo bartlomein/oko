@@ -740,11 +740,21 @@ impl OkoServer {
             prefetch: None,
         };
         let question = read.question.as_str();
+        // A prompt that asks for several things is judged part by part as
+        // well as whole: against the whole prompt, one part's code scores
+        // below code that matches more of its words. The whole leads, since
+        // its shortlist finds what the parts alone miss.
+        let parts = oko::split::parts(question);
+        let questions: Vec<String> = if parts.is_empty() {
+            Vec::new()
+        } else {
+            std::iter::once(question.to_owned()).chain(parts).collect()
+        };
         let scans = oko::usages::Scans::new(corpus);
         let ask = Ask {
             input: &input,
             question,
-            questions: &[],
+            questions: &questions,
             symbols: &[],
             scope: "the workspace",
             directory: &self.root,
@@ -756,8 +766,25 @@ impl OkoServer {
             lean: true,
             names: Some(&names),
         };
-        let route = Route::of(&input, &[], &[], question);
-        let mut found = self.single(&ask, route)?;
+        let mut found = if questions.is_empty() {
+            self.single(&ask, Route::of(&input, &[], &[], question))?
+        } else {
+            let mut found = self.batch(&ask)?;
+            // The agent never saw the parts, so their tags mean nothing to it.
+            found
+                .notes
+                .retain(|note| !note.ends_with(": no relevant code found."));
+            for note in &mut found.notes {
+                if let Some((tag, rest)) = note.split_once(": ")
+                    && tag
+                        .strip_prefix('Q')
+                        .is_some_and(|n| n.parse::<usize>().is_ok())
+                {
+                    *note = rest.to_owned();
+                }
+            }
+            found
+        };
         // Keyword order is not a judgement: without Jev's, only the
         // definitions the prompt names are shown.
         let judged = !self.no_jev && found.lexical_fallback.is_none();
@@ -801,11 +828,11 @@ impl OkoServer {
             "retrieval": found.retrieval, "floor": found.floor, "focused": found.focused,
             "timings": {"cacheWaitMs": cache_wait_ms, "scanMs": workspace.timings.scan_ms,
                 "shortlistMs": found.shortlist_ms, "cache": workspace.timings}});
-        let (max_results, _) = budget(0, found.slim_single, found.pins.len());
+        let (max_results, _) = budget(questions.len(), found.slim_single, found.pins.len());
         if found.slim_single {
             found.winners.truncate(1);
         }
-        let packet = oko::context::build_packet_for_questions(
+        let mut packet = oko::context::build_packet_for_questions(
             corpus,
             &found.winners,
             &found.pins,
@@ -814,6 +841,25 @@ impl OkoServer {
             snapshot.navigation(),
             max_results,
         );
+        if !found.tagged.is_empty() {
+            // Winners come in rounds, so each tag's first is its question's best.
+            let mut best: Vec<&(oko::search::Chunk, String)> = Vec::new();
+            for tagged in &found.tagged {
+                if !best.iter().any(|(_, tag)| *tag == tagged.1) {
+                    best.push(tagged);
+                }
+            }
+            packet.mark_parts(|excerpt| {
+                best.iter()
+                    .filter(|(chunk, _)| {
+                        chunk.path == excerpt.path
+                            && chunk.start_line <= excerpt.end_line
+                            && excerpt.start_line <= chunk.end_line
+                    })
+                    .filter_map(|(_, tag)| tag.strip_prefix('Q')?.parse().ok())
+                    .collect()
+            });
+        }
         let explicit = found.direct.is_some() || flight.overlapping();
         let result = packet_result(
             metadata,
@@ -1238,6 +1284,7 @@ impl OkoServer {
         let force_listing = matches!(ask.input.mode, Some(Mode::Usages | Mode::Enumerate));
         let corpus = snapshot.chunks();
         let no_jev = self.no_jev;
+        let lean = ask.lean;
         let outcomes: Vec<Result<Outcome>> = std::thread::scope(|scope| {
             let handles: Vec<_> = questions
                 .iter()
@@ -1263,15 +1310,20 @@ impl OkoServer {
                             } else {
                                 super::Reranker::Jev {
                                     key,
-                                    patience: Some(jev_patience()),
-                                    recover: true,
+                                    patience: Some(if lean {
+                                        PREFETCH_PATIENCE
+                                    } else {
+                                        jev_patience()
+                                    }),
+                                    recover: !lean,
                                 }
                             },
                             intent,
                             || {
                                 // Side requests cost two thirds of a search's
-                                // tokens; only the leading question pays them.
-                                Ok(if primary {
+                                // tokens; only the leading question pays them,
+                                // and a prompt's answer never does.
+                                Ok(if primary && !lean {
                                     super::further_candidates(
                                         &snapshot, &shortlist, question, intent,
                                     )
@@ -1301,7 +1353,17 @@ impl OkoServer {
         });
         let mut many = Many::default();
         let mut per_question = Vec::new();
-        let outcomes: Vec<Outcome> = outcomes.into_iter().collect::<Result<_>>()?;
+        let mut outcomes: Vec<Outcome> = outcomes.into_iter().collect::<Result<_>>()?;
+        if ask.lean {
+            // A prompt's answer stands on its whole question: a part whose
+            // judge was too slow adds nothing rather than voiding the rest.
+            for outcome in outcomes.iter_mut().skip(1) {
+                if outcome.stats.lexical_fallback.take().is_some() {
+                    outcome.results.clear();
+                    outcome.runners_up.clear();
+                }
+            }
+        }
         // A question that asks who uses a name, or what depends on it, is
         // answered by a listing. Decided first: a question whose listing spans
         // many files keeps one excerpt and no pinned definition, since the
