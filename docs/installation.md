@@ -91,7 +91,7 @@ A private repository requires GitHub access; public cloning will work after the
 repository is made public.
 
 Next, run `oko auth login` to save your TypeSafe key, or keep using `--no-jev`.
-Return to [connect your coding tool](../README.md#connect-your-coding-tool).
+Return to the [quick start](../README.md#quick-start).
 
 ## Upgrade
 
@@ -227,7 +227,7 @@ search guidance: `oko setup` for Codex, `oko setup --client claude` for Claude
 Code, `oko setup --client opencode` for OpenCode, or `--client all`. If you
 connected Claude Code or OpenCode by hand, run setup once: it takes over the
 existing Oko connection, leaves your other settings alone, and adds the guidance
-that makes sessions faster in our [benchmark](../README.md#benchmarks). Nothing
+that makes sessions faster in our [benchmark](../README.md#results). Nothing
 else changes for existing users.
 
 ### Upgrading to 0.3.0

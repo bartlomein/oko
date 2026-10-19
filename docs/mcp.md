@@ -11,6 +11,7 @@ oko setup                          # Codex (the default)
 oko setup --client claude          # Claude Code
 oko setup --client opencode        # OpenCode 1.x
 oko setup --client pi              # Pi 1.0+
+oko setup --client cursor          # Cursor 3.x
 oko setup --client claude,opencode # several, or: --client all
 # Or select a project explicitly:
 oko setup --root /absolute/path/to/project
@@ -474,7 +475,7 @@ Searches rescan current files on each call and cannot select a directory outside
 the configured root. File discovery ignores user ripgrep configuration and skips
 files resolving outside the searched directory. This is an application boundary,
 not an operating-system sandbox. Existing ignored-file and file-size rules apply.
-Normal/deep searches send selected snippets to TypeSafe, as described in the [privacy overview](../README.md#privacy).
+Normal/deep searches send selected snippets to TypeSafe, as described in [privacy](privacy.md).
 
 The server advertises when to use Oko, but connecting it does not force the agent
 to choose it over native search. Codex project setup is available above. Release

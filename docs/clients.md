@@ -2,7 +2,7 @@
 
 [← Back to Oko](../README.md)
 
-[Install Oko](../README.md#install) first and run `oko auth login`.
+[Install Oko](../README.md#quick-start) first and run `oko auth login`.
 Use absolute paths for both the executable and project so the connection also
 works when a GUI app has a different PATH. Examples below use placeholders;
 replace them with your actual paths. `command -v oko` shows your installed binary.
@@ -79,7 +79,7 @@ it does not validate your TypeSafe key or guarantee the agent will choose Oko.
 
 Setup adds Oko’s guidance to your project’s agent instructions. After a manual
 connection, add the contents of [`src/guidance.md`](../src/guidance.md) yourself
-(`AGENTS.md` for Codex and OpenCode, `CLAUDE.md` for Claude Code). It says when to use Oko, that excerpts
+(`AGENTS.md` for Codex, OpenCode, Pi and Cursor, `CLAUDE.md` for Claude Code). It says when to use Oko, that excerpts
 are exact file contents, and when to stop searching, with good and bad examples;
 project instructions are where agents look for this, not tool descriptions.
 
