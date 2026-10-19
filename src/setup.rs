@@ -639,6 +639,21 @@ fn pi_plugin(exe: &Path, root: &Path, rg: &Path, offline: bool) -> Result<String
             }))?,
         ))
 }
+/// Cursor's rule beside the prompt hook. Cursor's model double-checks an
+/// attached answer at length and, asked to search with Oko, spends a round
+/// fetching the tool's schema first; on Cursor's default model (Grok High)
+/// follow-ups with its own grep and reads were faster. Always applied.
+const CURSOR_RULE_PATH: &str = ".cursor/rules/oko.mdc";
+const CURSOR_RULE_MARKER: &str = "<!-- Managed by oko setup";
+const CURSOR_RULE: &str = "---
+description: Oko code search
+alwaysApply: true
+---
+<!-- Managed by oko setup: `oko setup --client cursor --no-prefetch` removes this file. -->
+When an \"Oko answer for this prompt\" block is in your context, it is current repository text with exact
+line numbers. If it answers the question, answer from it directly, without re-reading or re-checking
+those files. For anything it does not show, use your own grep and file reads.
+";
 /// Cursor's MCP connection. The app and the Cursor CLI both read
 /// `.cursor/mcp.json`; other servers in it are kept.
 fn cursor_config(
@@ -1388,6 +1403,26 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                 after,
             });
         }
+        let rule = options.root.join(CURSOR_RULE_PATH);
+        let existing = text(&rule)?;
+        let managed = existing
+            .as_deref()
+            .is_some_and(|text| text.contains(CURSOR_RULE_MARKER));
+        if options.hooks && options.prefetch && options.instructions {
+            if existing.is_some() && !managed {
+                bail!(
+                    "{CURSOR_RULE_PATH} exists and was not written by setup; rename it or run setup with --no-prefetch."
+                );
+            }
+            // Like the guidance, it names no path on this machine and can be shared.
+            edits.push(Edit {
+                path: rule,
+                before: existing,
+                after: CURSOR_RULE.into(),
+            });
+        } else if managed {
+            stale_plugins.push(rule);
+        }
         // The rule names no path on this machine, so the file can be shared.
         let path = options.root.join(".cursor/cli.json");
         let before = text(&path)?;
@@ -1529,7 +1564,7 @@ pub fn run(args: &[String], cwd: &Path) -> Result<()> {
                 Client::OpenCode =>
                     "OpenCode project configuration saved, with Oko's prompt hook in .opencode/plugins/. Start a new session and run `opencode mcp list` to check the connection.",
                 Client::Cursor =>
-                    "Cursor project configuration saved in .cursor/: the MCP connection, Oko's prompt hook, and a rule that lets the Cursor CLI run Oko's search. Cursor adds project servers switched off: open the project in Cursor, go to Customize > MCPs, click oko and turn it on, then start a new chat.",
+                    "Cursor project configuration saved in .cursor/: the MCP connection, Oko's prompt hook with its rule in .cursor/rules/oko.mdc, and a permission that lets the Cursor CLI run Oko's search. Cursor adds project servers switched off: open the project in Cursor, go to Customize > MCPs, click oko and turn it on, then start a new chat.",
             }
         );
     }

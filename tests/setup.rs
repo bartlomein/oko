@@ -1284,6 +1284,15 @@ fn cursor_setup_connects_hooks_and_permits_oko_beside_the_users_own() {
             .unwrap()
             .contains("oko:search:start")
     );
+    let rule = root.join(".cursor/rules/oko.mdc");
+    let text = fs::read_to_string(&rule).unwrap();
+    assert!(
+        text.starts_with("---\ndescription: Oko code search\nalwaysApply: true\n---\n"),
+        "{text}"
+    );
+    assert!(text.contains("use your own grep and file reads"));
+    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(!ignore.contains("oko.mdc"), "the rule is shareable");
 
     // The installed hook answers a code question and lets a chore through.
     let answered = run_cursor_hook(
@@ -1338,6 +1347,12 @@ fn cursor_setup_connects_hooks_and_permits_oko_beside_the_users_own() {
         serde_json::json!([{"command": "./mine.sh"}])
     );
     assert_eq!(hooks["hooks"]["stop"][0]["command"], "./done.sh");
+    assert!(!rule.exists(), "setup's rule goes with the hook");
+
+    // A rule of the user's own by that name is never overwritten.
+    fs::write(&rule, "my rule\n").unwrap();
+    assert!(!setup(executable(), &root, &install, &args).status.success());
+    assert_eq!(fs::read_to_string(&rule).unwrap(), "my rule\n");
 }
 
 #[test]

@@ -823,7 +823,7 @@ impl OkoServer {
             found.direct.is_some(),
             // JSON bytes are never fewer than the text's characters.
             oko::prefetch::max_context_chars(client)
-                - oko::prefetch::HEADER.chars().count()
+                - oko::prefetch::header(client).chars().count()
                 - PREFETCH_WRAPPING_CHARS,
             started,
             context_started,
@@ -836,7 +836,7 @@ impl OkoServer {
             .iter()
             .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
             .collect();
-        let context = oko::prefetch::wrap(&answer);
+        let context = oko::prefetch::wrap(client, &answer);
         if context.chars().count() > oko::prefetch::max_context_chars(client) {
             bail!("prefetched answer over the hook limit");
         }
