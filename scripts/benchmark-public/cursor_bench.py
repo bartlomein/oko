@@ -49,6 +49,60 @@ SESSION = PROJECT / 'scripts/ide-harness/cursor_session.mjs'
 APP = Path('/Applications/Cursor.app')
 PORT = 9333
 CONDITIONS = ('native', 'oko')
+# `tuned`: an experiment for Cursor's model, which re-checks attached context at
+# length. A build given with --tuned-oko (the hook's header and size for
+# Cursor), a .cursor/rules file, and a prompt line that does not ask for a
+# search when the answer is already there.
+TUNED_RULE = """---
+description: Oko code search
+alwaysApply: true
+---
+When an "Oko answer for this prompt" block is in your context, it is current repository text with exact
+line numbers. If it answers the question, answer from it directly, without re-reading or re-checking
+those files. Use the oko `search` tool for anything it does not show, before grep or file reads.
+"""
+# `tuned2`: tuned, plus a line of code locations above the answer (in the
+# build given with --tuned2-oko) and a rule that Oko's search can be called
+# without first fetching its schema, a round Cursor's model otherwise spends.
+TUNED2_RULE = TUNED_RULE + """Oko's tool is `search` on the oko MCP server. Call it directly with arguments
+{"question": "<what to find>"} (optionally "symbols": "NameOne, NameTwo"); it needs no schema lookup first.
+"""
+# `pointer` and `lean`: Oko's answer without the costly follow-ups. Both use
+# the build given with --exp-oko and a neutral prompt line (no "search with
+# Oko first"). `pointer` gives only where the code is (OKO_CURSOR_PREFETCH,
+# set in Cursor's environment) for Cursor's own fast reads; `lean` gives the
+# excerpts. Either rule sends follow-ups to Cursor's own grep and reads, not
+# to Oko's MCP tool, which costs a schema lookup and a round each time.
+POINTER_RULE = """---
+description: Oko code search
+alwaysApply: true
+---
+When an "Oko answer for this prompt" block lists code locations, they are exact and current: open
+those lines with your read tool first and answer from them. For anything else, use your own grep and
+file reads.
+"""
+LEAN_RULE = """---
+description: Oko code search
+alwaysApply: true
+---
+When an "Oko answer for this prompt" block is in your context, it is current repository text with exact
+line numbers. If it answers the question, answer from it directly, without re-reading or re-checking
+those files. For anything it does not show, use your own grep and file reads.
+"""
+NEUTRAL = ("Oko's answer to this prompt may already be in your context; use it when it answers the question. "
+           'Use native search/read tools for anything else.')
+# `tuned3`: tuned's build (no locations line) with tuned2's rule.
+VARIANTS = {'tuned': (TUNED_RULE, 'install-tuned'), 'tuned2': (TUNED2_RULE, 'install-tuned2'),
+            'tuned3': (TUNED2_RULE, 'install-tuned3'), 'pointer': (POINTER_RULE, 'install-exp'),
+            'lean': (LEAN_RULE, 'install-exp')}
+CURSOR_ENV = {'pointer': {'OKO_CURSOR_PREFETCH': 'pointer'}}
+# `release`: the project exactly as `oko setup --client cursor` from the --oko
+# build leaves it (its header, cap and rule), with the neutral prompt line.
+OKO_CONDITIONS = ('oko', 'tuned', 'tuned2', 'tuned3', 'pointer', 'lean', 'release')
+SEARCH_FIRST = ('Use Oko MCP search first to locate the relevant code, phrasing the search from the request. '
+                'Use its evidence when sufficient; native follow-up reads/searches are allowed.')
+ANSWER_FIRST = ("Oko's answer to this prompt may already be in your context; when it answers the question, answer "
+                'from it. Use Oko MCP search for any part it does not show; native follow-up reads/searches are allowed.')
 
 sys.path.insert(0, str(ROOT))  # the runner imports its neighbours
 spec = importlib.util.spec_from_file_location('public_runner', ROOT / 'runner.py')
@@ -68,14 +122,15 @@ def key():
     raise SystemExit('No TypeSafe key in the environment or .env')
 
 
-def schedule(repeats, wanted):
-    """Every task in both conditions per repeat; which goes first alternates."""
+def schedule(repeats, wanted, conditions=CONDITIONS):
+    """Every task in every condition per repeat; which goes first rotates."""
     sessions = []
     for repeat in range(repeats):
         for index, (repo, task) in enumerate((r['name'], t) for r in TASKS for t in r['tasks']):
             if wanted and task['id'] not in wanted:
                 continue
-            order = CONDITIONS if (index + repeat) % 2 == 0 else CONDITIONS[::-1]
+            shift = (index + repeat) % len(conditions)
+            order = conditions[shift:] + conditions[:shift]
             sessions += [{'repo': repo, 'task': task['id'], 'condition': c, 'repetition': repeat + 1} for c in order]
     return sessions
 
@@ -84,7 +139,7 @@ def git(work, *args):
     return subprocess.run(['git', *args], cwd=work, check=True, capture_output=True).stdout
 
 
-def workspace(repo, condition, oko, env):
+def workspace(repo, condition, oko, env, tuned=None, tuned2=None, exp=None):
     """The condition's checkout of one repository, built once."""
     work = HOME / f'{condition}-{repo}'
     if (work / '.git').exists():
@@ -94,12 +149,27 @@ def workspace(repo, condition, oko, env):
         tar.extractall(work, filter='data')
     runner.engine.strip_customizations(work)
     git(work, 'init', '-q')
-    if condition == 'oko':
-        subprocess.run([str(oko), 'setup', '--client', 'cursor', '--install-dir', str(HOME / 'install'), '--quiet'],
-                       cwd=work, env=env, check=True)
-        # A warm index, as in the agent suite's warm condition; no Jev call.
-        subprocess.run([str(HOME / 'install' / 'oko'), 'ask', '--no-jev', '--json', 'project source overview'],
-                       cwd=work, env=env, check=True, capture_output=True)
+    if condition in OKO_CONDITIONS:
+        build = {'oko': oko, 'tuned': tuned, 'tuned2': tuned2, 'tuned3': tuned, 'pointer': exp, 'lean': exp,
+                 'release': oko}[condition]
+        install = HOME / (VARIANTS[condition][1] if condition in VARIANTS
+                          else 'install-release' if condition == 'release' else 'install')
+        # Setup saves a key it finds in the environment to the Keychain, which
+        # waits on a macOS prompt; a key in the project's .env it only uses.
+        # The .env is removed before the baseline commit and the sessions.
+        quiet_env = {k: v for k, v in env.items() if k != 'TYPESAFE_API_KEY'}
+        (work / '.env').write_text(f"TYPESAFE_API_KEY={env['TYPESAFE_API_KEY']}\n")
+        try:
+            subprocess.run([str(build), 'setup', '--client', 'cursor', '--install-dir', str(install), '--quiet'],
+                           cwd=work, env=quiet_env, check=True, timeout=300)
+            # A warm index, as in the agent suite's warm condition; no Jev call.
+            subprocess.run([str(install / 'oko'), 'ask', '--no-jev', '--json', 'project source overview'],
+                           cwd=work, env=quiet_env, check=True, capture_output=True, timeout=300)
+        finally:
+            (work / '.env').unlink(missing_ok=True)
+        if condition in VARIANTS:
+            (work / '.cursor/rules').mkdir(parents=True, exist_ok=True)
+            (work / '.cursor/rules/oko.mdc').write_text(VARIANTS[condition][0])
     git(work, 'add', '-f', '.')
     git(work, '-c', 'user.name=Benchmark', '-c', 'user.email=benchmark@localhost', '-c', 'commit.gpgsign=false',
         'commit', '-qm', 'Frozen benchmark baseline')
@@ -119,6 +189,19 @@ def listening():
         return False
 
 
+def size_window(width=1600, height=1000):
+    """Cursor reopens at the size it last closed with, and its debugging port
+    cannot resize a window; a narrow one hides the sidebar and the chips the
+    session script uses. So the saved size is set before Cursor starts."""
+    path = Path.home() / 'Library/Application Support/Cursor/User/globalStorage/storage.json'
+    if not path.exists():
+        return
+    state = json.loads(path.read_text())
+    window = state.setdefault('windowsState', {}).setdefault('lastActiveWindow', {})
+    window.setdefault('uiState', {}).update(x=40, y=40, width=width, height=height)
+    path.write_text(json.dumps(state, indent=4))
+
+
 def start_cursor(env, folders):
     """A fresh Cursor with the key in its environment and the debugging port
     open. Cursor lists a folder under Recents, where the session script picks
@@ -129,6 +212,7 @@ def start_cursor(env, folders):
             if subprocess.run(['pgrep', '-f', f'{APP}/Contents/MacOS/Cursor'], capture_output=True).returncode:
                 break
             time.sleep(0.5)
+        size_window()
         subprocess.Popen([str(APP / 'Contents/MacOS/Cursor'), f'--remote-debugging-port={PORT}', str(folder)], env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         for _ in range(120):
@@ -140,37 +224,88 @@ def start_cursor(env, folders):
         time.sleep(6)
 
 
+CURSOR_LOGS = Path.home() / 'Library/Application Support/Cursor/logs'
+
+
+def trace_of(since):
+    """Cursor's request trace for the session that began after `since`: time to
+    the first token, and when each thinking step ended, in seconds from the
+    request. Cursor keeps logs for only its last few launches, so it is read
+    right after the session."""
+    import datetime
+    import re
+    best = None
+    for path in CURSOR_LOGS.glob('*/*/output_*/cursor.requestTraces.log'):
+        if path.stat().st_mtime < since:
+            continue
+        events = []
+        for line in path.read_text(errors='replace').splitlines():
+            match = re.match(r'(\S+) (\S+).*?name="([^"]+)"', line)
+            if match and match.group(2) == 'span_completed' or (match and match.group(3) == 'agent.request'):
+                when = datetime.datetime.fromisoformat(match.group(1).replace('Z', '+00:00')).timestamp()
+                events.append((when, match.group(3)))
+        starts = [t for t, name in events if name == 'agent.request' and t >= since - 5]
+        if not starts:
+            continue
+        start = starts[0]
+        ttft = next((t - start for t, name in events if name == 'client.ttft' and t >= start), None)
+        thinking = sorted({round(t - start, 1) for t, name in events
+                           if name == 'AgentResponseAdapter.thinkingCompleted' and t >= start})
+        if best is None or start < best['start']:
+            best = {'start': start, 'ttftSeconds': round(ttft, 2) if ttft is not None else None,
+                    'thinkingEndsSeconds': thinking}
+    if best:
+        best.pop('start')
+    return best
+
+
 def task_of(repo, task_id):
     item = next(r for r in TASKS if r['name'] == repo)
     return dict(next(t for t in item['tasks'] if t['id'] == task_id), repositoryName=repo)
 
 
-def run_session(session, work, timeout, env):
+def run_session(session, work, timeout, env, out, effort=None, tuned_prompt=True):
     task = task_of(session['repo'], session['task'])
-    enabled = session['condition'] == 'oko'
+    enabled = session['condition'] in OKO_CONDITIONS
     if enabled:
         task['cacheCondition'] = runner.PREFETCH
     text = runner.prompt(task, enabled)
+    if session['condition'] == 'tuned' and tuned_prompt:
+        if SEARCH_FIRST not in text:
+            raise RuntimeError('Benchmark prompt changed; update the tuned condition')
+        text = text.replace(SEARCH_FIRST, ANSWER_FIRST)
+    if session['condition'] in ('pointer', 'lean', 'release'):
+        if SEARCH_FIRST not in text:
+            raise RuntimeError('Benchmark prompt changed; update the pointer and lean conditions')
+        text = text.replace(SEARCH_FIRST, NEUTRAL)
     reset(work)
     # Cursor loads a project's MCP servers only for the folder it starts on; a
     # restart per session, outside the timed part, also keeps sessions apart.
-    start_cursor(env, [work])
-    command = ['node', str(SESSION), '--cwd', str(work), '--prompt', text, '--timeout', str(timeout)]
+    start_cursor({**env, **CURSOR_ENV.get(session['condition'], {})}, [work])
+    shot = out / f"{session['task']}-{session['condition']}-r{session['repetition']}.png"
+    command = ['node', str(SESSION), '--cwd', str(work), '--prompt', text, '--timeout', str(timeout), '--screenshot', str(shot)]
     if enabled:
         command.append('--enable-oko')
+    if effort:
+        command += ['--effort', effort]
+    began = time.time()
     done = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 180)
     try:
         report = json.loads(done.stdout.strip().splitlines()[-1])
     except (IndexError, ValueError):
         report = {'error': (done.stderr or done.stdout)[-2000:]}
     grade = runner.grade(task, work, report.get('answer') or '') if not report.get('error') else {'passed': False}
+    report['trace'] = trace_of(began)
+    # For matching Cursor's usage export (tokens per request) to this session.
+    report['startedAt'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(began))
+    report['endedAt'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     return {**session, **{k: v for k, v in report.items() if k != 'cwd'}, 'toolCalls': len(report.get('tools') or []),
             'grade': grade, 'passed': bool(grade.get('passed')), 'prompt': text}
 
 
 def summarize(rows):
     summary = {}
-    for condition in CONDITIONS:
+    for condition in ('native',) + OKO_CONDITIONS:
         done = [r for r in rows if r['condition'] == condition and not r.get('error')]
         if not done:
             continue
@@ -199,9 +334,23 @@ def main():
     parser.add_argument('--oko', type=Path, default=PROJECT / 'target/release/oko')
     parser.add_argument('--timeout', type=int, default=300)
     parser.add_argument('--resume', type=Path)
+    parser.add_argument('--conditions', default=','.join(CONDITIONS), help='comma-separated: native, oko, tuned')
+    parser.add_argument('--tuned-oko', type=Path, help='the Oko build for the tuned condition')
+    parser.add_argument('--tuned2-oko', type=Path, help='the Oko build for the tuned2 condition')
+    parser.add_argument('--exp-oko', type=Path, help='the Oko build for the pointer and lean conditions')
+    parser.add_argument('--tuned-keeps-prompt', action='store_true',
+                        help="tuned keeps the standard prompt's Oko line: only Oko's own changes differ")
+    parser.add_argument('--effort', choices=('Low', 'Medium', 'High', 'Extra High'),
+                        help="set the model's reasoning effort in Cursor before each session (it stays set)")
     args = parser.parse_args()
     wanted = set(args.tasks.split(',')) if args.tasks else set()
-    sessions = schedule(args.repeats, wanted)
+    conditions = tuple(args.conditions.split(','))
+    if (not set(conditions) <= {'native', *OKO_CONDITIONS}
+            or ({'pointer', 'lean'} & set(conditions) and not args.exp_oko)
+            or ({'tuned', 'tuned3'} & set(conditions) and not args.tuned_oko)
+            or ('tuned2' in conditions and not args.tuned2_oko)):
+        parser.error('Conditions are native, oko, tuned and tuned2; tuned needs --tuned-oko, tuned2 --tuned2-oko')
+    sessions = schedule(args.repeats, wanted, conditions)
     if args.plan:
         for s in sessions:
             print(s['repetition'], s['repo'], s['task'], s['condition'])
@@ -213,9 +362,17 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     log = out / 'sessions.jsonl'
     finished = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    # A session the harness failed to run is run again; its row is kept aside.
+    failed = [row for row in finished if row.get('error')]
+    finished = [row for row in finished if not row.get('error')]
+    if failed:
+        with (out / 'harness-errors.jsonl').open('a') as handle:
+            handle.writelines(json.dumps(row) + '\n' for row in failed)
+        log.write_text(''.join(json.dumps(row) + '\n' for row in finished))
     seen = {(r['repo'], r['task'], r['condition'], r['repetition']) for r in finished}
     version = subprocess.run([str(args.oko), '--version'], capture_output=True, text=True, check=True).stdout.strip()
-    works = {(r, c): workspace(r, c, args.oko, env) for r in {s['repo'] for s in sessions} for c in CONDITIONS}
+    works = {(r, c): workspace(r, c, args.oko, env, args.tuned_oko, args.tuned2_oko, args.exp_oko)
+             for r in {s['repo'] for s in sessions} for c in conditions}
     start_cursor(env, list(works.values()))
     (out / 'settings.json').write_text(json.dumps({
         'oko': version, 'cursor': json.loads((APP / 'Contents/Resources/app/package.json').read_text())['version'],
@@ -225,7 +382,8 @@ def main():
     for number, session in enumerate(sessions, 1):
         if (session['repo'], session['task'], session['condition'], session['repetition']) in seen:
             continue
-        row = run_session(session, works[(session['repo'], session['condition'])], args.timeout, env)
+        row = run_session(session, works[(session['repo'], session['condition'])], args.timeout, env, out, args.effort,
+                          not args.tuned_keeps_prompt)
         rows.append(row)
         with log.open('a') as handle:
             handle.write(json.dumps(row) + '\n')
