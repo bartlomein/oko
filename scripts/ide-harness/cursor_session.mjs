@@ -65,7 +65,7 @@ async function pickRepository(page, cwd) {
   await page.keyboard.press('Escape');
   await newChat(page);
   const current = await chatRepository(page);
-  if (current !== name) {
+  if (current !== name && current !== cwd.replace(os.homedir(), '~')) {
     await page.getByText(current, { exact: true }).last().click();
     await page.waitForTimeout(1500);
     const menu = page.getByRole('menu').last();
@@ -81,8 +81,11 @@ async function pickRepository(page, cwd) {
     }
     await page.waitForTimeout(2500);
   }
+  // A project whose name Cursor has seen at another path is labelled by its path.
   const chosen = await chatRepository(page);
-  if (chosen !== name) throw new Error(`Cursor's chat is on ${chosen}, not ${name}`);
+  if (chosen !== name && chosen !== cwd.replace(os.homedir(), '~')) {
+    throw new Error(`Cursor's chat is on ${chosen}, not ${name}`);
+  }
 }
 
 /** Customize > MCPs: turn the project's oko server on if it is off. The list
