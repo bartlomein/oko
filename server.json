@@ -8,6 +8,13 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/bartlomein/oko#readme",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/bartlomein/oko/main/docs/images/oko-icon.png",
+      "mimeType": "image/png",
+      "sizes": ["512x512"]
+    }
+  ],
   "version": "0.0.0",
   "packages": [
     {

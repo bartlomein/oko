@@ -28,6 +28,7 @@ LONG_DESCRIPTION = (
     'This bundle adds Oko\'s search tool for one project folder. In Claude Code, Codex, Cursor, '
     'OpenCode and Pi, `brew install bartlomein/tap/oko` and `oko setup` in a project also add '
     'Oko\'s answer to each prompt before the agent starts, where most of its savings come from.')
+ICON = Path(__file__).resolve().parents[1] / 'docs/images/oko-icon.png'
 # Reproducible archives: one timestamp for every entry.
 ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
@@ -52,6 +53,7 @@ def manifest(version):
         'documentation': 'https://github.com/bartlomein/oko#readme',
         'repository': {'type': 'git', 'url': 'https://github.com/bartlomein/oko'},
         'license': 'MIT',
+        'icon': 'icon.png',
         'keywords': ['code search', 'coding agents', 'retrieval', 'mcp'],
         'server': {
             'type': 'binary',
@@ -120,6 +122,7 @@ def main():
         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md'):
             shutil.copy(arm / name, stage / name)
         shutil.copytree(arm / 'licenses', stage / 'licenses')
+        shutil.copy(ICON, stage / 'icon.png')
         args.output.mkdir(parents=True, exist_ok=True)
         target = args.output / f'oko-v{version}-macos.mcpb'
         with zipfile.ZipFile(target, 'w') as bundle:
