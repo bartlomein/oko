@@ -152,8 +152,9 @@ def check_isolation(executable, root, state):
                 'models': [{'id': 'probe', 'name': 'probe', 'reasoning': False, 'input': ['text'],
                             'contextWindow': 8192, 'maxTokens': 32, 'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0}}]}}}))
             try:
-                # Pi 1.0.4 can take over 30 s to start on a cold Node cache.
-                result = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, timeout=90)
+                # Pi 1.0.4 waits for more input on an open stdin.
+                result = subprocess.run(args, cwd=work, env=env, stdin=subprocess.DEVNULL,
+                                        capture_output=True, text=True, timeout=30)
             finally:
                 server.shutdown()
                 thread.join()
