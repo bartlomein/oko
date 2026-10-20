@@ -71,7 +71,7 @@ def manifest(version):
             'project': {
                 'type': 'directory',
                 'title': 'Project folder',
-                'description': 'The code Oko searches.',
+                'description': 'Click Browse and pick the project Oko searches.',
                 'required': True,
             },
             # Required: an empty override would disable a key saved with
