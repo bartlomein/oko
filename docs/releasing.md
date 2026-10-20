@@ -38,6 +38,10 @@ ranking using a project `.env`. It never touches the user's installed Oko or key
 3. Wait for **Draft release** to finish all four native checks and package tests.
 4. Review the draft's four archives, `SHA256SUMS`, and generated release notes.
 5. Download and try the candidate with a coding client, then explicitly publish it.
+6. Update the Homebrew formula in
+   [bartlomein/homebrew-tap](https://github.com/bartlomein/homebrew-tap):
+   `Formula/oko.rb` takes each archive's URL and its SHA-256 from `SHA256SUMS`.
+   Run `brew audit --strict bartlomein/tap/oko` and `brew test` before pushing.
 
 Tag mismatch fails before compilation. The workflow creates a **draft**, never
 an automatically public release, and refuses to overwrite an existing release.
