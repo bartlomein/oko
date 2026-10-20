@@ -76,7 +76,7 @@ def table(tools):
         cells = [f"**{tool[key][2]}% less**<br><sub>{number(tool[key][0])} → {number(tool[key][1])}"
                  f"{' s' if key == 'time' else ''}</sub>" for key, _ in METRICS]
         rows.append(f"| {tool['name']} | " + ' | '.join(cells)
-                    + f" | {tool['passed'][0]} → {tool['passed'][1]} of 27 |")
+                    + f" | {tool['passed'][0]} → {tool['passed'][1]} of {tool.get('sessions', 27)} |")
     return '\n'.join(rows)
 
 

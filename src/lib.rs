@@ -10,6 +10,7 @@ pub mod rails;
 pub mod ranking;
 pub mod search;
 pub mod search_cache;
+pub mod split;
 pub mod stemmer;
 pub mod usages;
 

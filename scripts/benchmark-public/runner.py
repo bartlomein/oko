@@ -53,6 +53,9 @@ GUIDANCE = PROJECT / 'src/guidance.md'
 # question before the agent's first turn. Claude Code and Codex call the
 # running server; OpenCode loads setup's plugin, which keeps an Oko of its own.
 PREFETCH = 'prefetch'
+# The prompt hook on the previous build: compares two builds' first answers.
+PREFETCH_PREVIOUS = 'prefetch-previous'
+PREFETCHES = (PREFETCH, PREFETCH_PREVIOUS)
 PREFETCH_INPUT = {'question': '${prompt}', 'prefetch': 'claude:${session_id}'}
 
 
@@ -265,6 +268,12 @@ def prepare(args):
             isolation = check_pi_isolation(shutil.which('pi'), ROOT, STATE)
         else:
             isolation = check_isolation(ROOT, STATE)
+            if 'pi' in args.clients:
+                # Pi beside the other clients: its own preflight must pass too.
+                from pi import check_isolation as check_pi_isolation
+                pi_isolation = check_pi_isolation(shutil.which('pi'), ROOT, STATE)
+                isolation = {'passed': bool(isolation.get('passed') and pi_isolation.get('passed')),
+                             'clients': isolation, 'pi': pi_isolation}
     clients = {c: shutil.which(c) for c in args.clients}
     if not all(clients.values()):
         raise RuntimeError('Install the selected clients before preparing')
@@ -362,9 +371,9 @@ def args_for(task, client, condition, work, trial):
                        prompt(task, condition != 'native'), ROOT)
     args, env = original_args(task, client, condition, work, trial)
     env['OKO_PUBLIC_BENCH_REPO'] = task['repositoryName']
-    if task.get('cacheCondition') in (GUIDED, PREFETCH):
+    if task.get('cacheCondition') in (GUIDED, *PREFETCHES):
         args, env = guide(client, args, env, trial)
-    if task.get('cacheCondition') == PREFETCH:
+    if task.get('cacheCondition') in PREFETCHES:
         args, env = prefetch(client, args, env)
     if compares_builds() and client == 'opencode':
         # Separate both conversation storage and configuration. Link login state only.
@@ -444,7 +453,7 @@ def prompt(task, enabled):
     if task.get('memoryCanary'):
         return task['question']
     text = original_prompt(task, enabled)
-    if task.get('cacheCondition') in (GUIDED, PREFETCH):
+    if task.get('cacheCondition') in (GUIDED, *PREFETCHES):
         excluded = 'do not load skills, personal instructions, AGENTS.md, CLAUDE.md, or saved memory.'
         if excluded not in text:
             raise RuntimeError('Benchmark prompt changed; update the guided condition')
@@ -596,7 +605,8 @@ def execute(args, schedule):
             engine.STATE=STATE/name
             engine.SETTINGS=dict(settings[name])
             if compares_builds():
-                selected = settings[name]['builds']['current' if condition in ('native', GUIDED, PREFETCH) else condition]
+                selected = settings[name]['builds']['previous' if condition == PREFETCH_PREVIOUS
+                                                    else 'current' if condition in ('native', GUIDED, PREFETCH) else condition]
                 engine.SETTINGS.update(oko=selected['path'],okoSha256=selected['sha256'])
             engine_condition = ENGINE_CONDITIONS[condition]
             trials=engine.STATE/output.name/condition
@@ -613,12 +623,12 @@ def execute(args, schedule):
             if compares_builds():
                 row['build']=None if condition=='native' else selected
             row['cacheObservations']=cache_observations(row)
-            if condition==PREFETCH:
+            if condition in PREFETCHES:
                 row['prefetch']=prefetch_lines(trial)
                 if not row['cacheObservations']:
                     row['cacheObservations']=prewarm_observations(trial)
             row['cacheConditionVerified']=check_cache(condition,row['cacheObservations'])
-            if (condition==PREFETCH and row['cacheConditionVerified']
+            if (condition in PREFETCHES and row['cacheConditionVerified']
                     and str(row.get('error','')).startswith('Observed Oko cache state did not match')):
                 # The engine reads the cache state from the agent's first Oko
                 # call; answered from the prefetch alone, there was none.
@@ -711,10 +721,10 @@ def main():
     p.add_argument('--clients',help='Comma-separated; default all three, or claude alone for the smoke suite')
     p.add_argument('--resume',type=Path)
     p.add_argument('--oko',type=Path,default=PROJECT/'target/release/oko')
-    p.add_argument('--codex-model',default='gpt-5.6-sol')
-    p.add_argument('--opencode-model',default='openai/gpt-5.6-sol')
-    p.add_argument('--claude-model',default='claude-sonnet-5')
-    p.add_argument('--pi-model',default='openai/gpt-5.6-sol')
+    p.add_argument('--codex-model',default='gpt-6.1-sol')
+    p.add_argument('--opencode-model',default='openai/gpt-6.1-sol')
+    p.add_argument('--claude-model',default='claude-sonnet-5-5')
+    p.add_argument('--pi-model',default='openai/gpt-6.1-sol')
     p.add_argument('--effort',choices=('low','medium','high'),default='low')
     p.add_argument('--timeout',type=int,default=180)
     p.add_argument('--suite', choices=('legacy','branch','smoke','pi'), default='legacy',
@@ -723,6 +733,10 @@ def main():
                    help='Branch/smoke: add a condition that is the current build plus the agent guidance oko setup installs')
     p.add_argument('--prefetch',action='store_true',
                    help='With --guided: add a condition that is guided plus the prompt hook (Claude Code and Codex)')
+    p.add_argument('--prefetch-compare',action='store_true',
+                   help='Branch suite: only the prompt hook, on the previous build and on the current one')
+    p.add_argument('--native-compare',action='store_true',
+                   help='Branch suite: native search against the current build with guidance and the prompt hook')
     p.add_argument('--skip-previous',action='store_true',
                    help='Branch suite with --guided: run native, current and guided only')
     p.add_argument('--tasks',help='Smoke suite only: comma-separated branch task ids (default: '+','.join(SMOKE_TASKS)+')')
@@ -779,6 +793,16 @@ def main():
         if SUITE!='branch' or not args.guided:p.error('--skip-previous requires --suite branch --guided')
         CONDITIONS=tuple(c for c in CONDITIONS if c!='previous')
         ENGINE_CONDITIONS={c:v for c,v in ENGINE_CONDITIONS.items() if c!='previous'}
+    if args.prefetch_compare:
+        if SUITE!='branch' or args.guided or args.prefetch or args.skip_previous:
+            p.error('--prefetch-compare is its own branch-suite condition set')
+        CONDITIONS=(PREFETCH_PREVIOUS,PREFETCH)
+        ENGINE_CONDITIONS={c:'oko-'+args.cache_policy for c in CONDITIONS}
+    if args.native_compare:
+        if SUITE!='branch' or args.guided or args.prefetch or args.skip_previous or args.prefetch_compare:
+            p.error('--native-compare is its own branch-suite condition set')
+        CONDITIONS=('native',PREFETCH)
+        ENGINE_CONDITIONS={'native':'native',PREFETCH:'oko-'+args.cache_policy}
     if not args.clients or len(set(args.clients))!=len(args.clients) or any(c not in SUPPORTED_CLIENTS for c in args.clients):p.error('Invalid clients')
     if args.timeout<1:p.error('Timeout must be positive')
     if args.resume and not args.execute:p.error('--resume requires --execute')

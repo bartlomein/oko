@@ -80,6 +80,10 @@ pub struct ContextMatch {
     /// than one. Set after building, from the winner that produced it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// The parts of a split prompt this is the best match for, by index: the
+    /// last to go when the answer must shrink.
+    #[serde(skip)]
+    pub parts: Vec<usize>,
     /// The focused window that replaces a lower-ranked complete definition
     /// before any match is dropped to fit the budget.
     #[serde(skip)]
@@ -1151,6 +1155,36 @@ fn overlaps(a: &SourceExcerpt, b: &SourceExcerpt) -> bool {
 }
 
 impl SourceExcerpt {
+    /// Covers `other` as well, when both are plain excerpts of one file whose
+    /// union is contiguous source no longer than a primary implementation.
+    fn widen(&mut self, other: &SourceExcerpt, snapshot: &Snapshot<'_>) {
+        let start = self.start_line.min(other.start_line);
+        let end = self.end_line.max(other.end_line);
+        if self.path != other.path
+            || !self.omitted.is_empty()
+            || !other.omitted.is_empty()
+            || (start, end) == (self.start_line, self.end_line)
+            || end - start + 1 > PRIMARY_IMPLEMENTATION_LINES
+            || snapshot.contiguous_end(start) < end
+        {
+            return;
+        }
+        self.text = (start..=end)
+            .map(|n| snapshot.lines[&n])
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.start_line = start;
+        self.end_line = end;
+        self.whole_file = snapshot.covers_whole_file(start, end);
+        self.truncated = (self.truncated || other.truncated) && !self.whole_file;
+        self.definition_complete &= other.definition_complete;
+        self.definitions = if self.definition_complete {
+            self.definitions.max(other.definitions)
+        } else {
+            0
+        };
+    }
+
     fn shrink(&mut self) -> bool {
         if self.text.len() <= MIN_TEXT_BYTES {
             return false;
@@ -1301,6 +1335,21 @@ impl SourceExcerpt {
 impl ContextPacket {
     /// Label each result with the questions it answers, from `tags_of` the
     /// excerpt (several when two questions led to the same code).
+    /// Records which parts of a split prompt each match answers.
+    pub fn mark_parts(&mut self, parts_of: impl Fn(&SourceExcerpt) -> Vec<usize>) {
+        for result in &mut self.results {
+            result.parts = parts_of(&result.excerpt);
+        }
+    }
+    /// Whether the match at `index` is the only one answering some part.
+    fn answers_alone(&self, index: usize) -> bool {
+        self.results[index].parts.iter().any(|part| {
+            self.results
+                .iter()
+                .enumerate()
+                .all(|(other, result)| other == index || !result.parts.contains(part))
+        })
+    }
     pub fn tag_results(&mut self, tags_of: impl Fn(&SourceExcerpt) -> Vec<String>) {
         for result in &mut self.results {
             let mut tags = tags_of(&result.excerpt);
@@ -1485,7 +1534,15 @@ impl ContextPacket {
                 result.excerpt = result.compact.take().expect("checked above");
                 self.prune_related();
             } else if self.results.len() > 1 {
-                self.results.pop();
+                // A part's best match stays while another can go. When every
+                // one is some part's best, the lowest goes, as for one question:
+                // shrinking excerpts instead left a small answer's code a few
+                // lines long.
+                let spare = (1..self.results.len())
+                    .rev()
+                    .find(|&index| !self.answers_alone(index))
+                    .unwrap_or(self.results.len() - 1);
+                self.results.remove(spare);
                 self.omitted = true;
                 self.prune_related();
             } else if self.related.pop().is_some() {
@@ -1748,6 +1805,7 @@ fn build_packet_limited(
                 lower_confidence,
                 exact_name,
                 tag: None,
+                parts: Vec::new(),
                 compact,
                 seen: false,
             });
@@ -1779,11 +1837,17 @@ fn build_packet_limited(
         ) else {
             continue;
         };
-        if packet
+        if let Some(shown) = packet
             .results
-            .iter()
-            .any(|r| overlaps(&r.excerpt, &context))
+            .iter_mut()
+            .find(|r| overlaps(&r.excerpt, &context))
         {
+            // An accepted match beside a narrower excerpt widens it. Dropped,
+            // the lines only it held were lost: httpx's `MultiDecoder.__init__`
+            // went missing beside its `decode` while a weaker match took the slot.
+            if !lower_confidence {
+                shown.excerpt.widen(&context, snapshot);
+            }
             continue;
         }
         let compact = (!primary && proven)
@@ -1808,6 +1872,7 @@ fn build_packet_limited(
             lower_confidence,
             exact_name,
             tag: None,
+            parts: Vec::new(),
             compact,
             seen: false,
         });
@@ -2118,6 +2183,104 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+    #[test]
+    fn fitting_keeps_each_parts_best_match_and_drops_another_first() {
+        let file = |name: &str| {
+            let source = format!(
+                "fn {name}() {{\n{}\n}}\n",
+                (0..30)
+                    .map(|n| format!("    step_{name}_{n}();"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            chunk_text(&format!("{name}.rs"), &source)
+        };
+        let corpus: Vec<Chunk> = ["alpha", "beta", "gamma"]
+            .iter()
+            .flat_map(|name| file(name))
+            .collect();
+        let winners: Vec<(Chunk, f64)> = corpus.iter().map(|chunk| (chunk.clone(), 0.9)).collect();
+        let mut packet = build_packet(&corpus, &winners, "alpha beta gamma steps");
+        assert_eq!(packet.results.len(), 3);
+        // `gamma`, last, is a part's best match; `beta` is no part's best.
+        packet.mark_parts(|excerpt| match excerpt.path.as_str() {
+            "gamma.rs" => vec![2],
+            "alpha.rs" => vec![1],
+            _ => Vec::new(),
+        });
+        let two = serde_json::to_vec(&packet).unwrap().len() * 3 / 4;
+        packet.fit_to_budget(two);
+        let kept: Vec<&str> = packet
+            .results
+            .iter()
+            .map(|r| r.excerpt.path.as_str())
+            .collect();
+        assert_eq!(kept, ["alpha.rs", "gamma.rs"]);
+    }
+    #[test]
+    fn fitting_never_shrinks_a_parts_best_match_to_make_room_for_another() {
+        let file = |name: &str| {
+            let source = format!(
+                "fn {name}() {{\n{}\n}}\n",
+                (0..30)
+                    .map(|n| format!("    step_{name}_{n}();"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            chunk_text(&format!("{name}.rs"), &source)
+        };
+        let corpus: Vec<Chunk> = ["alpha", "beta"]
+            .iter()
+            .flat_map(|name| file(name))
+            .collect();
+        let winners: Vec<(Chunk, f64)> = corpus.iter().map(|chunk| (chunk.clone(), 0.9)).collect();
+        let mut packet = build_packet(&corpus, &winners, "alpha beta steps");
+        packet.mark_parts(|excerpt| vec![usize::from(excerpt.path == "beta.rs")]);
+        let lines = packet.results[0].excerpt.lines();
+        let one = serde_json::to_vec(&packet).unwrap().len() * 2 / 3;
+        packet.fit_to_budget(one);
+        assert_eq!(packet.results.len(), 1);
+        assert_eq!(packet.results[0].excerpt.lines(), lines);
+    }
+    #[test]
+    fn an_accepted_match_overlapping_a_shown_excerpt_widens_it() {
+        let source = "class ZstdDecoder(ContentDecoder):\n    def flush(self) -> bytes:\n        if not self.seen_data:\n            return b\"\"\n        return bytes(self.decompressor.flush())\n\n\nclass MultiDecoder(ContentDecoder):\n    \"\"\"\n    Handle the case where multiple encodings have been applied.\n    \"\"\"\n\n    def __init__(self, children: typing.Sequence[ContentDecoder]) -> None:\n        # Note that we reverse the order for decoding.\n        self.children = list(reversed(children))\n\n    def decode(self, data: bytes) -> bytes:\n        for child in self.children:\n            data = child.decode(data)\n        return data\n\n    def flush(self) -> bytes:\n        data = b\"\"\n        for child in self.children:\n            data = child.decode(data) + child.flush()\n        return data\n";
+        let corpus = chunk_text("decoders.py", source);
+        let lines: Vec<&str> = source.lines().collect();
+        // Sections as the ranker judged them: merged short definitions.
+        let section = |start: usize, end: usize| Chunk {
+            start_line: start,
+            end_line: end,
+            text: lines[start - 1..end].join("\n"),
+            ..corpus[0].clone()
+        };
+        let winners = vec![(section(17, 26), 0.8), (section(1, 16), 0.77)];
+        let packet = build_packet(
+            &corpus,
+            &winners,
+            "how multiple decoders are combined and why decoding runs in reverse order",
+        );
+        let reversed = 15;
+        assert!(
+            packet
+                .results
+                .iter()
+                .any(|r| r.excerpt.start_line <= reversed && reversed <= r.excerpt.end_line),
+            "{:?}",
+            packet
+                .results
+                .iter()
+                .map(|r| (r.excerpt.start_line, r.excerpt.end_line))
+                .collect::<Vec<_>>()
+        );
+        for result in &packet.results {
+            let excerpt = &result.excerpt;
+            assert_eq!(
+                excerpt.text,
+                lines[excerpt.start_line - 1..excerpt.end_line].join("\n")
+            );
+        }
     }
     #[test]
     fn long_signatures_include_the_body_and_stop_at_its_end() {

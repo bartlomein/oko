@@ -235,7 +235,7 @@ python3 scripts/benchmark-public/runner.py
 
 Use `--repositories /path/to/parent` if needed. Prerequisites: Python 3.12+, Node supporting `--experimental-strip-types` (tested with 22.14), `rustc`, `rg`, all three authenticated clients, and the built Oko release binary. No package installation, repository build, or external service is needed for the focused validators.
 
-Default models match the previous fast comparisons: Codex `gpt-5.6-sol`, OpenCode `openai/gpt-5.6-sol`, Claude `claude-sonnet-5`, low effort. Preparation accepts `--codex-model`, `--opencode-model`, `--claude-model`, `--effort`, `--timeout`, and `--oko`. Execution uses the frozen settings, not newly supplied model flags. CLI versions, binary hash, task hash, runner hash, and commit hashes are checked before execution. Reprepare after intentional changes.
+Default models (from October 2026): Codex `gpt-6.1-sol`, OpenCode `openai/gpt-6.1-sol`, Claude `claude-sonnet-5-5`, low effort. Results published before then used `gpt-5.6-sol` and `claude-sonnet-5`. Preparation accepts `--codex-model`, `--opencode-model`, `--claude-model`, `--effort`, `--timeout`, and `--oko`. Execution uses the frozen settings, not newly supplied model flags. CLI versions, binary hash, task hash, runner hash, and commit hashes are checked before execution. Reprepare after intentional changes.
 
 Preparation executes every edit contract twice: it must fail against original code and pass against the reference change. Reference changes happen in temporary copies only. Test results and immutable source archives are saved under ignored `benchmarks/results/public/`.
 
@@ -345,7 +345,7 @@ python3 scripts/benchmark-public/runner.py --suite pi --execute
 ```
 
 Pi must be on PATH and authenticated. The model defaults to
-`openai/gpt-5.6-sol` with low thinking; override it with `--pi-model` before
+`openai/gpt-6.1-sol` with low thinking; override it with `--pi-model` before
 preparation. Use the same options for prepare/check/execute. Login state is
 linked into fresh per-session agent directories; no credential bytes are
 copied into artifacts. Skills, context-file discovery, unrelated extensions,

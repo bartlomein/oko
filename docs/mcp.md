@@ -90,7 +90,10 @@ are skipped from their text alone; a prompt that names no definition or file the
 index knows, and does not read as a code question, is skipped without a Jev call;
 and an answer is added only when Jev rates an excerpt relevant or the prompt names
 a definition. The question searched is the prompt's first paragraph, with names
-mentioned later in the prompt. The added block is at most 8,000 characters, says
+mentioned later in the prompt. A prompt that plainly asks for several things (a
+list, several questions, "where A, where B, and where C") is also judged part by
+part, in parallel, so each part's code can reach the answer; this adds one Jev
+request per part. The added block is at most 8,000 characters, says
 it is Oko's answer to the prompt, and is remembered like any answer, so a later
 search stubs code it already showed. Claude Code and Codex call the running
 server from a hook in their settings; in Claude Code it reaches the main agent,
