@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.bartlomein/oko",
+  "title": "Oko",
+  "description": "Code search for coding agents: ranked, exact excerpts with line numbers.",
+  "repository": {
+    "url": "https://github.com/bartlomein/oko",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/bartlomein/oko#readme",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/bartlomein/oko/main/docs/images/oko-icon.png",
+      "mimeType": "image/png",
+      "sizes": ["512x512"]
+    }
+  ],
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/bartlomein/oko/releases/download/v0.0.0/oko-v0.0.0-macos.mcpb",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TYPESAFE_API_KEY",
+          "description": "TypeSafe AI key for ranking with Jev.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

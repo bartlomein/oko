@@ -2246,10 +2246,17 @@ fn workspace(args: &[String], cwd: &Path) -> Result<(PathBuf, bool)> {
             _ => bail!("Invalid MCP arguments.\n{USAGE}"),
         }
     }
+    let given = root.map_or(".", String::as_str);
+    // A path pasted into an app's settings form often carries a stray space;
+    // the exact path wins when it exists.
     let root = cwd
-        .join(root.map_or(".", String::as_str))
+        .join(given)
         .canonicalize()
-        .context("Cannot access MCP workspace root.")?;
+        .or_else(|error| match given.trim() {
+            trimmed if trimmed != given && !trimmed.is_empty() => cwd.join(trimmed).canonicalize(),
+            _ => Err(error),
+        })
+        .with_context(|| format!("Cannot access MCP workspace root {given:?}."))?;
     if !root.is_dir() {
         bail!("MCP workspace root must be a directory.");
     }
@@ -2330,6 +2337,25 @@ pub fn cursor_prompt(args: &[String], cwd: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_root_with_stray_spaces_resolves_when_the_exact_path_does_not_exist() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().canonicalize().unwrap();
+        let padded = format!(" {} ", project.display());
+        let (root, _) = workspace(&["--root".into(), padded], Path::new("/")).unwrap();
+        assert_eq!(root, project);
+        let missing = workspace(
+            &["--root".into(), " /no/such/oko/root".into()],
+            Path::new("/"),
+        );
+        assert!(
+            missing
+                .unwrap_err()
+                .to_string()
+                .contains("/no/such/oko/root")
+        );
+    }
 
     #[test]
     fn a_search_overlaps_any_search_that_began_during_it() {
