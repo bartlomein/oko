@@ -18,7 +18,7 @@ Build one package locally on its native platform:
 ```sh
 cargo build --release --locked --target aarch64-apple-darwin --bin oko
 python3 scripts/release.py package --target aarch64-apple-darwin --output target/release-bundles
-python3 scripts/smoke-release.py target/release-bundles/oko-v0.9.0-aarch64-apple-darwin.tar.gz
+python3 scripts/smoke-release.py target/release-bundles/oko-v0.9.1-aarch64-apple-darwin.tar.gz
 ```
 
 Change the target and version for your platform. Maintainer scripts need Python
@@ -34,14 +34,21 @@ ranking using a project `.env`. It never touches the user's installed Oko or key
 1. Commit the reviewed code and version in `Cargo.toml`/`Cargo.lock`; set the default
    `OKO_VERSION` in `install.sh` and update installation examples for that release.
    Ensure CI passes.
-2. Push a version tag matching Cargo exactly, for example `v0.9.0`.
+2. Push a version tag matching Cargo exactly, for example `v0.9.1`.
 3. Wait for **Draft release** to finish all four native checks and package tests.
-4. Review the draft's four archives, `SHA256SUMS`, and generated release notes.
+4. Review the draft's four archives, the macOS MCP Bundle (`oko-vX-macos.mcpb`),
+   `SHA256SUMS`, and generated release notes.
 5. Download and try the candidate with a coding client, then explicitly publish it.
 6. Update the Homebrew formula in
    [bartlomein/homebrew-tap](https://github.com/bartlomein/homebrew-tap):
    `Formula/oko.rb` takes each archive's URL and its SHA-256 from `SHA256SUMS`.
    Run `brew audit --strict bartlomein/tap/oko` and `brew test` before pushing.
+
+Publishing the release lists it in the official
+[MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.bartlomein/oko`: **Publish to the MCP Registry** fills `server.json`
+from the release's bundle and checksum, checks the download, and publishes with
+GitHub's OIDC token (no stored secret). Rerun it for a tag from the Actions tab.
 
 Tag mismatch fails before compilation. The workflow creates a **draft**, never
 an automatically public release, and refuses to overwrite an existing release.

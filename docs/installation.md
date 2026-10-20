@@ -14,6 +14,15 @@ the release archive: Oko with its bundled ripgrep, which stays private to Oko.
 `oko setup` keeps its own copy for the projects it connects, so after
 `brew upgrade oko`, run `oko upgrade` to refresh them.
 
+## Claude Desktop (MCP Bundle)
+
+Each release includes `oko-vX-macos.mcpb`, which Claude Desktop installs:
+open it, pick the project folder and enter your TypeSafe key. Oko is also listed
+in the official [MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.bartlomein/oko`. This adds Oko's search tool for that folder only;
+the answer `oko setup` adds to each prompt in Claude Code, Codex, Cursor,
+OpenCode and Pi is not part of it. macOS only for now.
+
 ## Install script
 
 ```sh
@@ -29,7 +38,7 @@ less install-oko.sh
 sh install-oko.sh
 ```
 
-The installer defaults to `v0.9.0`, the release it was published with. A draft or
+The installer defaults to `v0.9.1`, the release it was published with. A draft or
 private release is not anonymously downloadable.
 
 To select a version or custom absolute installation paths, set these variables
@@ -37,12 +46,12 @@ on the `sh` process (not on `curl`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh |
-  OKO_VERSION=v0.9.0 sh
+  OKO_VERSION=v0.9.1 sh
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKO_VERSION` | `v0.9.0` | Published release to download; the `v` prefix is optional. |
+| `OKO_VERSION` | `v0.9.1` | Published release to download; the `v` prefix is optional. |
 | `OKO_INSTALL_DIR` | `~/.local/share/oko` | Version directories containing binaries and license notices. |
 | `OKO_BIN_DIR` | `~/.local/bin` | Directory containing the `oko` symlink. |
 
@@ -73,7 +82,7 @@ Download the matching archive and `SHA256SUMS` from
 In the download directory, substitute your chosen filename:
 
 ```sh
-archive=oko-v0.9.0-aarch64-apple-darwin.tar.gz
+archive=oko-v0.9.1-aarch64-apple-darwin.tar.gz
 grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
 tar -xzf "$archive" &&
 "./${archive%.tar.gz}/oko" --version
@@ -151,6 +160,12 @@ configured project. For a source installation, update your checkout, rerun
 context before its first turn, so it skips a round of searching. Other prompts get
 nothing. `--no-prefetch` leaves it out. See [the MCP guide](mcp.md) for how it
 decides.
+
+### Upgrading to 0.9.1
+
+Run `oko upgrade`. Nothing changes for coding tools set up with `oko setup`.
+New: Homebrew (`brew install bartlomein/tap/oko`), and a macOS MCP Bundle for
+Claude Desktop, listed in the official MCP Registry.
 
 ### Upgrading to 0.9.0
 
