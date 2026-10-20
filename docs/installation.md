@@ -17,7 +17,7 @@ less install-oko.sh
 sh install-oko.sh
 ```
 
-The installer defaults to `v0.8.0`, the release it was published with. A draft or
+The installer defaults to `v0.9.0`, the release it was published with. A draft or
 private release is not anonymously downloadable.
 
 To select a version or custom absolute installation paths, set these variables
@@ -25,12 +25,12 @@ on the `sh` process (not on `curl`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh |
-  OKO_VERSION=v0.8.0 sh
+  OKO_VERSION=v0.9.0 sh
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKO_VERSION` | `v0.8.0` | Published release to download; the `v` prefix is optional. |
+| `OKO_VERSION` | `v0.9.0` | Published release to download; the `v` prefix is optional. |
 | `OKO_INSTALL_DIR` | `~/.local/share/oko` | Version directories containing binaries and license notices. |
 | `OKO_BIN_DIR` | `~/.local/bin` | Directory containing the `oko` symlink. |
 
@@ -61,7 +61,7 @@ Download the matching archive and `SHA256SUMS` from
 In the download directory, substitute your chosen filename:
 
 ```sh
-archive=oko-v0.8.0-aarch64-apple-darwin.tar.gz
+archive=oko-v0.9.0-aarch64-apple-darwin.tar.gz
 grep "  ${archive}$" SHA256SUMS | shasum -a 256 -c - &&
 tar -xzf "$archive" &&
 "./${archive%.tar.gz}/oko" --version
@@ -139,6 +139,14 @@ configured project. For a source installation, update your checkout, rerun
 context before its first turn, so it skips a round of searching. Other prompts get
 nothing. `--no-prefetch` leaves it out. See [the MCP guide](mcp.md) for how it
 decides.
+
+### Upgrading to 0.9.0
+
+Run `oko upgrade`. The answer added to a prompt now covers prompts that ask for
+several things at once ("where A, where B, and where C"): each part is judged on
+its own as well as the whole, so a part's code is less often missed. This adds
+one Jev request per part, for such prompts only. Searches between edits re-check
+the workspace faster on large repositories. No setup changes.
 
 ### Upgrading to 0.8.0
 
