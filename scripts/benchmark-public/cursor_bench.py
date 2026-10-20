@@ -98,7 +98,8 @@ VARIANTS = {'tuned': (TUNED_RULE, 'install-tuned'), 'tuned2': (TUNED2_RULE, 'ins
 CURSOR_ENV = {'pointer': {'OKO_CURSOR_PREFETCH': 'pointer'}}
 # `release`: the project exactly as `oko setup --client cursor` from the --oko
 # build leaves it (its header, cap and rule), with the neutral prompt line.
-OKO_CONDITIONS = ('oko', 'tuned', 'tuned2', 'tuned3', 'pointer', 'lean', 'release')
+# `next`: the same from the --exp-oko build, to compare two builds' setups.
+OKO_CONDITIONS = ('oko', 'tuned', 'tuned2', 'tuned3', 'pointer', 'lean', 'release', 'next')
 SEARCH_FIRST = ('Use Oko MCP search first to locate the relevant code, phrasing the search from the request. '
                 'Use its evidence when sufficient; native follow-up reads/searches are allowed.')
 ANSWER_FIRST = ("Oko's answer to this prompt may already be in your context; when it answers the question, answer "
@@ -151,9 +152,9 @@ def workspace(repo, condition, oko, env, tuned=None, tuned2=None, exp=None):
     git(work, 'init', '-q')
     if condition in OKO_CONDITIONS:
         build = {'oko': oko, 'tuned': tuned, 'tuned2': tuned2, 'tuned3': tuned, 'pointer': exp, 'lean': exp,
-                 'release': oko}[condition]
+                 'release': oko, 'next': exp}[condition]
         install = HOME / (VARIANTS[condition][1] if condition in VARIANTS
-                          else 'install-release' if condition == 'release' else 'install')
+                          else f'install-{condition}' if condition in ('release', 'next') else 'install')
         # Setup saves a key it finds in the environment to the Keychain, which
         # waits on a macOS prompt; a key in the project's .env it only uses.
         # The .env is removed before the baseline commit and the sessions.
@@ -274,7 +275,7 @@ def run_session(session, work, timeout, env, out, effort=None, tuned_prompt=True
         if SEARCH_FIRST not in text:
             raise RuntimeError('Benchmark prompt changed; update the tuned condition')
         text = text.replace(SEARCH_FIRST, ANSWER_FIRST)
-    if session['condition'] in ('pointer', 'lean', 'release'):
+    if session['condition'] in ('pointer', 'lean', 'release', 'next'):
         if SEARCH_FIRST not in text:
             raise RuntimeError('Benchmark prompt changed; update the pointer and lean conditions')
         text = text.replace(SEARCH_FIRST, NEUTRAL)
@@ -346,7 +347,7 @@ def main():
     wanted = set(args.tasks.split(',')) if args.tasks else set()
     conditions = tuple(args.conditions.split(','))
     if (not set(conditions) <= {'native', *OKO_CONDITIONS}
-            or ({'pointer', 'lean'} & set(conditions) and not args.exp_oko)
+            or ({'pointer', 'lean', 'next'} & set(conditions) and not args.exp_oko)
             or ({'tuned', 'tuned3'} & set(conditions) and not args.tuned_oko)
             or ('tuned2' in conditions and not args.tuned2_oko)):
         parser.error('Conditions are native, oko, tuned and tuned2; tuned needs --tuned-oko, tuned2 --tuned2-oko')
