@@ -5,7 +5,8 @@
 Four benchmarks: two public retrieval benchmarks that score what Oko returns,
 our own agent benchmark that times whole coding sessions, and Sense's agent
 benchmark, run against Sense on the same evening. Raw per-task results are in
-[`benchmarks/published/0.7.0/`](../benchmarks/published/0.7.0/), with Pi's run in
+[`benchmarks/published/0.9.0/`](../benchmarks/published/0.9.0/) for the latest
+agent sessions and [`0.7.0/`](../benchmarks/published/0.7.0/) for the rest, with Pi's earlier run in
 [`0.7.2/`](../benchmarks/published/0.7.2/) and Cursor's in
 [`cursor/`](../benchmarks/published/cursor/) (and
 [`0.6.1/`](../benchmarks/published/0.6.1/), [`0.6.0/`](../benchmarks/published/0.6.0/)
@@ -312,6 +313,72 @@ build scored 0.908 in the paired run: five runs of one task move this number a
 lot, which is why the table above stays as it was measured.
 
 ## Agent sessions
+
+### Oko 0.9.0: Claude Code, Codex, OpenCode and Pi (October 2026)
+
+The release this page describes. The same nine tasks on Astro, HTTPX and ripgrep,
+each client with its own search and with Oko (setup's guidance and the prompt
+hook), interleaved in one run on 20 October 2026. Models: Claude Sonnet 5.5
+(`claude-sonnet-5-5`) in Claude Code; GPT-6.1 Sol in Codex, OpenCode and Pi; low
+effort. Oko from commit `892ae95`. Every client starts each session fresh: no
+memory, saved sessions or project instructions, checked offline and by a paid
+memory canary per client.
+
+OpenAI stopped answering Pi's account part way through ("temporarily
+unavailable"), and the runner stops on any failed session rather than retry
+it, so the run ended at 164 of 216 sessions: 20 or 21 per client and side,
+balanced across tasks.
+
+| Coding tool | Sessions per side | Passed | Mean seconds | Median seconds | Tokens per session | Tool calls per session |
+|---|---:|---:|---:|---:|---:|---:|
+| Claude Code | 20 | 19 → 20 | 12.1 → 6.4 (−47%) | 12.6 → 5.4 (−57%) | 24,271 → 13,627 (−44%) | 3.50 → 0.40 (−89%) |
+| Codex | 20 | 20 → 20 | 13.8 → 10.2 (−26%) | 13.2 → 10.6 (−20%) | 45,395 → 26,004 (−43%) | 3.00 → 0.60 (−80%) |
+| OpenCode | 21 | 21 → 21 | 18.0 → 9.6 (−47%) | 16.8 → 7.6 (−55%) | 13,196 → 7,528 (−43%) | 3.67 → 0.48 (−87%) |
+| Pi | 21 | 20 → 21 | 16.7 → 8.2 (−51%) | 17.2 → 7.3 (−58%) | 9,737 → 6,495 (−33%) | 3.57 → 0.52 (−85%) |
+| **All** | 82 | 80 → 82 | 15.2 → 8.6 (−43%) | 13.6 → 7.2 (−47%) | 22,865 → 13,257 (−42%) | 3.44 → 0.50 (−85%) |
+
+Estimated model cost (cache reads at a tenth of input, cache writes at 1.25×,
+output at 5×) fell 31% overall: Claude Code 33%, Codex 36%, OpenCode 27%, Pi 25%.
+Search tasks fell most (median time −53%, tool calls −92%); edit tasks still
+took 36% less median time. Raw data:
+[`0.9.0/agent-sessions/report-native.json`](../benchmarks/published/0.9.0/agent-sessions/report-native.json).
+
+#### Against the previous release
+
+What 0.9.0 changes: a prompt that asks for several things ("where A, where B,
+and where C") is judged part by part as well as whole, and an accepted match
+that overlaps a shown excerpt widens it instead of being dropped. The same
+nine tasks with the prompt hook, on `main` before the change (`16910f3`) and on
+`892ae95`, interleaved, 216 sessions:
+
+| Coding tool | Passed | Median seconds | Tokens per session | Tool calls per session | Jev requests per session |
+|---|---:|---:|---:|---:|---:|
+| Claude Code | 27 → 26 of 27 | 5.8 → 5.2 (−12%) | 17,477 → 14,825 (−15%) | 0.81 → 0.52 | 1.00 → 2.56 |
+| Codex | 27 → 27 of 27 | 10.8 → 9.8 (−9%) | 32,781 → 25,369 (−23%) | 0.89 → 0.63 | 1.56 → 2.44 |
+| OpenCode | 27 → 27 of 27 | 9.3 → 10.1 (+8%) | 8,285 → 8,395 (+1%) | 0.63 → 0.63 | 1.48 → 2.44 |
+| Pi | 27 → 27 of 27 | 8.3 → 7.6 (−8%) | 7,665 → 6,885 (−10%) | 0.78 → 0.63 | 1.59 → 2.56 |
+| **All** | 108 → 107 of 108 | 8.8 → 8.3 (−5%) | 16,552 → 13,869 (−16%) | 0.78 → 0.60 | 1.41 → 2.50 |
+
+Search sessions answered from the first answer alone, with no tool call, rose
+from 33 to 50 of 72. Jev requests rise only
+for prompts that split, one per part, about $0.0006 per session at list price.
+Raw data: [`0.9.0/agent-sessions/report-previous.json`](../benchmarks/published/0.9.0/agent-sessions/report-previous.json).
+
+In Cursor (Grok 4.7 High, 54 sessions, 0.8.0's setup against 0.9.0's; tokens
+from Cursor's usage page, split between sessions by time):
+
+| Metric | Previous | 0.9.0 |
+|---|---:|---:|
+| Passed | 24 | 26 |
+| Mean seconds | 61.8 | 53.8 |
+| Median seconds | 34.8 | 26.4 |
+| Tokens per session (usage page) | 123,050 | 86,032 |
+| Model requests per session | 3.42 | 2.50 |
+| Tool calls per session | 3.74 | 2.11 |
+
+Without astro-forwarded-empty, the duplicate-helper task both versions miss
+(below), tokens fell 15% and median time from 33.2 to 25.8 s, 24/24 passing on
+both sides. Raw data: [`0.9.0/cursor/sessions.json`](../benchmarks/published/0.9.0/cursor/sessions.json).
 
 ### Cursor: 54 sessions (October 2026)
 

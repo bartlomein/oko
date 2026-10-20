@@ -1,0 +1,2325 @@
+[
+ {
+  "repo": "astro",
+  "task": "astro-image-probe-authorization",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":108,\"endLine\":143}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Grep"
+  ],
+  "seconds": 28.451,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/87859d58-40b4-4840-82a5-ff4d5d684534/87859d58-40b4-4840-82a5-ff4d5d684534.jsonl",
+  "thoughts": [
+   "7s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.42,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:20:37Z",
+  "endedAt": "2026-10-20T09:21:40Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 48679,
+  "requests": 1.51
+ },
+ {
+  "repo": "astro",
+  "task": "astro-image-probe-authorization",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "seconds": 23.221,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/2010c350-0a58-4f9f-899d-603ea175ec8d/2010c350-0a58-4f9f-899d-603ea175ec8d.jsonl",
+  "thoughts": [
+   "4s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.75,
+   "thinkingEndsSeconds": [
+    7.1
+   ]
+  },
+  "startedAt": "2026-10-20T09:21:47Z",
+  "endedAt": "2026-10-20T09:22:45Z",
+  "toolCalls": 4,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 72244,
+  "requests": 2.22
+ },
+ {
+  "repo": "astro",
+  "task": "astro-action-key-guards",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "tools": [
+   "Grep",
+   "Read"
+  ],
+  "seconds": 29.542,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/247f7ef8-92f9-4e39-b813-13c8b14e5d40/247f7ef8-92f9-4e39-b813-13c8b14e5d40.jsonl",
+  "thoughts": [
+   "6s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.81,
+   "thinkingEndsSeconds": [
+    10.0
+   ]
+  },
+  "startedAt": "2026-10-20T09:22:53Z",
+  "endedAt": "2026-10-20T09:23:48Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 93700,
+  "requests": 3.04
+ },
+ {
+  "repo": "astro",
+  "task": "astro-action-key-guards",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "tools": [
+   "Grep",
+   "Grep",
+   "Read"
+  ],
+  "seconds": 32.651,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/0d245523-87e7-4792-9d4b-16d4902b16a4/0d245523-87e7-4792-9d4b-16d4902b16a4.jsonl",
+  "thoughts": [
+   "4s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.87,
+   "thinkingEndsSeconds": [
+    7.6
+   ]
+  },
+  "startedAt": "2026-10-20T09:23:56Z",
+  "endedAt": "2026-10-20T09:25:03Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 69583,
+  "requests": 2.29
+ },
+ {
+  "repo": "astro",
+  "task": "astro-forwarded-empty",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "`getFirstForwardedValue` now returns `undefined` when the first forwarded value is empty or whitespace-only, and it still does not fall through to a later value.\n\nThe same change is in both copies:\n\n- `packages/internal-helpers/src/request.ts`\n- `packages/astro/src/core/app/validate-headers.ts`\n\nTrimming, array handling via `toString()`, and `null`/`undefined` handling are unchanged. `isValidIpAddress` and `getValidatedIpFromHeader` were not edited.\n\nBuilds and tests were not run. The existing unit test in `packages/internal-helpers/test/request.test.ts` still expects an empty string input to return `''`.",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-release-astro-oko:search",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Glob",
+   "Grep",
+   "StrReplace",
+   "StrReplace",
+   "Read",
+   "Read"
+  ],
+  "seconds": 263.453,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/14154f15-a86a-4a1d-b023-7b98155be6e4/14154f15-a86a-4a1d-b023-7b98155be6e4.jsonl",
+  "thoughts": [
+   "35s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.84,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:25:10Z",
+  "endedAt": "2026-10-20T09:30:00Z",
+  "toolCalls": 19,
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "passed": false,
+  "tokens": 659194,
+  "requests": 13.94
+ },
+ {
+  "repo": "astro",
+  "task": "astro-forwarded-empty",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "`getFirstForwardedValue` now returns `undefined` when the first forwarded value is empty or only whitespace, and it still does not fall through to a later value.\n\nBoth copies were updated, along with the comment immediately above each one:\n\n- `packages/internal-helpers/src/request.ts`\n- `packages/astro/src/core/app/validate-headers.ts`\n\nTrimming, array handling via `toString()`, and `null`/`undefined` handling are unchanged. `getValidatedIpFromHeader` and `isValidIpAddress` were left as they were.\n\nI re-read both edited helpers to confirm the patch. I did not run builds or tests.",
+  "tools": [
+   "StrReplace",
+   "StrReplace",
+   "Read",
+   "Read"
+  ],
+  "seconds": 86.218,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/121cc12b-bbbf-42a3-bc99-b464dcd956d0/121cc12b-bbbf-42a3-bc99-b464dcd956d0.jsonl",
+  "thoughts": [
+   "72s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.57,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:30:07Z",
+  "endedAt": "2026-10-20T09:32:08Z",
+  "toolCalls": 4,
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "passed": false,
+  "tokens": 16483,
+  "requests": 0.45
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-decoder-chain",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "tools": [],
+  "seconds": 8.478,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/84057467-a20b-411a-ac57-e857b050ff9f/84057467-a20b-411a-ac57-e857b050ff9f.jsonl",
+  "thoughts": [
+   "5s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.41,
+   "thinkingEndsSeconds": [
+    7.9
+   ]
+  },
+  "startedAt": "2026-10-20T09:32:15Z",
+  "endedAt": "2026-10-20T09:33:06Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 96121,
+  "requests": 2.66
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-decoder-chain",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-release-httpx-oko:search"
+  ],
+  "seconds": 91.795,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/5e13bebb-366e-4b96-9eef-bc5ccc77faf8/5e13bebb-366e-4b96-9eef-bc5ccc77faf8.jsonl",
+  "thoughts": [
+   "7s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.43,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:33:14Z",
+  "endedAt": "2026-10-20T09:35:23Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 84027,
+  "requests": 2.77
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-async-auth-body",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "tools": [],
+  "seconds": 35.929,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/e4ff78bf-3d7e-407e-8186-08ed89b3dd97/e4ff78bf-3d7e-407e-8186-08ed89b3dd97.jsonl",
+  "thoughts": [
+   "31s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.94,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:35:31Z",
+  "endedAt": "2026-10-20T09:36:33Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 55331,
+  "requests": 1.74
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-async-auth-body",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "tools": [],
+  "seconds": 21.147,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/2978060f-46a2-426c-b8d8-07b046cd7d01/2978060f-46a2-426c-b8d8-07b046cd7d01.jsonl",
+  "thoughts": [
+   "17s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.06,
+   "thinkingEndsSeconds": [
+    20.3
+   ]
+  },
+  "startedAt": "2026-10-20T09:36:40Z",
+  "endedAt": "2026-10-20T09:37:36Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 33430,
+  "requests": 1.07
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-reason-fallback",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "`codes.get_reason_phrase` now returns the literal string `Unknown Status` when an integer is not a known status code. Recognized phrases, enum and int inputs, and the other status classification helpers are unchanged.\n\nI only edited the `ValueError` fallback in `httpx/_status_codes.py`. No builds, tests, or other checks were run.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 14.807,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/7564137d-ef47-429e-a251-df60fa4cb0db/7564137d-ef47-429e-a251-df60fa4cb0db.jsonl",
+  "thoughts": [
+   "5s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.84,
+   "thinkingEndsSeconds": [
+    8.9,
+    13.3
+   ]
+  },
+  "startedAt": "2026-10-20T09:37:44Z",
+  "endedAt": "2026-10-20T09:38:19Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.05565820913761854,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 30846,
+  "requests": 1.04
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-reason-fallback",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "`codes.get_reason_phrase` in `httpx/_status_codes.py` now returns the literal string `Unknown Status` when an integer is not a known status code.\n\nKnown phrases still come from `codes(value).phrase`. Enum and int inputs are unchanged, and the status classification helpers were left as they are. Only that lookup method was edited.\n\nI confirmed the updated method in the file. Builds and tests were not run, as requested.",
+  "tools": [
+   "StrReplace",
+   "Read"
+  ],
+  "seconds": 31.722,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/2fe2c0c7-ada7-43d4-ae44-3526fbdf4bf1/2fe2c0c7-ada7-43d4-ae44-3526fbdf4bf1.jsonl",
+  "thoughts": [
+   "6s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.18,
+   "thinkingEndsSeconds": [
+    9.0
+   ]
+  },
+  "startedAt": "2026-10-20T09:38:27Z",
+  "endedAt": "2026-10-20T09:39:33Z",
+  "toolCalls": 2,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.04708687495440245,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 92103,
+  "requests": 3.14
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-expansion",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":452,\"endLine\":455},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":48,\"endLine\":51}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "GetDynamicTools",
+   "mcp:project-0-release-ripgrep-oko:search"
+  ],
+  "seconds": 106.294,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/c8d007f6-bd19-4583-9654-cc72fcdf6219/c8d007f6-bd19-4583-9654-cc72fcdf6219.jsonl",
+  "thoughts": [
+   "7s"
+  ],
+  "trace": {
+   "ttftSeconds": null,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:39:40Z",
+  "endedAt": "2026-10-20T09:42:02Z",
+  "toolCalls": 7,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 133028,
+  "requests": 4.17
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-expansion",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":452,\"endLine\":455},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":48,\"endLine\":51}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-next-ripgrep-oko:search",
+   "Read"
+  ],
+  "seconds": 236.321,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/46e62aac-b748-4243-9d78-250f3ada6f5f/46e62aac-b748-4243-9d78-250f3ada6f5f.jsonl",
+  "thoughts": [
+   "8s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.24,
+   "thinkingEndsSeconds": [
+    11.2
+   ]
+  },
+  "startedAt": "2026-10-20T09:42:10Z",
+  "endedAt": "2026-10-20T09:46:48Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 170731,
+  "requests": 4.81
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-printed-bytes",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":34,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":59}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-next-ripgrep-oko:search"
+  ],
+  "seconds": 61.138,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/b9cedafb-ef3c-4990-a256-40ab4776b564/b9cedafb-ef3c-4990-a256-40ab4776b564.jsonl",
+  "thoughts": [
+   "10s"
+  ],
+  "trace": {
+   "ttftSeconds": 5.35,
+   "thinkingEndsSeconds": [
+    15.4,
+    18.2,
+    60.2
+   ]
+  },
+  "startedAt": "2026-10-20T09:46:56Z",
+  "endedAt": "2026-10-20T09:48:18Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 79015,
+  "requests": 2.5
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-printed-bytes",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":36,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":59}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-release-ripgrep-oko:search",
+   "mcp:project-0-release-ripgrep-oko:search"
+  ],
+  "seconds": 61.868,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/1b6dd83b-04a0-4d33-a059-f9b5c20ef467/1b6dd83b-04a0-4d33-a059-f9b5c20ef467.jsonl",
+  "thoughts": [
+   "5s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.8,
+   "thinkingEndsSeconds": [
+    7.8
+   ]
+  },
+  "startedAt": "2026-10-20T09:48:26Z",
+  "endedAt": "2026-10-20T09:50:03Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 119858,
+  "requests": 3.83
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-hyphen",
+  "condition": "release",
+  "repetition": 1,
+  "answer": "Named replacement references can now include ASCII hyphens.\n\nIn `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` accepts `b'-'` along with digits, letters, and underscore, and the comment above it lists hyphen as allowed. `find_cap_ref` is unchanged, so both `$first-name` and `${first-name}` are named captures. Digit-only references still parse as numbers, and `$$` escaping and malformed references behave as before.\n\nNo builds or tests were run; the runner will do those checks. The change is local and uncommitted.",
+  "tools": [
+   "StrReplace",
+   "Read"
+  ],
+  "seconds": 22.049,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/30dfc416-0fb8-4f9b-a269-c441395d2786/30dfc416-0fb8-4f9b-a269-c441395d2786.jsonl",
+  "thoughts": [
+   "11s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.8,
+   "thinkingEndsSeconds": [
+    14.0
+   ]
+  },
+  "startedAt": "2026-10-20T09:50:11Z",
+  "endedAt": "2026-10-20T09:51:01Z",
+  "toolCalls": 2,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 1.2394742500036955,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 92215,
+  "requests": 2.87
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-hyphen",
+  "condition": "next",
+  "repetition": 1,
+  "answer": "Named replacement references now accept an ASCII hyphen in the capture name.\n\nIn `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` treats `b'-'` as a valid capture-name byte, alongside digits, letters, and underscore. The doc comment immediately above that predicate now lists hyphen as allowed. `find_cap_ref` is unchanged, so `$first-name` and `${first-name}` both pick up the hyphen through the existing scan, while numeric references, `$$` escaping, and malformed references stay as they were.\n\nNo builds or tests were run.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 20.068,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/3fc21ac9-d9df-430c-abc7-511391fa91fc/3fc21ac9-d9df-430c-abc7-511391fa91fc.jsonl",
+  "thoughts": [
+   "10s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.9,
+   "thinkingEndsSeconds": [
+    13.2,
+    17.9
+   ]
+  },
+  "startedAt": "2026-10-20T09:51:09Z",
+  "endedAt": "2026-10-20T09:52:05Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 1.0939721250906587,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 66400,
+  "requests": 2.15
+ },
+ {
+  "repo": "astro",
+  "task": "astro-image-probe-authorization",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":108,\"endLine\":143}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "seconds": 56.055,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/c3ca3e8e-f1dd-454e-adaa-ba074284905b/c3ca3e8e-f1dd-454e-adaa-ba074284905b.jsonl",
+  "thoughts": [
+   "4s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.17,
+   "thinkingEndsSeconds": [
+    7.4
+   ]
+  },
+  "startedAt": "2026-10-20T09:52:13Z",
+  "endedAt": "2026-10-20T09:53:43Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 84346,
+  "requests": 2.63
+ },
+ {
+  "repo": "astro",
+  "task": "astro-image-probe-authorization",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":108,\"endLine\":143}]}",
+  "tools": [
+   "GetDynamicTools",
+   "Read",
+   "Read"
+  ],
+  "seconds": 45.133,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/c96886bd-584c-4dc0-83f3-34abbc408922/c96886bd-584c-4dc0-83f3-34abbc408922.jsonl",
+  "thoughts": [
+   "9s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.81,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:53:51Z",
+  "endedAt": "2026-10-20T09:55:10Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 54912,
+  "requests": 1.76
+ },
+ {
+  "repo": "astro",
+  "task": "astro-action-key-guards",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-release-astro-oko:search"
+  ],
+  "seconds": 29.368,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/e97dff01-cb54-45fe-97d3-eb82feda4631/e97dff01-cb54-45fe-97d3-eb82feda4631.jsonl",
+  "thoughts": [
+   "briefly"
+  ],
+  "trace": {
+   "ttftSeconds": 12.33,
+   "thinkingEndsSeconds": [
+    12.4
+   ]
+  },
+  "startedAt": "2026-10-20T09:55:19Z",
+  "endedAt": "2026-10-20T09:56:14Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 84907,
+  "requests": 2.68
+ },
+ {
+  "repo": "astro",
+  "task": "astro-action-key-guards",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-next-astro-oko:search"
+  ],
+  "seconds": 26.247,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/207aa474-837b-43ef-9148-f7987daeb3d1/207aa474-837b-43ef-9148-f7987daeb3d1.jsonl",
+  "thoughts": [
+   "5s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.59,
+   "thinkingEndsSeconds": [
+    8.5
+   ]
+  },
+  "startedAt": "2026-10-20T09:56:22Z",
+  "endedAt": "2026-10-20T09:57:23Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 63417,
+  "requests": 2.06
+ },
+ {
+  "repo": "astro",
+  "task": "astro-forwarded-empty",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "`getFirstForwardedValue` in `packages/internal-helpers/src/request.ts` now returns `undefined` when the first forwarded value is empty or whitespace-only.\n\nThe helper still trims and still reads only the first comma-separated entry, including when the input is an array (`toString()` then split). `null` and `undefined` still return `undefined`. A blank first entry is not replaced by a later one, so `\", 203.0.113.50\"` stays `undefined`. `isValidIpAddress` and `getValidatedIpFromHeader` are unchanged.\n\nNo builds or tests were run.",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-next-astro-oko:search",
+   "mcp:project-0-next-astro-oko:search",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "StrReplace",
+   "Read"
+  ],
+  "seconds": 280.159,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/af4d9e47-9395-4a62-be53-0e860b05e7a2/af4d9e47-9395-4a62-be53-0e860b05e7a2.jsonl",
+  "thoughts": [
+   "23s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.91,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T09:57:31Z",
+  "endedAt": "2026-10-20T10:02:37Z",
+  "toolCalls": 13,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.1835684161633253,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 458123,
+  "requests": 10.81
+ },
+ {
+  "repo": "astro",
+  "task": "astro-forwarded-empty",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "`getFirstForwardedValue` now returns `undefined` when the first forwarded value is empty or whitespace-only, and it still does not skip that slot for a later value.\n\nBoth copies of the helper were updated, and only the function plus the comment directly above it:\n\n- `packages/internal-helpers/src/request.ts` still trims, still accepts arrays, and still treats `null` and `undefined` as `undefined`. `isValidIpAddress` and `getValidatedIpFromHeader` were not edited.\n- `packages/astro/src/core/app/validate-headers.ts` uses the same first-value rule for the app's forwarded-header path.\n\nA non-empty first value is still trimmed and returned, including when later values exist. Inputs such as `\"\"`, `\"   \"`, and `\"  , later\"` yield `undefined`.\n\nNo builds, tests, or installs were run. The existing unit test in `packages/internal-helpers/test/request.test.ts` still expects `getFirstForwardedValue('')` to be `''`, and that assertion was left as-is.",
+  "tools": [
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Read",
+   "Grep",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "StrReplace",
+   "StrReplace",
+   "Read",
+   "Read"
+  ],
+  "seconds": 250.232,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/a6f678e7-70c8-4c6a-b76d-0a030f5d1270/a6f678e7-70c8-4c6a-b76d-0a030f5d1270.jsonl",
+  "thoughts": [
+   "36s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.63,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:02:45Z",
+  "endedAt": "2026-10-20T10:07:30Z",
+  "toolCalls": 17,
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "passed": false,
+  "tokens": 457963,
+  "requests": 10.02
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-decoder-chain",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "tools": [
+   "Read"
+  ],
+  "seconds": 34.848,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/308c39fb-4f51-42d8-9e84-df4a2b2bc835/308c39fb-4f51-42d8-9e84-df4a2b2bc835.jsonl",
+  "thoughts": [
+   "9s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.38,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:07:38Z",
+  "endedAt": "2026-10-20T10:08:47Z",
+  "toolCalls": 1,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 101401,
+  "requests": 2.62
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-decoder-chain",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "tools": [],
+  "seconds": 12.71,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/8bb7f7b9-2bea-4d74-a1d6-f0e2db081f46/8bb7f7b9-2bea-4d74-a1d6-f0e2db081f46.jsonl",
+  "thoughts": [
+   "8s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.65,
+   "thinkingEndsSeconds": [
+    11.7
+   ]
+  },
+  "startedAt": "2026-10-20T10:08:54Z",
+  "endedAt": "2026-10-20T10:09:41Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 30538,
+  "requests": 1.01
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-async-auth-body",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":111}]}",
+  "tools": [],
+  "seconds": 18.971,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/f2d4951b-d50f-405b-9b7f-a0498e60cf25/f2d4951b-d50f-405b-9b7f-a0498e60cf25.jsonl",
+  "thoughts": [
+   "15s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.16,
+   "thinkingEndsSeconds": [
+    18.4
+   ]
+  },
+  "startedAt": "2026-10-20T10:09:49Z",
+  "endedAt": "2026-10-20T10:10:28Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 22888,
+  "requests": 0.75
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-async-auth-body",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "tools": [],
+  "seconds": 33.693,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/a2810433-f1e6-4290-a555-cb17581efbcb/a2810433-f1e6-4290-a555-cb17581efbcb.jsonl",
+  "thoughts": [
+   "29s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.42,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:10:36Z",
+  "endedAt": "2026-10-20T10:11:45Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 41562,
+  "requests": 1.33
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-reason-fallback",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "`codes.get_reason_phrase` now returns the literal string `Unknown Status` when an integer is not a known status code.\n\nKnown phrases still come from `codes(value).phrase`. The `ValueError` path is the only change, so enum and int inputs and the status classification helpers are unchanged.\n\nI confirmed the edit in `httpx/_status_codes.py`. I did not run builds or tests.",
+  "tools": [
+   "StrReplace",
+   "Read"
+  ],
+  "seconds": 19.04,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/8a8cbb91-d516-4f5b-b74a-6521e5076a6f/8a8cbb91-d516-4f5b-b74a-6521e5076a6f.jsonl",
+  "thoughts": [
+   "8s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.74,
+   "thinkingEndsSeconds": [
+    11.7
+   ]
+  },
+  "startedAt": "2026-10-20T10:11:53Z",
+  "endedAt": "2026-10-20T10:12:39Z",
+  "toolCalls": 2,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.06274333386681974,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 69450,
+  "requests": 2.34
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-reason-fallback",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "`codes.get_reason_phrase` in `httpx/_status_codes.py` now returns the literal string `Unknown Status` when an integer code is not a known status.\n\nRecognized codes still return their existing reason phrase through `codes(value).phrase`. Enum and integer inputs are unchanged, and the informational, success, redirect, client-error, and server-error helpers are untouched.\n\nI confirmed the edited method by reading it. I did not run builds or tests, and I did not commit.",
+  "tools": [
+   "StrReplace",
+   "Read"
+  ],
+  "seconds": 14.812,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/8b9b676d-4649-4aa1-b2fc-ad00e49320c7/8b9b676d-4649-4aa1-b2fc-ad00e49320c7.jsonl",
+  "thoughts": [
+   "7s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.85,
+   "thinkingEndsSeconds": [
+    9.5,
+    11.8,
+    13.8
+   ]
+  },
+  "startedAt": "2026-10-20T10:12:46Z",
+  "endedAt": "2026-10-20T10:13:35Z",
+  "toolCalls": 2,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.04779608407989144,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 83308,
+  "requests": 2.81
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-expansion",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":450,\"endLine\":456},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-next-ripgrep-oko:search"
+  ],
+  "seconds": 71.694,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/f0be1191-0d34-4cc6-9faa-60c4ebba43bf/f0be1191-0d34-4cc6-9faa-60c4ebba43bf.jsonl",
+  "thoughts": [
+   "7s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.63,
+   "thinkingEndsSeconds": [
+    10.5,
+    16.7
+   ]
+  },
+  "startedAt": "2026-10-20T10:13:43Z",
+  "endedAt": "2026-10-20T10:15:29Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 111179,
+  "requests": 3.54
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-expansion",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":441,\"endLine\":460},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-release-ripgrep-oko:search"
+  ],
+  "seconds": 55.883,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/f7ca2871-0a4a-49c6-8c85-41a7732ee05a/f7ca2871-0a4a-49c6-8c85-41a7732ee05a.jsonl",
+  "thoughts": [
+   "6s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.14,
+   "thinkingEndsSeconds": [
+    9.0
+   ]
+  },
+  "startedAt": "2026-10-20T10:15:37Z",
+  "endedAt": "2026-10-20T10:17:08Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 92870,
+  "requests": 2.9
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-printed-bytes",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":36,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":65}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-release-ripgrep-oko:search",
+   "mcp:project-0-release-ripgrep-oko:search",
+   "Grep",
+   "Read"
+  ],
+  "seconds": 53.828,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/780a2fff-ae41-478a-bd6c-654097cdaee6/780a2fff-ae41-478a-bd6c-654097cdaee6.jsonl",
+  "thoughts": [
+   "6s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.99,
+   "thinkingEndsSeconds": [
+    9.1,
+    11.4
+   ]
+  },
+  "startedAt": "2026-10-20T10:17:15Z",
+  "endedAt": "2026-10-20T10:18:36Z",
+  "toolCalls": 5,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 178878,
+  "requests": 5.32
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-printed-bytes",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":65}]}",
+  "tools": [],
+  "seconds": 27.395,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/c8650ec3-8bd3-426d-8269-393c67bf01f7/c8650ec3-8bd3-426d-8269-393c67bf01f7.jsonl",
+  "thoughts": [
+   "19s"
+  ],
+  "trace": {
+   "ttftSeconds": 7.38,
+   "thinkingEndsSeconds": [
+    26.3
+   ]
+  },
+  "startedAt": "2026-10-20T10:18:44Z",
+  "endedAt": "2026-10-20T10:19:45Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 69196,
+  "requests": 2.1
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-hyphen",
+  "condition": "next",
+  "repetition": 2,
+  "answer": "Named replacement references can now include ASCII hyphens.\n\nIn `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` accepts `b'-'` alongside digits, ASCII letters, and underscores. The doc comment immediately above that predicate now lists hyphens. `find_cap_ref` is unchanged, so `$first-name` and `${first-name}` both pick up the hyphen through the same scan, and numeric groups, `$$` escaping, and malformed references still follow the existing parse path.\n\nNo builds or tests were run, and the regex engine and tests were left untouched.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 35.885,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/fb4cf2d8-9921-436e-ba58-fcf4479584ec/fb4cf2d8-9921-436e-ba58-fcf4479584ec.jsonl",
+  "thoughts": [
+   "26s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.72,
+   "thinkingEndsSeconds": [
+    28.7,
+    34.2
+   ]
+  },
+  "startedAt": "2026-10-20T10:19:53Z",
+  "endedAt": "2026-10-20T10:20:51Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 1.0136553749907762,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 66047,
+  "requests": 2.06
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-hyphen",
+  "condition": "release",
+  "repetition": 2,
+  "answer": "Named replacement captures can now include ASCII hyphens. In `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` treats `b'-'` as a valid capture-name byte, alongside digits, letters, and underscore. The doc comment immediately above that predicate now states that names such as `first-name` are accepted in both `$first-name` and `${first-name}`.\n\nNumeric references, doubled-dollar escaping, and other malformed-reference checks are unchanged, because those paths still depend on the same parser. No builds or tests were run.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 41.112,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/2f107262-ff72-42fa-8c7f-2b580946e6c7/2f107262-ff72-42fa-8c7f-2b580946e6c7.jsonl",
+  "thoughts": [
+   "15s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.01,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:20:58Z",
+  "endedAt": "2026-10-20T10:22:15Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.6205633329227567,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 42455,
+  "requests": 1.36
+ },
+ {
+  "repo": "astro",
+  "task": "astro-image-probe-authorization",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":108,\"endLine\":143}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "seconds": 24.351,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/207225a7-9378-4d71-aab1-40d5a00c0841/207225a7-9378-4d71-aab1-40d5a00c0841.jsonl",
+  "thoughts": [
+   "4s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.07,
+   "thinkingEndsSeconds": [
+    7.0
+   ]
+  },
+  "startedAt": "2026-10-20T10:22:23Z",
+  "endedAt": "2026-10-20T10:23:22Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 49433,
+  "requests": 1.56
+ },
+ {
+  "repo": "astro",
+  "task": "astro-image-probe-authorization",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":46,\"endLine\":51},{\"path\":\"packages/astro/src/assets/utils/remoteProbe.ts\",\"startLine\":80,\"endLine\":86},{\"path\":\"packages/internal-helpers/src/remote.ts\",\"startLine\":118,\"endLine\":143}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "seconds": 24.338,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/0a050fbb-b5af-4009-a29a-2b292d09d88d/0a050fbb-b5af-4009-a29a-2b292d09d88d.jsonl",
+  "thoughts": [
+   "3s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.26,
+   "thinkingEndsSeconds": [
+    6.1
+   ]
+  },
+  "startedAt": "2026-10-20T10:23:30Z",
+  "endedAt": "2026-10-20T10:24:28Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 71554,
+  "requests": 2.23
+ },
+ {
+  "repo": "astro",
+  "task": "astro-action-key-guards",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "tools": [
+   "Grep",
+   "Read"
+  ],
+  "seconds": 25.336,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/326260b5-a373-4302-9099-fb16bfb732d2/326260b5-a373-4302-9099-fb16bfb732d2.jsonl",
+  "thoughts": [
+   "3s"
+  ],
+  "trace": {
+   "ttftSeconds": 5.38,
+   "thinkingEndsSeconds": [
+    8.6
+   ]
+  },
+  "startedAt": "2026-10-20T10:24:36Z",
+  "endedAt": "2026-10-20T10:25:28Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 78962,
+  "requests": 2.54
+ },
+ {
+  "repo": "astro",
+  "task": "astro-action-key-guards",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"packages/astro/src/actions/load.ts\",\"startLine\":27,\"endLine\":71},{\"path\":\"packages/internal-helpers/src/object.ts\",\"startLine\":1,\"endLine\":5}]}",
+  "tools": [
+   "Grep",
+   "Read"
+  ],
+  "seconds": 30.671,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/a0dbb46f-1624-4f3b-b5d6-02b0441a8237/a0dbb46f-1624-4f3b-b5d6-02b0441a8237.jsonl",
+  "thoughts": [
+   "6s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.86,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:25:36Z",
+  "endedAt": "2026-10-20T10:26:41Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 114112,
+  "requests": 3.71
+ },
+ {
+  "repo": "astro",
+  "task": "astro-forwarded-empty",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "`getFirstForwardedValue` now returns `undefined` when the first forwarded value is empty or whitespace-only, and it still does not skip that first value for a later one.\n\nBoth copies were updated, along with the comment immediately above each:\n\n- `packages/astro/src/core/app/validate-headers.ts`\n- `packages/internal-helpers/src/request.ts`\n\nTrimming, array handling, and `null`/`undefined` handling are unchanged. IP validation was not edited.\n\nA small Node check of the helper logic confirmed `undefined` for absent, empty, and whitespace-only first values (including `\" , later\"`), and the trimmed first value for normal strings and arrays. Project builds and tests were not run.",
+  "tools": [
+   "Read",
+   "Read",
+   "Read",
+   "StrReplace",
+   "StrReplace",
+   "Shell"
+  ],
+  "seconds": 135.893,
+  "error": null,
+  "okoServer": "release-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-astro/agent-transcripts/2d85fe73-4e5b-44f0-8e94-89cccf69b8a6/2d85fe73-4e5b-44f0-8e94-89cccf69b8a6.jsonl",
+  "thoughts": [
+   "46s"
+  ],
+  "trace": {
+   "ttftSeconds": 4.34,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:26:48Z",
+  "endedAt": "2026-10-20T10:29:30Z",
+  "toolCalls": 6,
+  "grade": {
+   "passed": false,
+   "unexpectedFiles": [
+    "packages/astro/src/core/app/validate-headers.ts"
+   ],
+   "reason": "Target missing/symlink or unrelated edits"
+  },
+  "passed": false,
+  "tokens": 165384,
+  "requests": 4.41
+ },
+ {
+  "repo": "astro",
+  "task": "astro-forwarded-empty",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "`getFirstForwardedValue` in `packages/internal-helpers/src/request.ts` now returns `undefined` when the first forwarded value is empty or only whitespace.\n\nThe helper still trims, still uses only the first comma-separated entry (including for arrays via `toString()`), and still returns `undefined` for `null` or `undefined`. An empty first value is not replaced by a later one, so `\"  , example.com\"` stays `undefined`. The comment above the helper describes that. IP validation (`isValidIpAddress`, `getValidatedIpFromHeader`) is unchanged.\n\nNo builds, tests, or dependency installs were run. The duplicate `getFirstForwardedValue` in `packages/astro/src/core/app/validate-headers.ts` was left as it was.",
+  "tools": [
+   "StrReplace",
+   "Read"
+  ],
+  "seconds": 137.956,
+  "error": null,
+  "okoServer": "next-astro 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-astro/agent-transcripts/cb0c216e-6d17-4df5-a4ca-250282594175/cb0c216e-6d17-4df5-a4ca-250282594175.jsonl",
+  "thoughts": [
+   "112s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.78,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:29:38Z",
+  "endedAt": "2026-10-20T10:32:31Z",
+  "toolCalls": 2,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.15086179203353822,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 122260,
+  "requests": 3.06
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-decoder-chain",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "tools": [],
+  "seconds": 10.577,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/1e579312-e5dc-49bb-81f6-3f86f7582b0d/1e579312-e5dc-49bb-81f6-3f86f7582b0d.jsonl",
+  "thoughts": [
+   "6s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.13,
+   "thinkingEndsSeconds": [
+    9.3
+   ]
+  },
+  "startedAt": "2026-10-20T10:32:39Z",
+  "endedAt": "2026-10-20T10:33:23Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 60104,
+  "requests": 1.65
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-decoder-chain",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"httpx/_models.py\",\"startLine\":699,\"endLine\":722},{\"path\":\"httpx/_decoders.py\",\"startLine\":203,\"endLine\":225}]}",
+  "tools": [],
+  "seconds": 10.591,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/bfc94623-d007-4a69-8bad-ab55f2cbc759/bfc94623-d007-4a69-8bad-ab55f2cbc759.jsonl",
+  "thoughts": [
+   "6s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.96,
+   "thinkingEndsSeconds": [
+    9.1
+   ]
+  },
+  "startedAt": "2026-10-20T10:33:31Z",
+  "endedAt": "2026-10-20T10:34:16Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 25560,
+  "requests": 0.86
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-async-auth-body",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "tools": [],
+  "seconds": 32.707,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/14d9208a-ba73-45f1-8248-7b89e916bf2c/14d9208a-ba73-45f1-8248-7b89e916bf2c.jsonl",
+  "thoughts": [
+   "29s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.64,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:34:23Z",
+  "endedAt": "2026-10-20T10:35:22Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 34088,
+  "requests": 1.12
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-async-auth-body",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"httpx/_client.py\",\"startLine\":1645,\"endLine\":1677},{\"path\":\"httpx/_auth.py\",\"startLine\":87,\"endLine\":110}]}",
+  "tools": [],
+  "seconds": 28.468,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/70b7ec9e-7d04-4bbc-9907-7873da3189cb/70b7ec9e-7d04-4bbc-9907-7873da3189cb.jsonl",
+  "thoughts": [
+   "24s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.21,
+   "thinkingEndsSeconds": [
+    27.5
+   ]
+  },
+  "startedAt": "2026-10-20T10:35:30Z",
+  "endedAt": "2026-10-20T10:36:32Z",
+  "toolCalls": 0,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 37500,
+  "requests": 1.19
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-reason-fallback",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "`codes.get_reason_phrase` now returns the literal string `Unknown Status` when an integer is not a known HTTP status code.\n\nIn `httpx/_status_codes.py`, the `ValueError` branch of `get_reason_phrase` used to return `\"\"`. Known phrases still come from `codes(value).phrase`, and enum or int inputs and the status classification helpers are unchanged.\n\nNo tests, builds, or dependency installs were run. The runner\u2019s focused checks were not executed here.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 14.796,
+  "error": null,
+  "okoServer": "next-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-httpx/agent-transcripts/60da8023-4562-4d3a-a926-3d6918a50f07/60da8023-4562-4d3a-a926-3d6918a50f07.jsonl",
+  "thoughts": [
+   "7s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.37,
+   "thinkingEndsSeconds": [
+    10.7,
+    13.5
+   ]
+  },
+  "startedAt": "2026-10-20T10:36:40Z",
+  "endedAt": "2026-10-20T10:37:15Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.04835491604171693,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 29048,
+  "requests": 0.96
+ },
+ {
+  "repo": "httpx",
+  "task": "httpx-reason-fallback",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "`codes.get_reason_phrase` now returns the literal string `Unknown Status` when an integer status code is not in the enum. Known phrases, enum and int inputs, and the status classification helpers are unchanged.\n\nThe edit is only the `ValueError` fallback in `httpx/_status_codes.py`. No tests, builds, or commits were run.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 16.941,
+  "error": null,
+  "okoServer": "release-httpx 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-httpx/agent-transcripts/a328dd6a-90d5-4303-80c4-355a4c711d59/a328dd6a-90d5-4303-80c4-355a4c711d59.jsonl",
+  "thoughts": [
+   "5s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.15,
+   "thinkingEndsSeconds": [
+    8.2
+   ]
+  },
+  "startedAt": "2026-10-20T10:37:23Z",
+  "endedAt": "2026-10-20T10:38:14Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.044041666900739074,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 57490,
+  "requests": 1.96
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-expansion",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":450,\"endLine\":459},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":34},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "seconds": 100.309,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/76535e19-cbf3-4d04-a153-fa2dabdd47cb/76535e19-cbf3-4d04-a153-fa2dabdd47cb.jsonl",
+  "thoughts": [
+   "7s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.96,
+   "thinkingEndsSeconds": [
+    9.5
+   ]
+  },
+  "startedAt": "2026-10-20T10:38:22Z",
+  "endedAt": "2026-10-20T10:40:38Z",
+  "toolCalls": 11,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 189156,
+  "requests": 5.61
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-expansion",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"crates/matcher/src/lib.rs\",\"startLine\":441,\"endLine\":460},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":31,\"endLine\":35},{\"path\":\"crates/matcher/src/interpolate.rs\",\"startLine\":46,\"endLine\":52}]}",
+  "tools": [
+   "Read",
+   "Read",
+   "Read",
+   "Grep",
+   "Grep",
+   "Grep"
+  ],
+  "seconds": 79.149,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/ab23ae19-389b-4668-8897-9dc8ecd8dbe7/ab23ae19-389b-4668-8897-9dc8ecd8dbe7.jsonl",
+  "thoughts": [
+   "11s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.8,
+   "thinkingEndsSeconds": [
+    13.4,
+    30.1
+   ]
+  },
+  "startedAt": "2026-10-20T10:40:45Z",
+  "endedAt": "2026-10-20T10:42:39Z",
+  "toolCalls": 6,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 128596,
+  "requests": 3.58
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-printed-bytes",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":36,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":59}]}",
+  "tools": [
+   "Grep",
+   "Read"
+  ],
+  "seconds": 61.15,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/59131f77-eb3f-4eb0-829a-49e77522efb3/59131f77-eb3f-4eb0-829a-49e77522efb3.jsonl",
+  "thoughts": [
+   "13s"
+  ],
+  "trace": {
+   "ttftSeconds": 3.9,
+   "thinkingEndsSeconds": [
+    16.7,
+    19.8,
+    59.6
+   ]
+  },
+  "startedAt": "2026-10-20T10:42:46Z",
+  "endedAt": "2026-10-20T10:44:08Z",
+  "toolCalls": 2,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 77086,
+  "requests": 2.42
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-printed-bytes",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "{\"results\":[{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":841,\"endLine\":847},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":36,\"endLine\":39},{\"path\":\"crates/printer/src/standard.rs\",\"startLine\":849,\"endLine\":867},{\"path\":\"crates/printer/src/counter.rs\",\"startLine\":52,\"endLine\":65}]}",
+  "tools": [
+   "GetDynamicTools",
+   "mcp:project-0-release-ripgrep-oko:search",
+   "mcp:project-0-release-ripgrep-oko:search"
+  ],
+  "seconds": 54.723,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/2e32c11a-5d45-4364-bfb0-8308682aeec0/2e32c11a-5d45-4364-bfb0-8308682aeec0.jsonl",
+  "thoughts": [
+   "4s"
+  ],
+  "trace": {
+   "ttftSeconds": 4.84,
+   "thinkingEndsSeconds": [
+    9.1
+   ]
+  },
+  "startedAt": "2026-10-20T10:44:16Z",
+  "endedAt": "2026-10-20T10:45:46Z",
+  "toolCalls": 3,
+  "grade": {
+   "correctFirst": true,
+   "correctTopFive": true,
+   "unexpectedEdits": [],
+   "leadingText": false,
+   "anchorsCovered": [
+    true,
+    true,
+    true
+   ],
+   "passed": true
+  },
+  "passed": true,
+  "tokens": 140665,
+  "requests": 4.38
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-hyphen",
+  "condition": "release",
+  "repetition": 3,
+  "answer": "Named replacement references can now include ASCII hyphens. `$first-name` and `${first-name}` both use the same capture-name scan in `crates/matcher/src/interpolate.rs`.\n\n`is_valid_cap_letter` now treats `b'-'` as a valid capture-name byte, alongside digits, letters, and underscore. The comment directly above that predicate lists the hyphen. Numeric references still go through `u32` parsing, so `$1` stays a number. Doubled-dollar escaping and malformed references are unchanged because this edit only widens the name-character check.\n\nNo builds or tests were run. The runner\u2019s focused checks are still outstanding.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 24.339,
+  "error": null,
+  "okoServer": "release-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-release-ripgrep/agent-transcripts/4bcb0dd6-96a7-4113-a3fe-3c9a450c2c19/4bcb0dd6-96a7-4113-a3fe-3c9a450c2c19.jsonl",
+  "thoughts": [
+   "13s"
+  ],
+  "trace": {
+   "ttftSeconds": 2.75,
+   "thinkingEndsSeconds": []
+  },
+  "startedAt": "2026-10-20T10:45:54Z",
+  "endedAt": "2026-10-20T10:46:46Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.9344336248468608,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 68037,
+  "requests": 2.2
+ },
+ {
+  "repo": "ripgrep",
+  "task": "ripgrep-capture-hyphen",
+  "condition": "next",
+  "repetition": 3,
+  "answer": "Named replacement references can now include ASCII hyphens.\n\nIn `crates/matcher/src/interpolate.rs`, `is_valid_cap_letter` accepts `b'-'` along with digits, letters, and underscore. The comment immediately above it lists those characters. `$first-name` and `${first-name}` are therefore valid named references. Numeric captures, `$$` escaping, and malformed-reference handling are unchanged because only that predicate and its comment were edited.\n\nNo builds or tests were run.",
+  "tools": [
+   "StrReplace"
+  ],
+  "seconds": 26.373,
+  "error": null,
+  "okoServer": "next-ripgrep 1 tool enabled",
+  "model": "Grok 4.7 High",
+  "ended": "success",
+  "transcript": "~/.cursor/projects/Users-bart-cache-oko-cursor-bench-next-ripgrep/agent-transcripts/4b34af8a-3d19-4d3a-b0c7-ac323fb13cee/4b34af8a-3d19-4d3a-b0c7-ac323fb13cee.jsonl",
+  "thoughts": [
+   "16s"
+  ],
+  "trace": {
+   "ttftSeconds": 4.19,
+   "thinkingEndsSeconds": [
+    19.9,
+    25.2
+   ]
+  },
+  "startedAt": "2026-10-20T10:46:53Z",
+  "endedAt": "2026-10-20T10:47:54Z",
+  "toolCalls": 1,
+  "grade": {
+   "passed": true,
+   "behaviorTestsPassed": true,
+   "validationSeconds": 0.5128492079675198,
+   "unexpectedFiles": [],
+   "productValidation": "Focused module contract checks, not full application tests"
+  },
+  "passed": true,
+  "tokens": 69736,
+  "requests": 2.26
+ }
+]

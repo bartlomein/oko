@@ -22,15 +22,15 @@ so the agent spends fewer rounds searching and reading files it does not need.
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/agent-sessions-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/images/agent-sessions-light.svg">
-    <img alt="Bar chart: with Oko, Claude Code spends 58% less time, 61% fewer tokens and 85% fewer tool calls; Codex 47%, 60% and 75%; OpenCode 49%, 63% and 86%; Pi 52%, 78% and 83%; Cursor 6%, 40% and 65%." src="docs/images/agent-sessions-light.svg" width="760">
+    <img alt="Bar chart: with Oko, Claude Code spends 47% less time, 44% fewer tokens and 89% fewer tool calls; Codex 26%, 43% and 80%; OpenCode 47%, 43% and 87%; Pi 51%, 33% and 85%; Cursor 6%, 40% and 65%." src="docs/images/agent-sessions-light.svg" width="760">
   </picture>
   <br>
   <sub>Nine coding tasks on Astro, HTTPX and ripgrep, three runs each, with and without Oko. <a href="#results">Results</a> · <a href="docs/benchmark-results.md#agent-sessions">Method</a></sub>
 </p>
 
-- **Faster:** about half the time in Claude Code, Codex, OpenCode and Pi.
-- **Cheaper:** 40–78% fewer tokens with every tool we measured.
-- **Fewer detours:** 65–86% fewer tool calls.
+- **Faster:** about half the time in Claude Code, OpenCode and Pi; a quarter less in Codex.
+- **Cheaper:** 33–44% fewer tokens with every tool we measured.
+- **Fewer detours:** 65–89% fewer tool calls.
 - **Better ranking:** puts the right file first more often than any published method on [Agent Retrieval Bench](#other-benchmarks).
 - **Local first:** search runs on your machine; only the question and selected snippets go to the ranker ([privacy](docs/privacy.md)).
 
@@ -86,17 +86,17 @@ add `--no-jev`: local keyword ranking only.
 ## Results
 
 The same task given to the same coding tool twice, once with its own search and
-once with Oko. Means per session, 27 sessions per side.
+once with Oko, in the same run. Means per session.
 
 | Coding tool | Time | Tokens | Tool calls | Tasks passed (without → with) |
 | --- | --- | --- | --- | --- |
-| Claude Code | **58% less**<br><sub>12.0 → 5.0 s</sub> | **61% less**<br><sub>56,513 → 22,008</sub> | **85% less**<br><sub>4.4 → 0.7</sub> | 26 → 25 of 27 |
-| Codex | **47% less**<br><sub>48.2 → 25.8 s</sub> | **60% less**<br><sub>72,247 → 28,751</sub> | **75% less**<br><sub>3.5 → 0.9</sub> | 26 → 27 of 27 |
-| OpenCode | **49% less**<br><sub>25.7 → 13.1 s</sub> | **63% less**<br><sub>28,513 → 10,624</sub> | **86% less**<br><sub>5.5 → 0.7</sub> | 27 → 27 of 27 |
-| Pi | **52% less**<br><sub>31.4 → 15.0 s</sub> | **78% less**<br><sub>41,886 → 9,261</sub> | **83% less**<br><sub>6.5 → 1.1</sub> | 25 → 25 of 27 |
+| Claude Code | **47% less**<br><sub>12.1 → 6.4 s</sub> | **44% less**<br><sub>24,271 → 13,627</sub> | **89% less**<br><sub>3.5 → 0.4</sub> | 19 → 20 of 20 |
+| Codex | **26% less**<br><sub>13.8 → 10.2 s</sub> | **43% less**<br><sub>45,395 → 26,004</sub> | **80% less**<br><sub>3.0 → 0.6</sub> | 20 → 20 of 20 |
+| OpenCode | **47% less**<br><sub>18.0 → 9.6 s</sub> | **43% less**<br><sub>13,196 → 7,528</sub> | **87% less**<br><sub>3.7 → 0.5</sub> | 21 → 21 of 21 |
+| Pi | **51% less**<br><sub>16.7 → 8.2 s</sub> | **33% less**<br><sub>9,737 → 6,495</sub> | **85% less**<br><sub>3.6 → 0.5</sub> | 20 → 21 of 21 |
 | Cursor | **6% less**<br><sub>52.3 → 49.2 s</sub> | **40% less**<br><sub>182,940 → 109,520</sub> | **65% less**<br><sub>8.0 → 2.8</sub> | 26 → 24 of 27 |
 
-<sub>Models: Claude Sonnet 5 (Claude Code), GPT-5.6 Sol (Codex, OpenCode, Pi), Grok 4.7 High (Cursor), at their default or low effort. Each tool counts tokens its own way, so compare within a row. Small benchmark; your results will vary. [Method, per-task results and caveats](docs/benchmark-results.md#agent-sessions) · [raw data](benchmarks/published/).</sub>
+<sub>Models: Claude Sonnet 5.5 (Claude Code), GPT-6.1 Sol (Codex, OpenCode, Pi), Grok 4.7 High (Cursor), at their default or low effort. Cursor's row is from its own run on the previous release; the others are from October 2026. Each tool counts tokens its own way, so compare within a row. Small benchmark; your results will vary. [Method, per-task results and caveats](docs/benchmark-results.md#agent-sessions) · [raw data](benchmarks/published/).</sub>
 
 ## Other benchmarks
 

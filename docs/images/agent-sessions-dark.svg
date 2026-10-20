@@ -18,33 +18,33 @@
 <line x1="700.0" y1="58" x2="700.0" y2="408" stroke="#3d444d" stroke-width="1"/>
 <text x="700.0" y="424" font-size="11" text-anchor="middle" fill="#9198a1">100%</text>
 <text x="108" y="93.0" font-size="13" text-anchor="end" fill="#f0f6fc">Claude Code</text>
-<rect x="120" y="64" width="336.4" height="14" rx="2" fill="#4493f8"><title>Claude Code: Time 58% less</title></rect>
-<text x="462.4" y="75" font-size="11" fill="#f0f6fc">58%</text>
-<rect x="120" y="82" width="353.8" height="14" rx="2" fill="#ab7df8"><title>Claude Code: Tokens 61% less</title></rect>
-<text x="479.8" y="93" font-size="11" fill="#f0f6fc">61%</text>
-<rect x="120" y="100" width="493.0" height="14" rx="2" fill="#3fb950"><title>Claude Code: Tool calls 85% less</title></rect>
-<text x="619.0" y="111" font-size="11" fill="#f0f6fc">85%</text>
+<rect x="120" y="64" width="272.6" height="14" rx="2" fill="#4493f8"><title>Claude Code: Time 47% less</title></rect>
+<text x="398.6" y="75" font-size="11" fill="#f0f6fc">47%</text>
+<rect x="120" y="82" width="255.2" height="14" rx="2" fill="#ab7df8"><title>Claude Code: Tokens 44% less</title></rect>
+<text x="381.2" y="93" font-size="11" fill="#f0f6fc">44%</text>
+<rect x="120" y="100" width="516.2" height="14" rx="2" fill="#3fb950"><title>Claude Code: Tool calls 89% less</title></rect>
+<text x="642.2" y="111" font-size="11" fill="#f0f6fc">89%</text>
 <text x="108" y="161.0" font-size="13" text-anchor="end" fill="#f0f6fc">Codex</text>
-<rect x="120" y="132" width="272.6" height="14" rx="2" fill="#4493f8"><title>Codex: Time 47% less</title></rect>
-<text x="398.6" y="143" font-size="11" fill="#f0f6fc">47%</text>
-<rect x="120" y="150" width="348.0" height="14" rx="2" fill="#ab7df8"><title>Codex: Tokens 60% less</title></rect>
-<text x="474.0" y="161" font-size="11" fill="#f0f6fc">60%</text>
-<rect x="120" y="168" width="435.0" height="14" rx="2" fill="#3fb950"><title>Codex: Tool calls 75% less</title></rect>
-<text x="561.0" y="179" font-size="11" fill="#f0f6fc">75%</text>
+<rect x="120" y="132" width="150.8" height="14" rx="2" fill="#4493f8"><title>Codex: Time 26% less</title></rect>
+<text x="276.8" y="143" font-size="11" fill="#f0f6fc">26%</text>
+<rect x="120" y="150" width="249.4" height="14" rx="2" fill="#ab7df8"><title>Codex: Tokens 43% less</title></rect>
+<text x="375.4" y="161" font-size="11" fill="#f0f6fc">43%</text>
+<rect x="120" y="168" width="464.0" height="14" rx="2" fill="#3fb950"><title>Codex: Tool calls 80% less</title></rect>
+<text x="590.0" y="179" font-size="11" fill="#f0f6fc">80%</text>
 <text x="108" y="229.0" font-size="13" text-anchor="end" fill="#f0f6fc">OpenCode</text>
-<rect x="120" y="200" width="284.2" height="14" rx="2" fill="#4493f8"><title>OpenCode: Time 49% less</title></rect>
-<text x="410.2" y="211" font-size="11" fill="#f0f6fc">49%</text>
-<rect x="120" y="218" width="365.4" height="14" rx="2" fill="#ab7df8"><title>OpenCode: Tokens 63% less</title></rect>
-<text x="491.4" y="229" font-size="11" fill="#f0f6fc">63%</text>
-<rect x="120" y="236" width="498.8" height="14" rx="2" fill="#3fb950"><title>OpenCode: Tool calls 86% less</title></rect>
-<text x="624.8" y="247" font-size="11" fill="#f0f6fc">86%</text>
+<rect x="120" y="200" width="272.6" height="14" rx="2" fill="#4493f8"><title>OpenCode: Time 47% less</title></rect>
+<text x="398.6" y="211" font-size="11" fill="#f0f6fc">47%</text>
+<rect x="120" y="218" width="249.4" height="14" rx="2" fill="#ab7df8"><title>OpenCode: Tokens 43% less</title></rect>
+<text x="375.4" y="229" font-size="11" fill="#f0f6fc">43%</text>
+<rect x="120" y="236" width="504.6" height="14" rx="2" fill="#3fb950"><title>OpenCode: Tool calls 87% less</title></rect>
+<text x="630.6" y="247" font-size="11" fill="#f0f6fc">87%</text>
 <text x="108" y="297.0" font-size="13" text-anchor="end" fill="#f0f6fc">Pi</text>
-<rect x="120" y="268" width="301.6" height="14" rx="2" fill="#4493f8"><title>Pi: Time 52% less</title></rect>
-<text x="427.6" y="279" font-size="11" fill="#f0f6fc">52%</text>
-<rect x="120" y="286" width="452.4" height="14" rx="2" fill="#ab7df8"><title>Pi: Tokens 78% less</title></rect>
-<text x="578.4" y="297" font-size="11" fill="#f0f6fc">78%</text>
-<rect x="120" y="304" width="481.4" height="14" rx="2" fill="#3fb950"><title>Pi: Tool calls 83% less</title></rect>
-<text x="607.4" y="315" font-size="11" fill="#f0f6fc">83%</text>
+<rect x="120" y="268" width="295.8" height="14" rx="2" fill="#4493f8"><title>Pi: Time 51% less</title></rect>
+<text x="421.8" y="279" font-size="11" fill="#f0f6fc">51%</text>
+<rect x="120" y="286" width="191.4" height="14" rx="2" fill="#ab7df8"><title>Pi: Tokens 33% less</title></rect>
+<text x="317.4" y="297" font-size="11" fill="#f0f6fc">33%</text>
+<rect x="120" y="304" width="493.0" height="14" rx="2" fill="#3fb950"><title>Pi: Tool calls 85% less</title></rect>
+<text x="619.0" y="315" font-size="11" fill="#f0f6fc">85%</text>
 <text x="108" y="365.0" font-size="13" text-anchor="end" fill="#f0f6fc">Cursor</text>
 <rect x="120" y="336" width="34.8" height="14" rx="2" fill="#4493f8"><title>Cursor: Time 6% less</title></rect>
 <text x="160.8" y="347" font-size="11" fill="#f0f6fc">6%</text>
