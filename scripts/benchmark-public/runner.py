@@ -735,6 +735,8 @@ def main():
                    help='With --guided: add a condition that is guided plus the prompt hook (Claude Code and Codex)')
     p.add_argument('--prefetch-compare',action='store_true',
                    help='Branch suite: only the prompt hook, on the previous build and on the current one')
+    p.add_argument('--native-compare',action='store_true',
+                   help='Branch suite: native search against the current build with guidance and the prompt hook')
     p.add_argument('--skip-previous',action='store_true',
                    help='Branch suite with --guided: run native, current and guided only')
     p.add_argument('--tasks',help='Smoke suite only: comma-separated branch task ids (default: '+','.join(SMOKE_TASKS)+')')
@@ -796,6 +798,11 @@ def main():
             p.error('--prefetch-compare is its own branch-suite condition set')
         CONDITIONS=(PREFETCH_PREVIOUS,PREFETCH)
         ENGINE_CONDITIONS={c:'oko-'+args.cache_policy for c in CONDITIONS}
+    if args.native_compare:
+        if SUITE!='branch' or args.guided or args.prefetch or args.skip_previous or args.prefetch_compare:
+            p.error('--native-compare is its own branch-suite condition set')
+        CONDITIONS=('native',PREFETCH)
+        ENGINE_CONDITIONS={'native':'native',PREFETCH:'oko-'+args.cache_policy}
     if not args.clients or len(set(args.clients))!=len(args.clients) or any(c not in SUPPORTED_CLIENTS for c in args.clients):p.error('Invalid clients')
     if args.timeout<1:p.error('Timeout must be positive')
     if args.resume and not args.execute:p.error('--resume requires --execute')
