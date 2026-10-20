@@ -1534,27 +1534,15 @@ impl ContextPacket {
                 result.excerpt = result.compact.take().expect("checked above");
                 self.prune_related();
             } else if self.results.len() > 1 {
-                // A part's best match stays while another can go, or the
-                // longest can give up lines.
+                // A part's best match stays while another can go. When every
+                // one is some part's best, the lowest goes, as for one question:
+                // shrinking excerpts instead left a small answer's code a few
+                // lines long.
                 let spare = (1..self.results.len())
                     .rev()
-                    .find(|&index| !self.answers_alone(index));
-                match spare {
-                    Some(index) => {
-                        self.results.remove(index);
-                    }
-                    None => {
-                        let longest = self
-                            .results
-                            .iter_mut()
-                            .max_by_key(|result| result.excerpt.text.len())
-                            .expect("several results");
-                        if longest.excerpt.shrink() {
-                            continue;
-                        }
-                        self.results.pop();
-                    }
-                }
+                    .find(|&index| !self.answers_alone(index))
+                    .unwrap_or(self.results.len() - 1);
+                self.results.remove(spare);
                 self.omitted = true;
                 self.prune_related();
             } else if self.related.pop().is_some() {
@@ -2229,6 +2217,31 @@ mod tests {
             .map(|r| r.excerpt.path.as_str())
             .collect();
         assert_eq!(kept, ["alpha.rs", "gamma.rs"]);
+    }
+    #[test]
+    fn fitting_never_shrinks_a_parts_best_match_to_make_room_for_another() {
+        let file = |name: &str| {
+            let source = format!(
+                "fn {name}() {{\n{}\n}}\n",
+                (0..30)
+                    .map(|n| format!("    step_{name}_{n}();"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            chunk_text(&format!("{name}.rs"), &source)
+        };
+        let corpus: Vec<Chunk> = ["alpha", "beta"]
+            .iter()
+            .flat_map(|name| file(name))
+            .collect();
+        let winners: Vec<(Chunk, f64)> = corpus.iter().map(|chunk| (chunk.clone(), 0.9)).collect();
+        let mut packet = build_packet(&corpus, &winners, "alpha beta steps");
+        packet.mark_parts(|excerpt| vec![usize::from(excerpt.path == "beta.rs")]);
+        let lines = packet.results[0].excerpt.lines();
+        let one = serde_json::to_vec(&packet).unwrap().len() * 2 / 3;
+        packet.fit_to_budget(one);
+        assert_eq!(packet.results.len(), 1);
+        assert_eq!(packet.results[0].excerpt.lines(), lines);
     }
     #[test]
     fn an_accepted_match_overlapping_a_shown_excerpt_widens_it() {
