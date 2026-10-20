@@ -37,14 +37,17 @@ so the agent spends fewer rounds searching and reading files it does not need.
 ## Quick start
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh | sh
+brew install bartlomein/tap/oko
 cd your-project
 oko setup --client claude     # or codex, cursor, opencode, pi, all
 ```
 
+Without Homebrew: `curl -fsSL https://raw.githubusercontent.com/bartlomein/oko/main/install.sh | sh`.
+
 Then use your coding tool as usual. Setup asks for a [TypeSafe AI](https://typesafe.ai/)
 key the first time, connects your tool to Oko for this project, and checks the
-connection. Run it once per project; `oko upgrade` keeps everything current.
+connection. Run it once per project; `oko upgrade` keeps everything current
+(with Homebrew, run `brew upgrade oko` first).
 
 <details>
 <summary><strong>Codex:</strong> approve Oko's hook once</summary>

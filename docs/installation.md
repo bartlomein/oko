@@ -2,6 +2,18 @@
 
 [← Back to Oko](../README.md)
 
+## Homebrew
+
+```sh
+brew install bartlomein/tap/oko
+```
+
+macOS and Linux, on ARM64 and x64. The formula, in
+[bartlomein/homebrew-tap](https://github.com/bartlomein/homebrew-tap), installs
+the release archive: Oko with its bundled ripgrep, which stays private to Oko.
+`oko setup` keeps its own copy for the projects it connects, so after
+`brew upgrade oko`, run `oko upgrade` to refresh them.
+
 ## Install script
 
 ```sh
