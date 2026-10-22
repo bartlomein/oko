@@ -106,7 +106,7 @@ once with Oko, in the same run. Means per session.
 | Benchmark | What it tests | Oko | Best comparison |
 | --- | --- | --- | --- |
 | [Sense's agent benchmark](docs/benchmark-results.md#senses-agent-benchmark-against-sense) | Six multi-step tasks, Claude Opus 4.7, run against Sense the same evening | Found **88%** of the locations to cite, at **half the cost** | Sense: 63% |
-| [Agent Retrieval Bench](docs/benchmark-results.md#agent-retrieval-bench) | 345 tasks: find the files a developer needs next | Right file ranked first most often: **0.40** | Best published method: 0.24 |
+| [Agent Retrieval Bench](docs/benchmark-results.md#agent-retrieval-bench) | 345 tasks: find the files a developer needs next | Right file ranked first most often: **0.40**, [checked by the benchmark's maintainers](https://github.com/eyuansu62/agent-retrieval-bench/blob/main/docs/community_results.md#oko) | Best published method: 0.24 |
 | [SWE-Explore](docs/benchmark-results.md#swe-explore) | 848 real issues: rank the code fixing agents needed | One search ranks it within the range of agents that explore for many turns: **0.82** | Agents: 0.72–0.95 |
 
 ## Where Oko helps less
