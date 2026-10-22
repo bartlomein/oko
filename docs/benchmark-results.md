@@ -79,10 +79,23 @@ match 0.6.1 within run-to-run variation. The largest difference is Recall@5 on
 the 58 edit-ripple tasks (0.32 → 0.29); BCY@8k is 0.494 against 0.501, with the
 0.7.0 runs between 0.489 and 0.502.
 
-**Stability.** The 0.7.0 numbers are the mean of three runs of commit
-`da83b98` on all 345 tasks with `jev-1.13.0` (later commits change only setup,
-metrics, docs and version numbers). The runs agree within 0.007 on every
-ranking metric and 0.013 on BCY@8k. The 0.6.1 rows are the mean of three runs
+**Since 0.7.0.** Jev's default model moved from `jev-1.13.0` to
+`jev-1.14.0` in October 2026, and most of the gain in 0.9.1 comes from that,
+not from Oko. On the same Oko build (0.7.2), switching the model alone moved
+Recall@20 from 0.68 to 0.70 and MRR from 0.38 to 0.41 (two runs each). 0.9.1
+with `jev-1.14.0` matches 0.7.2 with `jev-1.14.0` within run-to-run variation.
+Nothing between 0.7.0 and 0.9.1 was tuned on this benchmark; full runs were
+one regression check among several. Against 0.5.0, the release we tuned on
+the dev half, MRR rose on the dev half (0.41 → 0.44) and stayed level on the
+held-out half (0.37 → 0.37).
+
+**Stability.** The 0.9.1 numbers are the mean of three runs of the release
+build (`7209f00`) on all 345 tasks with `jev-1.14.0`, on 22 October 2026. The
+runs agree within 0.008 on every ranking metric and 0.009 on BCY@8k. They are
+also submitted to the benchmark's Community Results page
+([PR #7](https://github.com/eyuansu62/agent-retrieval-bench/pull/7)) with an
+offline rescore script. The 0.7.0 rows are the mean of three runs of commit
+`da83b98` with `jev-1.13.0`. The 0.6.1 rows are the mean of three runs
 of commit `5f3afad`, the 0.6.0 rows of commit `3f7809b`, and the 0.5.0 rows of
 that release's three runs.
 
@@ -90,10 +103,11 @@ that release's three runs.
 
 | Method | Recall@5 | Recall@20 | MRR | BCY@8k |
 | --- | ---: | ---: | ---: | ---: |
-| **Oko 0.7.0** | 0.44 | 0.68 | 0.37 | 0.49 |
-| Oko 0.6.1 | 0.45 | 0.68 | 0.37 | **0.50** |
-| Oko 0.6.0 | **0.46** | **0.70** | 0.37 | **0.50** |
-| Oko 0.5.0 | 0.45 | 0.64 | **0.39** | 0.48 |
+| **Oko 0.9.1** | **0.49** | **0.70** | **0.40** | **0.53** |
+| Oko 0.7.0 | 0.44 | 0.68 | 0.37 | 0.49 |
+| Oko 0.6.1 | 0.45 | 0.68 | 0.37 | 0.50 |
+| Oko 0.6.0 | 0.46 | **0.70** | 0.37 | 0.50 |
+| Oko 0.5.0 | 0.45 | 0.64 | 0.39 | 0.48 |
 | Qwen3-Embedding-8B (published) | | **0.70** | 0.23 | 0.37 |
 | RepoMap | 0.32 | 0.64 | 0.22 | 0.38 |
 | Qwen3-Embedding-4B (published) | | 0.63 | 0.24 | 0.34 |
@@ -107,9 +121,9 @@ Recall@k is the share of a task's needed files among the first k ranked. MRR is
 the reciprocal rank of the first needed file (1.0 = always first). BCY@8k is the
 benchmark's budgeted context yield: the share of needed files whose text fits
 when ranked files are packed into 8,000 tokens, computed with the benchmark's
-`report-bcy-curve`; Oko 0.7.0 leads it at every budget (4k: 0.39 against
-RepoMap's 0.20; 16k: 0.60 against 0.53; 32k: 0.68 against 0.63; 0.6.1: 0.38,
-0.60 and 0.68; 0.6.0: 0.62 and 0.69 at 16k and 32k).
+`report-bcy-curve`; Oko 0.9.1 leads it at every budget (4k: 0.40 against
+RepoMap's 0.20; 16k: 0.64 against 0.53; 32k: 0.70 against 0.63; 0.7.0: 0.39,
+0.60 and 0.68).
 
 What changed from 0.5.0 to 0.6.0: the shortlist Oko ranks grew from 30 to 60
 candidates, so a needed file reaches ranking more often (0.72 → 0.82 of them)
@@ -128,18 +142,18 @@ task).
 
 ### By task type, and by split
 
-Oko 0.7.0, with 0.6.1 in brackets:
+Oko 0.9.1, with 0.7.0 in brackets:
 
 | Task | n | Oko R@5 | RepoMap R@5 | Oko R@20 | RepoMap R@20 | Oko MRR | RepoMap MRR |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Failing test → broken file | 101 | 0.78 (0.79) | 0.46 | 0.87 (0.86) | 0.85 | 0.70 (0.70) | 0.27 |
-| Review comment → context | 80 | 0.24 (0.25) | 0.19 | 0.54 (0.55) | 0.50 | 0.24 (0.24) | 0.16 |
-| Pull request → tests to update | 106 | 0.36 (0.35) | 0.26 | 0.64 (0.65) | 0.56 | 0.25 (0.25) | 0.20 |
-| Edit → files it ripples into | 58 | 0.29 (0.32) | 0.36 | 0.61 (0.60) | 0.60 | 0.20 (0.21) | 0.23 |
-| All 345 | 345 | 0.44 (0.45) | 0.32 | 0.68 (0.68) | 0.64 | 0.37 (0.37) | 0.22 |
-| Held-out half | 181 | 0.42 (0.42) | 0.34 | 0.67 (0.66) | 0.64 | 0.33 (0.33) | 0.21 |
-| Dev half | 164 | 0.47 (0.48) | 0.30 | 0.69 (0.70) | 0.63 | 0.42 (0.43) | 0.22 |
-| Without gin-gonic/gin | 257 | 0.33 (0.34) | 0.27 | 0.59 (0.59) | 0.55 | 0.27 (0.27) | 0.19 |
+| Failing test → broken file | 101 | 0.82 (0.78) | 0.46 | 0.90 (0.87) | 0.85 | 0.74 (0.70) | 0.27 |
+| Review comment → context | 80 | 0.31 (0.24) | 0.19 | 0.57 (0.54) | 0.50 | 0.28 (0.24) | 0.16 |
+| Pull request → tests to update | 106 | 0.41 (0.36) | 0.26 | 0.66 (0.64) | 0.56 | 0.28 (0.25) | 0.20 |
+| Edit → files it ripples into | 58 | 0.32 (0.29) | 0.36 | 0.62 (0.61) | 0.60 | 0.23 (0.20) | 0.23 |
+| All 345 | 345 | 0.49 (0.44) | 0.32 | 0.70 (0.68) | 0.64 | 0.40 (0.37) | 0.22 |
+| Held-out half | 181 | 0.47 (0.42) | 0.34 | 0.69 (0.67) | 0.64 | 0.37 (0.33) | 0.21 |
+| Dev half | 164 | 0.52 (0.47) | 0.30 | 0.72 (0.69) | 0.63 | 0.44 (0.42) | 0.22 |
+| Without gin-gonic/gin | 257 | 0.38 (0.33) | 0.27 | 0.61 (0.59) | 0.55 | 0.30 (0.27) | 0.19 |
 
 Oko is strongest when the signal is an error message and weakest on the ripple
 task, where RepoMap's import graph helps and Oko's one-hop links do not reach
