@@ -19,3 +19,9 @@ their latest results stay under earlier versions.
   runs, computed offline from the stored rankings.
 - `evaluator-commit.txt`: the evaluator commit that scored everything.
 - `SHA256SUMS`: checksums of the files above.
+- `details/`: the three 0.9.1 runs and the three [0.5.0](../0.5.0/agent-retrieval-bench/)
+  runs in the benchmark's `*_details.jsonl` layout (top 20 and full ranked file
+  list per task, dev or held-out split, whether the question was cut at 4,000
+  bytes), the 60 cut questions, `rescore.py`, which recomputes every reported
+  number offline from those lists, and `SHA256SUMS`. This is what the
+  benchmark's Community Results page links to.
