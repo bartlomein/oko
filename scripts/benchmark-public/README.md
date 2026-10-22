@@ -299,7 +299,7 @@ id (we tuned on `dev` only).
 ```sh
 python3 scripts/benchmark-public/replay/arb.py --fetch            # free
 python3 scripts/benchmark-public/replay/arb.py --split all         # keyword ranking only, free
-python3 scripts/benchmark-public/replay/arb.py --split all --jev   # paid: 345 Jev calls, about 11 minutes
+python3 scripts/benchmark-public/replay/arb.py --split all --jev   # paid: about 1,100 Jev calls ($0.62), about 9 minutes
 ```
 
 The benchmark's RepoMap, lexical, and BM25 baselines run locally with its own

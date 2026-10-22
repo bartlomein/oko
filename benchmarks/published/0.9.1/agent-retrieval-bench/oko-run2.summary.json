@@ -1,0 +1,67 @@
+{
+  "split": "all",
+  "label": "oko091-jev114-run2",
+  "intent": "implementation",
+  "binary": "/Users/bart/dev/oko/target/release/oko",
+  "env": [
+    "OKO_JEV_LOG_DIR=/private/tmp/claude-501/-Users-bart-dev-oko/addae6a1-4015-48e6-a0c3-aec3db1cb863/scratchpad/arb091/log-2"
+  ],
+  "evaluator": "07014c986f3deadb1548c62b32c0ffbe6a81465d",
+  "results": {
+    "all": {
+      "samples": 345,
+      "errors": 0,
+      "Recall@5": 0.495,
+      "Recall@10": 0.602,
+      "Recall@20": 0.703,
+      "MRR": 0.401,
+      "gold_coverage@8k": 0.392,
+      "goldShortlisted": 0.821,
+      "medianRankedFiles": 97
+    },
+    "code2test": {
+      "samples": 106,
+      "errors": 0,
+      "Recall@5": 0.414,
+      "Recall@10": 0.564,
+      "Recall@20": 0.648,
+      "MRR": 0.272,
+      "gold_coverage@8k": 0.308,
+      "goldShortlisted": 0.794,
+      "medianRankedFiles": 107
+    },
+    "comment2context": {
+      "samples": 80,
+      "errors": 0,
+      "Recall@5": 0.308,
+      "Recall@10": 0.383,
+      "Recall@20": 0.588,
+      "MRR": 0.284,
+      "gold_coverage@8k": 0.25,
+      "goldShortlisted": 0.742,
+      "medianRankedFiles": 110
+    },
+    "trace2code": {
+      "samples": 101,
+      "errors": 0,
+      "Recall@5": 0.825,
+      "Recall@10": 0.876,
+      "Recall@20": 0.908,
+      "MRR": 0.735,
+      "gold_coverage@8k": 0.743,
+      "goldShortlisted": 0.942,
+      "medianRankedFiles": 75
+    },
+    "edit2ripple": {
+      "samples": 58,
+      "errors": 0,
+      "Recall@5": 0.325,
+      "Recall@10": 0.497,
+      "Recall@20": 0.609,
+      "MRR": 0.216,
+      "gold_coverage@8k": 0.128,
+      "goldShortlisted": 0.766,
+      "medianRankedFiles": 93
+    }
+  }
+}
