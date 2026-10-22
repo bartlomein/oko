@@ -31,6 +31,12 @@ coding workflow, and asks for the files a developer needs next:
 - **Edit → files it ripples into** (58): a code change and its intent; find the
   other files that must change with it.
 
+The benchmark's maintainers list these results on their
+[Community Results](https://github.com/eyuansu62/agent-retrieval-bench/blob/main/docs/community_results.md#oko)
+page, linked from their README. They rescored all six saved runs (three of
+0.9.1, three of 0.5.0) and reproduced every number. That check covers the
+scoring of the saved rankings; they did not rerun Jev.
+
 **Method.** The harness (`scripts/benchmark-public/replay/arb.py`) rebuilds each
 repository from the benchmark's released corpus, so Oko searches exactly the
 files the published baselines searched, sends the task's signal to Oko's
